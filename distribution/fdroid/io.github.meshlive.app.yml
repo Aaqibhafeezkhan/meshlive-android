@@ -1,4 +1,4 @@
-# DRAFT fdroiddata metadata (metadata/<applicationId>.yml). Not submitted: the repository is not public yet.
+# fdroiddata metadata draft (metadata/<applicationId>.yml) for MeshLive 0.1.0-beta.
 # The file name is the final applicationId, io.github.meshlive.app (`appId` in app/build.gradle.kts;
 # README "Distribution").
 Categories:
