@@ -2,6 +2,14 @@
 
 **Live video, voice calls and messages between nearby phones, over Bluetooth, with no internet.**
 
+<p align="center">
+  <a href="https://github.com/MeshLive/meshlive-android/releases/latest/download/MeshLive.apk"><img alt="Download MeshLive for Android" src="https://img.shields.io/badge/Download-MeshLive%20for%20Android-000000?style=for-the-badge&logo=android&logoColor=white" height="56"></a>
+  &nbsp;
+  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/MeshLive/meshlive-android"><img alt="Get it on Obtainium" src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" height="56"></a>
+</p>
+
+<p align="center">Android 10 or newer · free · no account · <a href="#install">How to install</a></p>
+
 MeshLive is an Android app that sends encrypted live camera video and microphone audio directly from one phone to
 another over Bluetooth. A viewer can pass the stream on to one more phone, so a broadcast can reach people who are
 out of range of the source. Two people can also make a private voice or video call, and (experimentally) leave
@@ -78,24 +86,44 @@ An iPhone client is being developed in a sibling repository, `MeshLive/meshlive-
 
 ## Screenshots
 
-Screenshots coming soon. They will live in `fastlane/metadata/android/en-US/images/phoneScreenshots/`, which is also
-where F-Droid and IzzyOnDroid read them.
+<p>
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02-home.png" width="19%" alt="Home">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/03-call.png" width="19%" alt="People nearby">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/04-watch.png" width="19%" alt="Watch nearby">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/05-settings.png" width="19%" alt="Settings">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/01-welcome.png" width="19%" alt="Welcome">
+</p>
 
 ## Install
 
-MeshLive is an unofficial open-source build (GPL-3.0-or-later), signed with the project's own key, and not on Google
-Play. No release has been published yet. When one is, download it from the GitHub release page (F-Droid and
-IzzyOnDroid are planned). Each release has one APK per CPU type (`MeshLive-<version>-<abi>.apk`):
+**The easy way (any Android phone):**
+
+1. On your phone, tap **[Download MeshLive](https://github.com/MeshLive/meshlive-android/releases/latest/download/MeshLive.apk)**.
+2. Open the downloaded file. If Android asks, allow your browser to **install unknown apps**, then go back and tap
+   **Install**.
+3. Open MeshLive and allow **Nearby devices**, **Camera** and **Microphone** when asked.
+
+That's it. The phone must run Android 10 or newer. Both people need MeshLive to call or watch each other.
+
+**Get updates automatically:** install [Obtainium](https://github.com/ImranR98/Obtainium), then tap
+**[Get it on Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/MeshLive/meshlive-android)** (or add `https://github.com/MeshLive/meshlive-android` in Obtainium by hand).
+Obtainium checks this page for new versions and updates MeshLive for you.
+
+**No internet at all?** A friend who already has MeshLive can send it to you: in MeshLive's **Help**, they tap
+**Share this app** and send it with Quick Share, Nearby Share or Bluetooth.
+
+**Other files** on the [releases page](https://github.com/MeshLive/meshlive-android/releases): MeshLive is an
+unofficial open-source build (GPL-3.0-or-later), signed with the project's own key, and not on Google Play. Each
+release has one APK per CPU type (`MeshLive-<version>-<abi>.apk`); `MeshLive.apk` is the same file as the
+arm64-v8a one.
 
 | File | Use it on |
 | --- | --- |
-| `...-arm64-v8a.apk` | Almost every phone since about 2016. **Pick this if unsure** (`adb shell getprop ro.product.cpu.abilist` lists `arm64-v8a`). |
-| `...-armeabi-v7a.apk` | Older or 32-bit-only ARM phones (some Android Go models). Software AV1 speed on 32-bit cores is not measured. |
-| `...-universal.apk` | Both in one larger file, for sideloading when you do not know. |
+| `MeshLive.apk` or `...-arm64-v8a.apk` | Almost every phone since about 2016. **Pick this if unsure.** |
+| `...-armeabi-v7a.apk` | Older or 32-bit-only ARM phones (some Android Go models). |
+| `...-universal.apk` | Both in one larger file, for when you do not know. |
 
-The phone must run Android 10 or newer (API 29). Allow installing from your browser or file manager when Android
-asks. Updating works only from an APK signed with the same key, and an F-Droid build is signed by F-Droid, not by us:
-do not mix the two sources on one phone.
+Updating works only from an APK signed with the same key: do not mix builds from other sources on one phone.
 
 Verify before installing (the release page lists the expected values; the full procedure is under
 [Verifying a release](#verifying-a-release)):
