@@ -231,7 +231,9 @@ class MakeReleaseTest(unittest.TestCase):
     def test_no_universal(self):
         folder = self.make(universal=False)
         self.assertFalse(list(folder.glob("*universal*")))
-        self.assertEqual(len(list(folder.glob("*.apk"))), 2)
+        self.assertEqual(sorted(p.name for p in folder.glob("*.apk")),
+                         ["MeshLive-1.2-arm64-v8a.apk", "MeshLive-1.2-armeabi-v7a.apk", "MeshLive.apk"])
+        self.assertEqual((folder / "MeshLive.apk").read_bytes(), (folder / "MeshLive-1.2-arm64-v8a.apk").read_bytes())
 
     def test_wrong_version_code_refused(self):
         def runner(args, cwd, input_bytes=None):
