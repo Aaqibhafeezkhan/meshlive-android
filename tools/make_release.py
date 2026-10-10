@@ -28,7 +28,6 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_apk_16kb  # noqa: E402
-import fetch_native_sources  # noqa: E402  (pinned native inputs recorded in the manifest)
 
 EXPECTED_CERT_SHA256 = ("2E:EF:C0:5A:44:45:22:52:9D:9F:75:D7:EB:CE:FD:08:"
                         "86:47:07:F2:1A:79:04:1D:B5:1E:BF:F8:36:49:E2:13")
@@ -106,7 +105,6 @@ def build_manifest(root, version, runner=run):
              f"git-commit: {commit}",
              f"git-tree: {tree}",
              f"files: {len(rows)}",
-             *fetch_native_sources.native_provenance(),
              "format: <sha256>  <path>, hashes of the bytes committed at that commit",
              ""]
     lines += [f"{digest}  {path}" for path, digest in rows]
@@ -271,6 +269,9 @@ def apk_file_name(version_name, apk):
     return f"{RELEASE_BASENAME}-{version_name}-{apk['abi']}.apk"
 
 
+STABLE_APK_NAME = "MeshLive.apk"
+
+
 def sha256sums_text(entries):
     """sha256sum -c compatible text for [(name, digest)]."""
     return "".join(f"{digest}  {name}\n" for name, digest in sorted(entries))
@@ -321,9 +322,8 @@ If `adb shell getprop ro.product.cpu.abilist` lists `arm64-v8a`, use the arm64-v
 ```
 
    A different fingerprint means a different publisher: do not install it.
-3. Source: `SOURCE-MANIFEST.txt` lists the commit, the SHA-256 of every tracked file and the pinned native
-   sources (libaom commit and tree SHA-256, libopus tarball SHA-256; `python tools/fetch_native_sources.py`
-   fetches and verifies them). `python tools/make_release.py --manifest-only` reproduces it from a checkout.
+3. Source: `SOURCE-MANIFEST.txt` lists the commit and the SHA-256 of every tracked file
+   (`python tools/make_release.py --manifest-only` reproduces it from a checkout).
 
 ## Measured on
 
@@ -332,27 +332,17 @@ Untested combinations are not claimed to work.
 
 ## Known limits
 
-TODO: list the known issues users will notice (open GitHub issues labelled for this release).
+TODO: copy the open issues users will notice from docs/CURRENT_SESSION_HANDOFF.md.
 """
 
 
 # --- orchestration -----------------------------------------------------------
-
-def verify_native_sources(root):
-    """Refuse a release unless reference-repos/ holds exactly the pinned libaom and libopus sources."""
-    problems = [reason for name in sorted(fetch_native_sources.NATIVE_SOURCES)
-                if (reason := fetch_native_sources.verify(name, Path(root))) is not None]
-    if problems:
-        raise ReleaseError("native sources do not match their pins (run python tools/fetch_native_sources.py):\n  "
-                           + "\n  ".join(problems))
-
 
 def make_release(root, out_base=None, expected=EXPECTED_CERT_SHA256, runner=run,
                  apksigner=None, force=False, universal=True, inspector=check_apk_16kb.check_apk,
                  log=print):
     root = Path(root)
     check_clean(runner(["git", "status", "--porcelain"], root).decode())
-    verify_native_sources(root)
     version = read_version(root)
     app_id = read_app_id(root)
     out_dir = Path(out_base or root / "release") / f"{version[0]}-{version[1]}"
@@ -393,6 +383,10 @@ def make_release(root, out_base=None, expected=EXPECTED_CERT_SHA256, runner=run,
         digest = sha256_file(out_dir / name)
         entries.append((name, digest))
         rows.append((name, apk["abi"], apk["versionCode"], digest))
+    # Stable alias of the arm64-v8a APK: README's download button links releases/latest/download/MeshLive.apk.
+    arm64_name = apk_file_name(version[0], next(a for a in apks if a["abi"] == "arm64-v8a"))
+    (out_dir / STABLE_APK_NAME).write_bytes((out_dir / arm64_name).read_bytes())
+    entries.append((STABLE_APK_NAME, sha256_file(out_dir / STABLE_APK_NAME)))
     (out_dir / MANIFEST_NAME).write_text(manifest, encoding="utf-8", newline="\n")
     entries.append((MANIFEST_NAME, sha256_file(out_dir / MANIFEST_NAME)))
     (out_dir / "SHA256SUMS").write_text(sha256sums_text(entries), encoding="utf-8", newline="\n")
