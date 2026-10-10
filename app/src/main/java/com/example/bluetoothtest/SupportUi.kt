@@ -1,0 +1,127 @@
+package com.example.bluetoothtest
+
+import android.bluetooth.BluetoothManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+
+/** One background-restriction problem and what the user can do about it. */
+internal data class ReliabilityCardIssue(
+    val title: String,
+    val guidance: String,
+    /** Opens the relevant system screen, or null when there is nothing to open. */
+    val settingsIntent: Intent?,
+)
+
+/**
+ * Adapter for the "Connection reliability" card. The full implementation is
+ * BackgroundReliability.status(context) (issues, vendor guidance and settings intents), built
+ * separately; wire it in [CoreReliabilityUi]. The fallback reports only Android's battery
+ * optimization state, which the platform exposes directly.
+ */
+internal interface ReliabilityUi {
+    fun issues(context: Context): List<ReliabilityCardIssue>
+}
+
+internal object ReliabilityUiBackend {
+    @Volatile var current: ReliabilityUi = CoreReliabilityUi
+}
+
+internal object CoreReliabilityUi : ReliabilityUi {
+    override fun issues(context: Context): List<ReliabilityCardIssue> {
+        // TODO: return BackgroundReliability.status(context) mapped to ReliabilityCardIssue.
+        val power = context.getSystemService(PowerManager::class.java) ?: return emptyList()
+        if (power.isIgnoringBatteryOptimizations(context.packageName)) return emptyList()
+        return listOf(
+            ReliabilityCardIssue(
+                title = context.getString(R.string.reliability_battery_title),
+                guidance = context.getString(R.string.reliability_battery_text),
+                settingsIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+            ),
+        )
+    }
+}
+
+/**
+ * Adapter for "Export diagnostics". The field contract (README release section) is owned by the
+ * release work; wire its builder in [CoreDiagnosticsUi]. The fallback lists only non-identifying
+ * facts: no media, messages, contact names, node IDs or keys.
+ */
+internal interface DiagnosticsUi {
+    fun build(context: Context): String
+}
+
+internal object DiagnosticsUiBackend {
+    @Volatile var current: DiagnosticsUi = CoreDiagnosticsUi
+}
+
+internal object CoreDiagnosticsUi : DiagnosticsUi {
+    override fun build(context: Context): String = buildString {
+        // TODO: replace with the release patch's diagnostics builder (device_policy rules,
+        // recent connection outcomes and codec choices).
+        appendLine("Bluetooth Video diagnostics")
+        appendLine("app_version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}, ${BuildConfig.BUILD_TYPE})")
+        appendLine("signing_sha256: ${signingFingerprint(context) ?: "unknown"}")
+        appendLine("device: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            appendLine("soc: ${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL}")
+        } else {
+            appendLine("soc: ${Build.HARDWARE}")
+        }
+        appendLine("android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+        val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
+        if (adapter == null) {
+            appendLine("bluetooth: none")
+        } else runCatching {
+            appendLine("bluetooth_le: ${context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)}")
+            appendLine("le_2m_phy: ${adapter.isLe2MPhySupported}")
+            appendLine("le_coded_phy: ${adapter.isLeCodedPhySupported}")
+            appendLine("le_extended_advertising: ${adapter.isLeExtendedAdvertisingSupported}")
+            appendLine("le_max_advertising_data: ${adapter.leMaximumAdvertisingDataLength}")
+            appendLine("multiple_advertisement: ${adapter.isMultipleAdvertisementSupported}")
+        }.onFailure { appendLine("bluetooth_capabilities: unavailable (${it.javaClass.simpleName})") }
+        appendLine("device_policy: (not included in this build)")
+        appendLine("recent_connections: (not included in this build)")
+    }
+
+    private fun signingFingerprint(context: Context): String? = runCatching {
+        val info = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+        info.signingInfo?.signingCertificateHistory?.lastOrNull()?.toByteArray()
+            ?.let(AboutActivity::certificateFingerprint)
+    }.getOrNull()
+}
+
+/**
+ * Adapter for "Share this app" (AppShare.shareApk / AppShare.apkInfo, built separately) and the
+ * deep-sleep banner (DozeWatchdog state). Fallbacks: sharing unavailable (button hidden), no banner.
+ */
+internal interface DistributionUi {
+    val shareAvailable: Boolean
+    fun shareApk(activity: android.app.Activity)
+    /** APK SHA-256 and signing certificate SHA-256, as display text; null when unknown. */
+    fun apkInfo(context: Context): String?
+    /** Text of a "deep sleep" warning when Android is holding the app asleep; null when fine. */
+    fun deepSleepBanner(context: Context): String?
+}
+
+internal object DistributionUiBackend {
+    @Volatile var current: DistributionUi = CoreDistributionUi
+}
+
+internal object CoreDistributionUi : DistributionUi {
+    override val shareAvailable: Boolean = false // TODO: true once AppShare is merged
+    override fun shareApk(activity: android.app.Activity) = Unit // TODO: AppShare.shareApk(activity)
+    override fun apkInfo(context: Context): String? = null // TODO: AppShare.apkInfo()
+    override fun deepSleepBanner(context: Context): String? = null // TODO: DozeWatchdog state
+}
+
+internal object SupportLinks {
+    /** The public issues page; null until the repository URL is known (Report a bug stays hidden). */
+    val ISSUES_URL: String? = null
+
+    fun reportBugIntent(): Intent? = ISSUES_URL?.let { Intent(Intent.ACTION_VIEW, Uri.parse(it)) }
+}

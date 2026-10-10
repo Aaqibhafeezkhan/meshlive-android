@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-stress-generator"
+version = "0.2.0"
+description = "Deterministic native SDR stress inputs and exact I420 references"
+requires-python = ">=3.11"
+dependencies = ["numpy>=2.0,<3", "Pillow>=11,<12"]
+license = {file = "LICENSE"}
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+vsg = "videostress.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["videostress*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

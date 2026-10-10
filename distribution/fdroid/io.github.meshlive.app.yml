@@ -1,0 +1,79 @@
+# DRAFT fdroiddata metadata (metadata/<applicationId>.yml). Not submitted: the repository is not public yet.
+# The file name is the final applicationId, io.github.meshlive.app (`appId` in app/build.gradle.kts;
+# README "Distribution").
+Categories:
+  - Connectivity
+  - Multimedia
+License: GPL-3.0-or-later
+AuthorName: The MeshLive Authors
+WebSite: https://github.com/MeshLive/meshlive-android
+SourceCode: https://github.com/MeshLive/meshlive-android
+IssueTracker: https://github.com/MeshLive/meshlive-android/issues
+Changelog: https://github.com/MeshLive/meshlive-android/releases
+
+Name: MeshLive
+AutoName: MeshLive
+
+RepoType: git
+Repo: https://github.com/MeshLive/meshlive-android.git
+
+# Anti-features: none known. No proprietary dependency, no tracking, no ads, no network service
+# (media is Bluetooth only; INTERNET is declared for the experimental local Wi-Fi Direct share page).
+
+# One Builds entry per ABI APK. The versionCode is base*10 + 1 (armeabi-v7a) or + 2 (arm64-v8a);
+# the universal APK (digit 0) is for GitHub only and is NOT built here.
+Builds:
+  - versionName: '0.1.0-beta'
+    versionCode: 12
+    commit: v0.1.0-beta
+    subdir: app
+    sudo:
+      - apt-get update
+      - apt-get install -y cmake perl
+    # libopus 1.5.2: the official release tarball (it carries the package_version file CMakeLists.txt checks),
+    # downloaded and SHA-256-verified by the repository's own script before extraction.
+    prebuild:
+      - cd .. && python3 tools/fetch_native_sources.py --only libopus
+    gradle:
+      - yes
+    gradleprops:
+      - splitAbis=true
+      - enableArmeabiV7a=true
+      - universalApk=false
+      - aomSourceDir=$$libaom$$
+    srclibs:
+      - libaom@0006e96cdb595ff88950a2c664115335ca5517bf
+    ndk: r28c
+    # Duplicate this entry with versionCode: 11 for armeabi-v7a. Each entry must publish the APK whose
+    # versionCode it names; confirm with a local `fdroid build` dry run (UNTESTED here) which split output
+    # fdroidserver picks, and add `output: build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk` if needed.
+
+# Reproducible-build verification (optional, needs bit-identical APKs: NOT yet verified, see README
+# "Distribution"). With it F-Droid publishes the developer-signed APK from GitHub after checking it
+# against its own build:
+# Binaries: https://github.com/MeshLive/meshlive-android/releases/download/v%v/MeshLive-%v-arm64-v8a.apk
+# AllowedAPKSigningKeys: 2eefc05a444522529d9f75d7ebcefd08864707f21a79041db51ebff83649e213
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: '0.1.0-beta'
+CurrentVersionCode: 12
+
+# srclibs/libaom.yml (separate fdroiddata merge request):
+#   RepoType: git
+#   Repo: https://aomedia.googlesource.com/aom
+#   Pinned by commit 0006e96cdb595ff88950a2c664115335ca5517bf (a main-branch commit after the v3.14.1 tag,
+#   whose tag commit is 03087864cf4bea6abb0d28f95cf7843511413d8f). tools/fetch_native_sources.py verifies the same
+#   commit plus a SHA-256 tree manifest; a libaom release tarball is NOT the same source.
+#
+# libopus: tools/fetch_native_sources.py (prebuild above) downloads
+#   https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz and checks SHA-256
+#   65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1 (xiph SHA256SUMS.txt) into reference-repos/libopus.
+#   If fdroiddata prefers a srclib, an equivalent is a srclibs/libopus.yml for https://gitlab.xiph.org/xiph/opus.git
+#   at tag v1.5.2 plus a prebuild step that writes PACKAGE_VERSION="1.5.2" to package_version (UNTESTED).
+#
+# Notes for the build recipe
+# - AGP 8.13.0-rc01 (a release candidate) and Gradle 8.13: F-Droid's buildserver needs JDK 17 and network
+#   access to Google Maven for the verified-checksum downloads (gradle/verification-metadata.xml).
+# - No keystore on the buildserver: Gradle then makes unsigned release APKs, which F-Droid signs itself.
+# - Needs Android SDK platform 36, build-tools, NDK 28.2.13676358 (= r28c) and CMake 3.22.1.

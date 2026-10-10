@@ -1,0 +1,73 @@
+# Release attestation. This workflow holds NO signing key and builds NO APK:
+# the release APK is built and signed on the maintainer's machine by tools/make_release.py.
+# CI only (1) recomputes SOURCE-MANIFEST.txt from the tagged commit and attests it, and
+# (2) attests, by digest, an APK the maintainer already uploaded to the release.
+# The attestation proves "this manifest/APK digest was recorded by this repository's workflow
+# for this commit"; the APK's authenticity to users is still the signing-certificate fingerprint.
+name: Release attestation
+
+on:
+  release:
+    types: [published]
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-attest-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # upload SOURCE-MANIFEST.txt to the release (skipped when there is none)
+      id-token: write      # sigstore keyless signing for the attestation
+      attestations: write  # store the attestation
+    env:
+      TAG: ${{ github.event.release.tag_name || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Build source manifest from the checked-out commit
+        run: |
+          python tools/make_release.py --manifest-only --output SOURCE-MANIFEST.txt
+          grep -qx "git-commit: ${GITHUB_SHA}" SOURCE-MANIFEST.txt
+          head -n 6 SOURCE-MANIFEST.txt
+
+      - name: Attest SOURCE-MANIFEST.txt
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: SOURCE-MANIFEST.txt
+
+      - name: Find an uploaded APK on the release
+        id: apk
+        run: |
+          mkdir apk-assets
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --dir apk-assets || true
+            gh release upload "$TAG" SOURCE-MANIFEST.txt --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            echo "No release for $TAG yet; manifest attested only."
+          fi
+          if ls apk-assets/*.apk >/dev/null 2>&1; then
+            sha256sum apk-assets/*.apk
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Attest the uploaded APK by digest
+        if: steps.apk.outputs.found == 'true'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: apk-assets/*.apk

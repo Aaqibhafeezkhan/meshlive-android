@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "seed": 20261005,
+  "modes": ["720x480@30"],
+  "reference_mode": "native",
+  "lossless": false,
+  "audio": {"enabled": true},
+  "cues": {"interval_seconds": 3, "on_frames": 2, "duration_samples": 4800},
+  "timeline": [{"id": "native_framing", "pattern": "framing_calibration", "seconds": 12}]
+}

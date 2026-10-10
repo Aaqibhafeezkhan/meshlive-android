@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "seed": 31,
+  "modes": ["320x180@15"],
+  "marker": {"enabled": true, "cell_size": 2},
+  "timeline": [
+    {"pattern": "swirling_ink", "frames": 15, "params": {"density": 1.5, "detail": 1.8}},
+    {"pattern": "turbulent_clouds", "frames": 15, "params": {"density": 2.0, "speed": 0.7}},
+    {"pattern": "precipitation", "frames": 15, "params": {"style": "rain", "density": 2.0}},
+    {"pattern": "confetti", "frames": 15},
+    {"pattern": "dust_explosion", "frames": 15, "params": {"period_frames": 12}},
+    {"pattern": "independent_particles", "frames": 15, "params": {"trails": 4}}
+  ]
+}

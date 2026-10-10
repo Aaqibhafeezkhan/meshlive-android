@@ -1,0 +1,224 @@
+import importlib.util
+from pathlib import Path
+import sys
+import unittest
+
+TOOLS = Path(__file__).parents[1]
+sys.path.insert(0, str(TOOLS))
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(name, TOOLS / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+scorer = load("score_device_run")
+profiles = load("acceptance_profiles")
+V4 = {"version": "device-run-v4-user"}
+
+
+def line(seconds, message, pid=123):
+    return f"10-02 19:{int(seconds // 60) + 12:02d}:{seconds % 60:06.3f} {pid} {pid} I BluetoothVideo: {message}\n"
+
+
+def surface(frames, freezes=0, duration=0.0, ratio=0.0, p95=66.7, p99=66.7, maximum=200.0, label="Receiver"):
+    return (f"{label} visible continuity: {frames} frames | {freezes} freeze event(s), {duration:.1f} ms, {ratio:.2f}% | "
+            f"threshold 250.0 ms | surface cadence p50/p95/p99/max 66.7/{p95}/{p99}/{maximum} ms")
+
+
+def steady(maximum=200.0, label="Receiver", seconds=(0, 10, 20, 30), fps=15, **final):
+    """Cumulative reports every 10 s at a steady rate; the last report may carry freeze counters."""
+    text = ""
+    for index, second in enumerate(seconds):
+        frames = 1 if second == 0 else second * fps
+        last = index == len(seconds) - 1
+        text += line(second, surface(frames, maximum=maximum, label=label, **(final if last else {})))
+    return text
+
+
+def score(text, thresholds=None, manifest=None, **spec):
+    return scorer.score_log(text, {"device": "test", "expected_fps": 15, **spec}, manifest, thresholds)
+
+
+class ProfileVersionTest(unittest.TestCase):
+    def test_v3_stays_the_default_and_is_unchanged(self):
+        self.assertEqual("device-run-v3", scorer.DEFAULT_THRESHOLDS["version"])
+        self.assertEqual(0.95, scorer.DEFAULT_THRESHOLDS["visible_fps_fraction"])
+        self.assertEqual(90, scorer.DEFAULT_THRESHOLDS["min_vmaf"])
+        result = score(steady())
+        self.assertEqual("device-run-v3", result["thresholds_version"])
+        self.assertIsNone(result["acceptance"])
+        self.assertNotIn("longest_stall_ms", result["gates"])
+        self.assertNotIn("DIAGNOSTIC", {gate["status"] for gate in result["gates"].values()})
+
+    def test_v4_overlay_adds_user_targets_without_dropping_v3_keys(self):
+        limits = scorer.limits_for(V4)
+        self.assertEqual("device-run-v4-user", limits["version"])
+        self.assertEqual(500, limits["max_stall_ms_call"])
+        self.assertEqual(1000, limits["max_stall_ms_stream"])
+        self.assertEqual(1.0, limits["max_frozen_time_share_percent"])
+        self.assertEqual(3000, limits["max_startup_ms"])
+        self.assertEqual(scorer.DEFAULT_THRESHOLDS["version"], scorer.limits_for(None)["version"])
+        self.assertEqual("custom", scorer.limits_for({"version": "custom"})["version"])
+        self.assertNotIn("max_stall_ms_call", scorer.limits_for({"version": "custom"}))
+
+    def test_diagnostic_rows_never_decide_but_keep_their_measured_verdict(self):
+        failing = {"status": "FAIL", "value": 1, "limit": 0}
+        diagnostic = scorer.as_diagnostic(failing)
+        self.assertEqual("DIAGNOSTIC", diagnostic["status"])
+        self.assertEqual("FAIL", diagnostic["measured_status"])
+        self.assertEqual("PASS", scorer.aggregate_status([{"status": "PASS"}, diagnostic]))
+        self.assertEqual("FAIL", scorer.aggregate_status([{"status": "FAIL"}, diagnostic]))
+        self.assertEqual("UNMEASURED", scorer.aggregate_status([diagnostic]))
+
+    def test_unknown_link_class_is_healthy_and_impairment_is_impaired(self):
+        self.assertEqual(("healthy", "default"), profiles.link_class({}))
+        self.assertEqual(("impaired", "media_impairment"), profiles.link_class({"scenario": {"media_impairment": {"path": "x"}}}))
+        self.assertEqual(("impaired", "media_impairment"), profiles.link_class({"scenario": {"media_impairments": {"a": {}}}}))
+        self.assertEqual(("impaired", "declared"), profiles.link_class({"acceptance": {"link_class": "impaired"}}))
+        self.assertEqual(("healthy", "declared"), profiles.link_class(
+            {"acceptance": {"link_class": "healthy"}, "scenario": {"media_impairment": {"path": "x"}}}))
+
+    def test_family_lists_keep_v3_and_add_unmeasured_user_families(self):
+        self.assertEqual(profiles.FAMILIES_V3, profiles.families_for(None))
+        self.assertEqual(profiles.FAMILIES_V3, profiles.families_for("device-run-v3"))
+        self.assertEqual(("media_age", "task_success", "speech_comprehension"), profiles.families_for(profiles.V4)[-3:])
+        self.assertNotIn("picture", profiles.sweep_families_for(profiles.V4))
+        self.assertIn("picture", profiles.sweep_families_for(profiles.V3))
+        with self.assertRaises(ValueError):
+            profiles.families_for("device-run-v9")
+
+
+class LongestStallTest(unittest.TestCase):
+    def test_stream_limit_is_one_second_and_call_limit_is_half_a_second(self):
+        for maximum, stream, call in ((400.0, "PASS", "PASS"), (900.0, "PASS", "FAIL"), (1100.0, "FAIL", "FAIL")):
+            with self.subTest(maximum=maximum):
+                self.assertEqual(stream, score(steady(maximum), V4)["gates"]["longest_stall_ms"]["status"])
+                called = score(steady(maximum, label="Private call"), V4)["gates"]["longest_stall_ms"]
+                self.assertEqual(call, called["status"])
+                self.assertEqual(500, called["limit"])
+
+    def test_pass_requires_the_rolling_window_to_have_seen_every_gap(self):
+        text = (line(0, surface(1)) + line(20, surface(1 + 300)))
+        stall = score(text, V4)["gates"]["longest_stall_ms"]
+        self.assertEqual("UNMEASURED", stall["status"])
+        self.assertFalse(stall["rolling_window_covered"])
+        self.assertEqual("FAIL", score(line(0, surface(1)) + line(20, surface(301, maximum=2000.0)), V4)["gates"]["longest_stall_ms"]["status"])
+
+    def test_sender_has_no_stall_gate(self):
+        self.assertNotIn("longest_stall_ms", score(steady(), V4, role="sender")["gates"])
+
+
+class FrozenShareTest(unittest.TestCase):
+    def test_share_is_unexpected_freeze_time_over_scored_time(self):
+        small = score(steady(freezes=1, duration=300.0, ratio=1.0), V4)["gates"]["frozen_time_share_percent"]
+        self.assertEqual("PASS", small["status"])
+        self.assertAlmostEqual(1.0, small["value"], places=6)
+        self.assertEqual(30.0, small["scored_seconds"])
+        large = score(steady(freezes=1, duration=600.0, ratio=2.0), V4)["gates"]["frozen_time_share_percent"]
+        self.assertEqual("FAIL", large["status"])
+
+    def test_planned_overlap_cannot_be_allocated_so_share_is_unmeasured(self):
+        text = (line(0, surface(1)) + line(5, "Stream paused by broadcaster.") + line(8, "Broadcaster resumed the stream.") +
+                line(10, surface(100, freezes=1, duration=2000.0, ratio=7.0)))
+        self.assertEqual("UNMEASURED", score(text, V4)["gates"]["frozen_time_share_percent"]["status"])
+
+
+class LinkClassTest(unittest.TestCase):
+    freezing = staticmethod(lambda: steady(freezes=2, duration=200.0, ratio=0.67))
+
+    def test_healthy_link_keeps_zero_unexpected_freezes_decisive(self):
+        result = score(self.freezing(), V4)
+        self.assertEqual("healthy", result["acceptance"]["link_class"])
+        self.assertEqual("FAIL", result["gates"]["unexpected_freeze_events"]["status"])
+        self.assertEqual("FAIL", result["overall_status"])
+
+    def test_impaired_link_reports_freeze_count_but_judges_stall_and_share(self):
+        manifest = {"scenario": {"media_impairment": {"path": "x", "sha256": "y"}}}
+        result = score(self.freezing(), V4, manifest)
+        freeze = result["gates"]["unexpected_freeze_events"]
+        self.assertEqual("DIAGNOSTIC", freeze["status"])
+        self.assertEqual("FAIL", freeze["measured_status"])
+        self.assertEqual("PASS", result["gates"]["longest_stall_ms"]["status"])
+        self.assertEqual("PASS", result["gates"]["frozen_time_share_percent"]["status"])
+        self.assertNotEqual("FAIL", result["overall_status"])
+
+    def test_impaired_stall_over_the_limit_still_fails(self):
+        manifest = {"acceptance": {"link_class": "impaired"}}
+        result = score(steady(maximum=1500.0, freezes=1, duration=1250.0, ratio=4.0), V4, manifest)
+        self.assertEqual("FAIL", result["gates"]["longest_stall_ms"]["status"])
+        self.assertEqual("FAIL", result["gates"]["frozen_time_share_percent"]["status"])
+        self.assertEqual("FAIL", result["overall_status"])
+
+    def test_loss_counters_are_diagnostic_when_impaired_but_audio_drops_stay_decisive(self):
+        text = steady() + line(31, "Call RX 300 kbps | 10 video/20 audio | audio drops 3 | queue 4/11, drops 5") + \
+            line(32, "Call RX 300 kbps | 10 video/20 audio | audio drops 3 | queue 4/11, drops 5")
+        manifest = {"acceptance": {"link_class": "impaired"}}
+        result = score(text, V4, manifest)
+        self.assertEqual("DIAGNOSTIC", result["gates"]["decoder_drops"]["status"])
+        self.assertEqual("FAIL", result["gates"]["audio_drops"]["status"])
+        healthy = score(text, V4)
+        self.assertEqual("FAIL", healthy["gates"]["decoder_drops"]["status"])
+
+
+class EffectiveCadenceTest(unittest.TestCase):
+    def test_visible_fps_fraction_is_diagnostic_and_effective_cadence_decides(self):
+        text = (line(0, "Receiving stream from aaaaaaaaaaaa over link aaaaaaaaaaaa: VP9 640x360 at 15 FPS") +
+                line(1, surface(1)) + line(11, surface(151)) +
+                line(12, "Receiving stream from aaaaaaaaaaaa over link aaaaaaaaaaaa: VP9 640x360 at 10 FPS") +
+                line(21, surface(256)) + line(31, surface(356)))
+        v3 = score(text)
+        self.assertEqual("FAIL", v3["gates"]["visible_fps"]["status"])
+        result = score(text, V4)
+        self.assertEqual("DIAGNOSTIC", result["gates"]["visible_fps"]["status"])
+        self.assertEqual("FAIL", result["gates"]["visible_fps"]["measured_status"])
+        cadence = result["gates"]["effective_profile_fps"]
+        self.assertEqual("PASS", cadence["status"])
+        self.assertEqual(2, cadence["declared_effective_changes"])
+        self.assertLess(result["gates"]["requested_profile_shortfall"]["value"], 0.95)
+        self.assertGreater(result["gates"]["degraded_time_share_percent"]["value"], 0.0)
+        self.assertEqual("DIAGNOSTIC", result["gates"]["requested_profile_shortfall"]["status"])
+
+    def test_delivery_below_the_declared_effective_profile_fails(self):
+        text = (line(0, "Receiving stream from aaaaaaaaaaaa over link aaaaaaaaaaaa: VP9 640x360 at 15 FPS") +
+                line(1, surface(1)) + line(11, surface(101)) + line(21, surface(201)))
+        self.assertEqual("FAIL", score(text, V4)["gates"]["effective_profile_fps"]["status"])
+
+    def test_without_a_declared_change_it_equals_the_requested_profile(self):
+        gate = score(steady(), V4)["gates"]["effective_profile_fps"]
+        self.assertEqual("PASS", gate["status"])
+        self.assertEqual(0, gate["declared_effective_changes"])
+
+
+class FidelityTest(unittest.TestCase):
+    def test_low_vmaf_is_reported_but_does_not_fail_v4(self):
+        manifest = {"optical_results": [{"device": "test", "aligned": True, "reference_kind": "raw_fixed_fixture",
+                                         "coverage_matches": True, "vmaf": 60, "ssim": 0.8, "psnr_db": 20}]}
+        v3 = score(steady(), None, manifest)
+        self.assertEqual("FAIL", v3["optical_gates"]["vmaf"]["status"])
+        self.assertEqual("FAIL", v3["overall_status"])
+        v4 = score(steady(), V4, manifest)
+        for name in ("vmaf", "ssim", "psnr_db"):
+            self.assertEqual("DIAGNOSTIC", v4["optical_gates"][name]["status"])
+            self.assertEqual("FAIL", v4["optical_gates"][name]["measured_status"])
+        self.assertNotEqual("FAIL", v4["overall_status"])
+
+    def test_queue_age_is_labelled_a_proxy_never_media_age(self):
+        text = steady() + line(5, "Relay x TX: 300 kbps | queue 3 | backlog 450 ms")
+        gates = score(text, V4)["gates"]
+        self.assertEqual("DIAGNOSTIC", gates["queue_age_proxy_ms"]["status"])
+        self.assertTrue(gates["queue_age_proxy_ms"]["proxy"])
+        self.assertNotIn("media_age_ms", gates)
+
+
+class RunnerSelectionTest(unittest.TestCase):
+    def test_manifest_scoring_records_the_profile_and_cli_selects_it(self):
+        manifest = {"run_id": "r", "logs": []}
+        self.assertEqual("device-run-v3", scorer.score_manifest(manifest)["thresholds_version"])
+        self.assertEqual("device-run-v4-user", scorer.score_manifest(manifest, thresholds=V4)["thresholds_version"])
+
+
+if __name__ == "__main__":
+    unittest.main()

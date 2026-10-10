@@ -1,0 +1,2203 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/app_background"
+    android:keepScreenOn="true"
+    tools:context=".MainActivity">
+
+    <!-- Go live (camera) and Watch (playback) share this screen. The TextureView, viewfinder and
+         their sizes are unchanged; only the overlays above them were restyled. -->
+    <FrameLayout
+        android:id="@+id/cameraScreen"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        android:visibility="gone">
+
+        <TextureView
+            android:id="@+id/preview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <androidx.camera.viewfinder.view.ViewfinderView
+            android:id="@+id/cameraViewfinder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <LinearLayout
+            android:id="@+id/receiverWaitingOverlay"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#B3000000"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="32dp"
+            android:visibility="gone">
+
+            <ProgressBar
+                android:id="@+id/receiverWaitingProgress"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:indeterminateTint="@android:color/white" />
+
+            <TextView
+                android:id="@+id/receiverWaitingText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:accessibilityLiveRegion="polite"
+                android:gravity="center"
+                android:text="@string/watch_connecting"
+                android:textColor="@android:color/white"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <!-- Live / watching status: the coloured dot keeps its old role and description; the
+             label next to it says the same thing in words (LIVE, viewers, route). -->
+        <LinearLayout
+            android:id="@+id/broadcastStatusChip"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="20dp"
+            android:layout_marginEnd="16dp"
+            android:background="@drawable/call_overlay_background"
+            android:gravity="center_vertical"
+            android:minHeight="36dp"
+            android:orientation="horizontal"
+            android:paddingStart="12dp"
+            android:paddingEnd="16dp">
+
+            <View
+                android:id="@+id/connectionStatusDot"
+                android:layout_width="12dp"
+                android:layout_height="12dp"
+                android:background="@drawable/connection_status_dot"
+                android:contentDescription="No receiver connected" />
+
+            <TextView
+                android:id="@+id/broadcastStatusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:accessibilityLiveRegion="polite"
+                android:maxWidth="200dp"
+                android:maxLines="2"
+                android:textColor="@android:color/white"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                tools:text="LIVE · 2 watching" />
+        </LinearLayout>
+
+        <!-- One device-health line, only when it matters (heat reduction or low battery). -->
+        <TextView
+            android:id="@+id/videoHealthNotice"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="72dp"
+            android:background="@drawable/call_overlay_background"
+            android:gravity="center"
+            android:maxWidth="320dp"
+            android:minHeight="32dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:textColor="@android:color/white"
+            android:textSize="14sp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/streamSecurityText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="64dp"
+            android:layout_marginEnd="16dp"
+            android:background="@drawable/call_overlay_background"
+            android:drawablePadding="8dp"
+            android:gravity="center_vertical"
+            android:maxWidth="220dp"
+            android:minHeight="32dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:textColor="@android:color/white"
+            android:textSize="14sp"
+            android:visibility="gone"
+            app:drawableStartCompat="@drawable/ic_lock"
+            app:drawableTint="@android:color/white"
+            tools:text="Encrypted · Not verified"
+            tools:visibility="visible" />
+
+        <LinearLayout
+            android:id="@+id/deviceHealthOverlay"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="128dp"
+            android:gravity="center_horizontal"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/thermalStatusBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/call_overlay_background"
+                android:paddingStart="12dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="4dp"
+                android:text="Heat: Normal"
+                android:textColor="@android:color/white"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/batteryTemperatureBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/call_overlay_background"
+                android:paddingStart="12dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="4dp"
+                android:text="Battery: --"
+                android:textColor="@android:color/white"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/videoBackButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="top|start"
+            android:layout_margin="16dp"
+            android:background="@drawable/camera_control_background"
+            android:contentDescription="@string/action_back"
+            android:padding="12dp"
+            android:src="@drawable/ic_arrow_back"
+            android:visibility="gone"
+            app:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/cameraSwitchButton"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_gravity="bottom|end"
+            android:layout_marginEnd="24dp"
+            android:layout_marginBottom="40dp"
+            android:background="@drawable/camera_control_background"
+            android:contentDescription="Switch to front camera"
+            android:padding="16dp"
+            android:src="@drawable/ic_flip_camera"
+            app:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/broadcastPauseButton"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_gravity="bottom|start"
+            android:layout_marginStart="24dp"
+            android:layout_marginBottom="40dp"
+            android:background="@drawable/camera_control_background"
+            android:contentDescription="Pause broadcast"
+            android:padding="16dp"
+            android:src="@drawable/ic_pause"
+            android:visibility="gone"
+            app:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/streamToggleButton"
+            android:layout_width="88dp"
+            android:layout_height="88dp"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="24dp"
+            android:background="@drawable/stream_control_start"
+            android:contentDescription="Start broadcast"
+            android:enabled="false" />
+    </FrameLayout>
+
+    <!-- Home ("Field radio", v5): compact status and ID at the top, a flexible gap, then the
+         actions in the thumb zone: three strong action rows and one large Call button at the
+         bottom. Action views are wrap_content and contain no weights (HomeLayoutTest). -->
+    <ScrollView
+        android:id="@+id/homeScreen"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/app_background"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:paddingStart="@dimen/screen_gutter"
+            android:paddingTop="8dp"
+            android:paddingEnd="@dimen/screen_gutter"
+            android:paddingBottom="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                style="@style/Widget.App.TopBarTitle"
+                    android:id="@+id/homeTitle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:accessibilityHeading="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="48dp"
+                    android:text="@string/app_name"
+                    android:textAppearance="@style/TextAppearance.App.Headline" />
+
+                <ImageButton
+                    android:id="@+id/homeSettingsButton"
+                    style="@style/Widget.App.TopIconButton"
+                    android:contentDescription="@string/action_open_settings"
+                    android:src="@drawable/ic_settings" />
+            </LinearLayout>
+
+            <!-- One status line (state + what it means); an action appears only when needed. -->
+            <LinearLayout
+                android:id="@+id/homeReadinessCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:accessibilityLiveRegion="polite"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:minHeight="32dp"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:id="@+id/homeReadinessIcon"
+                        android:layout_width="18dp"
+                        android:layout_height="18dp"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_bluetooth"
+                        app:tint="@color/success" />
+
+                    <TextView
+                        android:id="@+id/homeReadinessTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:maxLines="1"
+                        android:text="@string/readiness_ready_title"
+                        android:textAppearance="@style/TextAppearance.App.Title" />
+
+                    <TextView
+                        android:id="@+id/homeReadinessText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:maxLines="2"
+                        android:text="@string/readiness_ready_text"
+                        android:textAppearance="@style/TextAppearance.App.Body" />
+                </LinearLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/homeReadinessAction"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:minHeight="48dp"
+                    android:visibility="gone"
+                    app:cornerRadius="@dimen/key_radius"
+                    tools:text="Turn on Bluetooth"
+                    tools:visibility="visible" />
+            </LinearLayout>
+
+            <!-- Your ID: one compact line; opens Verify a contact. -->
+            <LinearLayout
+                android:id="@+id/homeIdentityCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minHeight="48dp"
+                android:orientation="horizontal">
+
+                <ImageView
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_verified_user"
+                    app:tint="@color/text_secondary" />
+
+                <TextView
+                    android:id="@+id/homeIdentityText"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="@string/home_identity_text"
+                    android:textAppearance="@style/TextAppearance.App.Body" />
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_chevron_right"
+                    app:tint="@color/text_secondary" />
+            </LinearLayout>
+
+            <!-- Deep-sleep warning (DozeWatchdog), shown only when Android holds the app asleep. -->
+            <TextView
+                android:id="@+id/homeDeepSleepBanner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/warning_banner_background"
+                android:drawablePadding="12dp"
+                android:gravity="center_vertical"
+                android:minHeight="48dp"
+                android:padding="12dp"
+                android:textColor="@color/warning"
+                android:visibility="gone"
+                app:drawableStartCompat="@drawable/ic_warning"
+                app:drawableTint="@color/warning" />
+
+            <!-- Recent: the last people you talked to, one tap to call back (RecentCalls). -->
+            <TextView
+                style="@style/Widget.App.SectionHeader"
+                android:layout_marginTop="16dp"
+                android:text="@string/recent_title" />
+
+            <LinearLayout
+                android:id="@+id/homeRecentList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/homeRecentEmpty"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:gravity="center_vertical"
+                android:text="@string/recent_empty"
+                android:textAppearance="@style/TextAppearance.App.Body" />
+
+            <!-- Flexible gap: pushes the actions into the lower half (thumb zone). -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:minHeight="24dp" />
+
+            <!-- Watch: plain row. -->
+            <LinearLayout
+                android:id="@+id/receiveModeButton"
+                style="@style/Widget.App.ActionRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:contentDescription="@string/home_watch_description">
+
+                <FrameLayout
+                    android:layout_width="48dp"
+                    android:layout_height="48dp">
+
+                    <ImageView
+                        android:layout_width="26dp"
+                        android:layout_height="26dp"
+                        android:layout_gravity="center"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_visibility"
+                        app:tint="@color/text_primary" />
+                </FrameLayout>
+
+                <LinearLayout
+                    style="@style/Widget.App.ActionRowText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:importantForAccessibility="noHideDescendants">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/home_watch_title"
+                        android:textAppearance="@style/TextAppearance.App.Readout" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/home_watch_subtitle"
+                        android:textAppearance="@style/TextAppearance.App.Body" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <View
+                style="@style/Widget.App.RowDivider"
+                android:layout_width="match_parent"
+                android:layout_height="1dp" />
+
+            <!-- Go live: record semantics (red dot). -->
+            <LinearLayout
+                android:id="@+id/streamModeButton"
+                style="@style/Widget.App.ActionRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:contentDescription="@string/home_live_description">
+
+                <FrameLayout
+                    android:layout_width="48dp"
+                    android:layout_height="48dp">
+
+                    <ImageView
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
+                        android:layout_gravity="center"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_record" />
+                </FrameLayout>
+
+                <LinearLayout
+                    style="@style/Widget.App.ActionRowText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:importantForAccessibility="noHideDescendants">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/home_live_title"
+                        android:textAppearance="@style/TextAppearance.App.Readout" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/home_live_subtitle"
+                        android:textAppearance="@style/TextAppearance.App.Body" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <View
+                style="@style/Widget.App.RowDivider"
+                android:visibility="gone"
+                android:layout_width="match_parent"
+                android:layout_height="1dp" />
+
+            <!-- Push-to-talk: a hold-to-talk ring, like a radio's PTT key. -->
+            <LinearLayout
+                android:id="@+id/homePushToTalkButton"
+                style="@style/Widget.App.ActionRow"
+                android:visibility="gone"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:contentDescription="@string/home_ptt_description">
+
+                <FrameLayout
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="@drawable/ptt_ring">
+
+                    <ImageView
+                        android:layout_width="22dp"
+                        android:layout_height="22dp"
+                        android:layout_gravity="center"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_mic"
+                        app:tint="@color/text_primary" />
+                </FrameLayout>
+
+                <LinearLayout
+                    style="@style/Widget.App.ActionRowText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:importantForAccessibility="noHideDescendants">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/home_ptt_title"
+                        android:textAppearance="@style/TextAppearance.App.Readout" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/home_ptt_subtitle"
+                        android:textAppearance="@style/TextAppearance.App.Body" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/homeMessagesButton"
+                style="@style/Widget.App.Button.Text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/home_messages"
+                android:visibility="gone"
+                app:icon="@drawable/ic_chat" />
+
+            <!-- Primary action, at the bottom where the thumb rests. -->
+            <TextView
+                android:id="@+id/homeCallSubtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:gravity="center"
+                android:text="@string/home_call_subtitle_video"
+                android:textAppearance="@style/TextAppearance.App.Body" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/privateCallButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:contentDescription="@string/home_call_description"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="64dp"
+                android:text="@string/home_call_title"
+                android:textAppearance="@style/TextAppearance.App.Readout"
+                android:textColor="@color/on_accent"
+                app:backgroundTint="@color/accent"
+                app:cornerRadius="@dimen/key_radius"
+                app:icon="@drawable/ic_call"
+                app:iconGravity="textStart"
+                app:iconPadding="12dp"
+                app:iconSize="26dp"
+                app:iconTint="@color/on_accent" />
+
+            <!-- Last app message: kept for setStatus (logged), not shown on Home. -->
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/initial_status"
+                android:visibility="gone" />
+
+            <!-- Kept for the existing handler; the technical summary lives in Settings > Advanced. -->
+            <TextView
+                android:id="@+id/homeChangeSettingsButton"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </ScrollView>
+
+    <LinearLayout
+        android:id="@+id/receiverBrowserScreen"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/app_background"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/receiverBrowserBackButton"
+                style="@style/Widget.App.TopIconButton"
+                android:contentDescription="@string/action_back"
+                android:src="@drawable/ic_arrow_back" />
+
+            <TextView
+                style="@style/Widget.App.TopBarTitle"
+                android:id="@+id/receiverBrowserTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:accessibilityHeading="true"
+                android:text="@string/watch_title"
+                android:textAppearance="@style/TextAppearance.App.Headline" />
+
+            <ImageButton
+                android:id="@+id/receiverRefreshButton"
+                style="@style/Widget.App.TopIconButton"
+                android:contentDescription="@string/action_scan_again"
+                android:src="@drawable/ic_refresh" />
+        </LinearLayout>
+
+        <!-- Relay for others: the same preference as Settings > Relay for others. -->
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.App.Card"
+            android:visibility="gone"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingStart="16dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="12dp">
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/watchRelaySwitch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/relay_for_others" />
+
+                <TextView
+                    style="@style/Widget.App.Description"
+                    android:text="@string/relay_for_others_description" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <TextView
+            android:id="@+id/receiverBrowserStatus"
+            style="@style/Widget.App.StatusLine"
+            android:text="@string/watch_scanning" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <ListView
+                android:id="@+id/streamList"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:divider="@drawable/list_divider_inset"
+                android:dividerHeight="1dp" />
+
+            <include
+                android:id="@+id/streamEmptyView"
+                layout="@layout/view_empty_state"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </FrameLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/callBrowserScreen"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/app_background"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/callBrowserBackButton"
+                style="@style/Widget.App.TopIconButton"
+                android:contentDescription="@string/action_back"
+                android:src="@drawable/ic_arrow_back" />
+
+            <TextView
+                style="@style/Widget.App.TopBarTitle"
+                android:id="@+id/callBrowserTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:accessibilityHeading="true"
+                android:text="@string/people_title"
+                android:textAppearance="@style/TextAppearance.App.Headline" />
+
+            <ImageButton
+                android:id="@+id/callRefreshButton"
+                style="@style/Widget.App.TopIconButton"
+                android:contentDescription="@string/action_scan_again"
+                android:src="@drawable/ic_refresh" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/callBrowserStatus"
+            style="@style/Widget.App.StatusLine"
+            android:text="@string/people_starting" />
+
+        <!-- The list refreshes itself in place (no flicker); the top-bar button searches again. -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+
+                <ListView
+                    android:id="@+id/callPeerList"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:divider="@drawable/list_divider_inset"
+                    android:dividerHeight="1dp" />
+
+                <include
+                    android:id="@+id/callEmptyView"
+                    layout="@layout/view_empty_state"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+            </FrameLayout>
+        </FrameLayout>
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/callScreen"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        android:visibility="gone">
+
+        <!-- The other person's video. Starts full screen; tapping the small view swaps the two. -->
+        <FrameLayout
+            android:id="@+id/callRemoteContainer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@android:color/black"
+            android:contentDescription="@string/call_remote_video">
+
+            <TextureView
+                android:id="@+id/callRemotePreview"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:id="@+id/callRemoteCameraOff"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:layout_margin="8dp"
+                android:accessibilityLiveRegion="polite"
+                android:background="@drawable/call_overlay_background"
+                android:drawablePadding="8dp"
+                android:gravity="center"
+                android:paddingStart="16dp"
+                android:paddingTop="12dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="12dp"
+                android:text="@string/call_video_paused"
+                android:textColor="@android:color/white"
+                android:textSize="16sp"
+                android:visibility="gone"
+                app:drawableStartCompat="@drawable/ic_videocam_off"
+                app:drawableTint="@android:color/white" />
+
+            <TextView
+                android:id="@+id/callRemoteStateText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:layout_margin="8dp"
+                android:accessibilityLiveRegion="polite"
+                android:background="@drawable/call_overlay_background"
+                android:gravity="center"
+                android:paddingStart="16dp"
+                android:paddingTop="12dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="12dp"
+                android:textColor="@android:color/white"
+                android:textSize="16sp"
+                android:visibility="gone" />
+        </FrameLayout>
+
+        <!-- Your own preview: the camera viewfinder, or the raw benchmark input when one is used. -->
+        <FrameLayout
+            android:id="@+id/callLocalContainer"
+            android:layout_width="104dp"
+            android:layout_height="139dp"
+            android:layout_gravity="top|start"
+            android:background="@drawable/call_pip_background"
+            android:contentDescription="@string/call_local_video"
+            android:foreground="@drawable/call_pip_border"
+            android:visibility="gone">
+
+            <!-- The library's default (SurfaceView on most phones) is kept on purpose: the camera
+                 session and its background behaviour stay exactly as before. -->
+            <androidx.camera.viewfinder.view.ViewfinderView
+                android:id="@+id/callLocalViewfinder"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@android:color/black"
+                android:importantForAccessibility="no" />
+
+            <ImageView
+                android:id="@+id/callLocalRawPreview"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:importantForAccessibility="no"
+                android:scaleType="fitCenter"
+                android:visibility="gone" />
+        </FrameLayout>
+
+        <!-- Caller card while ringing or calling (before media). Not clickable, so taps reach
+             the call screen underneath. -->
+        <LinearLayout
+            android:id="@+id/callPartyPanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/call_party_background"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="24dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:layout_width="112dp"
+                android:layout_height="112dp"
+                android:background="@drawable/avatar_circle_background"
+                android:importantForAccessibility="no"
+                android:padding="24dp"
+                android:src="@drawable/ic_person"
+                app:tint="@android:color/white" />
+
+            <TextView
+                android:id="@+id/callPartyName"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:gravity="center"
+                android:maxLines="2"
+                android:textColor="@android:color/white"
+                android:textSize="28sp"
+                android:textStyle="bold"
+                tools:text="Pixel 7" />
+
+            <TextView
+                android:id="@+id/callPartyState"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:accessibilityLiveRegion="polite"
+                android:gravity="center"
+                android:textColor="#CCFFFFFF"
+                android:textSize="16sp"
+                tools:text="Incoming video call" />
+
+            <TextView
+                android:id="@+id/callPartySubject"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center"
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:textColor="@android:color/white"
+                android:textSize="16sp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Experimental voice calls: shown instead of the video area while no video flows either
+             way. The remote TextureView stays laid out underneath so its surface remains ready. -->
+        <LinearLayout
+            android:id="@+id/callVoicePanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/call_party_background"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="24dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:layout_width="112dp"
+                android:layout_height="112dp"
+                android:background="@drawable/avatar_circle_background"
+                android:importantForAccessibility="no"
+                android:padding="24dp"
+                android:src="@drawable/ic_person"
+                app:tint="@android:color/white" />
+
+            <TextView
+                android:id="@+id/callVoicePeerText"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:gravity="center"
+                android:maxLines="2"
+                android:textColor="@android:color/white"
+                android:textSize="28sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/callVoiceTypeText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:text="@string/call_voice"
+                android:textColor="#CCFFFFFF"
+                android:textSize="16sp" />
+
+            <Chronometer
+                android:id="@+id/callVoiceTimer"
+                android:fontFeatureSettings="tnum"
+                android:fontFamily="sans-serif"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="20sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/callTopBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:orientation="vertical"
+            android:paddingStart="12dp"
+            android:paddingTop="12dp"
+            android:paddingEnd="12dp">
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp">
+
+                <ImageButton
+                    android:id="@+id/callInfoButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_gravity="start|center_vertical"
+                    android:background="@drawable/call_overlay_background"
+                    android:contentDescription="@string/call_show_details"
+                    android:padding="12dp"
+                    android:src="@drawable/ic_info"
+                    android:visibility="invisible"
+                    app:tint="@android:color/white" />
+
+                <!-- Encryption, route and verification live in the call info sheet. -->
+                <ImageButton
+                    android:id="@+id/callLockButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_gravity="end|center_vertical"
+                    android:background="@drawable/call_overlay_background"
+                    android:contentDescription="@string/call_info_open"
+                    android:padding="16dp"
+                    android:src="@drawable/ic_lock"
+                    android:visibility="gone"
+                    app:tint="@android:color/white" />
+
+                <TextView
+                    android:id="@+id/callStatusText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:layout_marginStart="56dp"
+                    android:layout_marginEnd="56dp"
+                    android:accessibilityLiveRegion="polite"
+                    android:background="@drawable/call_overlay_background"
+                    android:gravity="center"
+                    android:maxWidth="260dp"
+                    android:paddingStart="16dp"
+                    android:paddingTop="8dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="8dp"
+                    android:text="@string/call_connecting"
+                    android:textColor="@android:color/white"
+                    android:textSize="14sp" />
+            </FrameLayout>
+
+            <!-- Encryption, route and verification. Tap for the verification screen. -->
+            <TextView
+                android:id="@+id/callSecurityChip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/call_overlay_background"
+                android:clickable="true"
+                android:drawablePadding="8dp"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:maxWidth="320dp"
+                android:minHeight="48dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="16dp"
+                android:textColor="@android:color/white"
+                android:textSize="14sp"
+                android:visibility="gone"
+                app:drawableStartCompat="@drawable/ic_lock"
+                app:drawableTint="@android:color/white"
+                tools:text="Encrypted · Direct · Not verified"
+                tools:visibility="visible" />
+
+            <TextView
+                android:id="@+id/callProfileText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/call_overlay_background"
+                android:maxWidth="320dp"
+                android:paddingStart="12dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="4dp"
+                android:textColor="@android:color/white"
+                android:textSize="14sp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Incoming call: decline (red) and accept (green), large and far apart. -->
+        <LinearLayout
+            android:id="@+id/incomingCallControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:baselineAligned="false"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingStart="24dp"
+            android:paddingTop="24dp"
+            android:paddingEnd="24dp"
+            android:paddingBottom="48dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/declineCallButton"
+                    style="@style/Widget.App.RoundControl.Large"
+                    android:contentDescription="@string/call_decline"
+                    app:backgroundTint="@color/call_end"
+                    app:icon="@drawable/ic_call_end"
+                    app:iconTint="@color/white" />
+
+                <TextView
+                    style="@style/Widget.App.RoundControlLabel"
+                    android:layout_marginTop="8dp"
+                    android:importantForAccessibility="no"
+                    android:text="@string/call_decline"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/acceptCallButton"
+                    style="@style/Widget.App.RoundControl.Large"
+                    android:contentDescription="@string/call_accept"
+                    app:backgroundTint="@color/call_accept"
+                    app:icon="@drawable/ic_call"
+                    app:iconTint="@color/white" />
+
+                <TextView
+                    style="@style/Widget.App.RoundControlLabel"
+                    android:layout_marginTop="8dp"
+                    android:importantForAccessibility="no"
+                    android:text="@string/call_accept"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/cancelCallButton"
+            style="@style/Widget.App.CallAnswer"
+            android:layout_width="200dp"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="40dp"
+            android:layout_weight="0"
+            android:text="@string/call_cancel"
+            android:visibility="gone"
+            app:backgroundTint="@color/call_end"
+            app:icon="@drawable/ic_call_end" />
+
+        <!-- Active call: large round buttons on a translucent bar that hides itself while video
+             plays (tap the video to bring it back). Labels sit under the buttons. -->
+        <LinearLayout
+            android:id="@+id/activeCallControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:background="@drawable/call_controls_scrim"
+            android:baselineAligned="false"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingTop="32dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="20dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/callMuteButton"
+                    style="@style/Widget.App.RoundControl"
+                    android:checkable="true"
+                    app:icon="@drawable/ic_mic" />
+
+                <TextView
+                    android:id="@+id/callMuteLabel"
+                    style="@style/Widget.App.RoundControlLabel"
+                    android:text="@string/call_mute" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/callCameraButton"
+                    style="@style/Widget.App.RoundControl"
+                    android:checkable="true"
+                    app:icon="@drawable/ic_videocam" />
+
+                <TextView
+                    android:id="@+id/callCameraLabel"
+                    style="@style/Widget.App.RoundControlLabel"
+                    android:text="@string/call_video_off" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/callSwitchCameraButton"
+                    style="@style/Widget.App.RoundControl"
+                    app:icon="@drawable/ic_flip_camera" />
+
+                <TextView
+                    android:id="@+id/callSwitchCameraLabel"
+                    style="@style/Widget.App.RoundControlLabel"
+                    android:text="@string/call_flip" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/callSpeakerButton"
+                    style="@style/Widget.App.RoundControl"
+                    android:checkable="true"
+                    app:icon="@drawable/ic_volume_up" />
+
+                <TextView
+                    android:id="@+id/callSpeakerLabel"
+                    style="@style/Widget.App.RoundControlLabel"
+                    android:text="@string/call_speaker" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/endCallButton"
+                    style="@style/Widget.App.RoundControl"
+                    android:contentDescription="@string/call_end_description"
+                    app:backgroundTint="@color/call_end"
+                    app:iconTint="@color/white"
+                    app:icon="@drawable/ic_call_end" />
+
+                <TextView
+                    android:id="@+id/endCallLabel"
+                    style="@style/Widget.App.RoundControlLabel"
+                    android:text="@string/call_end" />
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- Experimental push-to-talk (launch extras only): hold to unmute, release to mute. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/callPushToTalkButton"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:layout_gravity="bottom"
+            android:layout_marginStart="24dp"
+            android:layout_marginEnd="24dp"
+            android:layout_marginBottom="112dp"
+            android:contentDescription="Push to talk. Touch and hold to talk; your microphone is muted when you let go."
+            android:text="Hold to talk"
+            android:textSize="16sp"
+            android:visibility="gone"
+            app:cornerRadius="36dp"
+            app:icon="@drawable/ic_mic"
+            app:iconGravity="textStart" />
+    </FrameLayout>
+
+    <ScrollView
+        android:id="@+id/settingsScreen"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/app_background"
+        android:fillViewport="true"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="@dimen/screen_gutter"
+            android:paddingTop="8dp"
+            android:paddingEnd="@dimen/screen_gutter"
+            android:paddingBottom="32dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageButton
+                    android:id="@+id/doneSettingsButton"
+                    style="@style/Widget.App.TopIconButton"
+                    android:contentDescription="@string/action_back"
+                    android:src="@drawable/ic_arrow_back" />
+
+                <TextView
+                style="@style/Widget.App.TopBarTitle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:layout_weight="1"
+                    android:accessibilityHeading="true"
+                    android:text="@string/settings_title"
+                    android:textAppearance="@style/TextAppearance.App.Headline" />
+            </LinearLayout>
+
+            <!-- ===== Simple settings ===== -->
+            <TextView
+                style="@style/Widget.App.SectionHeader"
+                android:layout_marginTop="12dp"
+                android:text="@string/settings_section_identity" />
+
+            <com.google.android.material.card.MaterialCardView
+                style="@style/Widget.App.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="@dimen/card_padding">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/identity_your_id"
+                        android:textAppearance="@style/TextAppearance.App.Title" />
+
+                    <!-- Handle (naming design): the short ID people read to each other. -->
+                    <TextView
+                        android:id="@+id/identityHandleText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:fontFeatureSettings="tnum"
+                        android:textAppearance="@style/TextAppearance.App.Headline"
+                        android:textIsSelectable="true"
+                        android:visibility="gone"
+                        tools:text="M6SC7-N75YR"
+                        tools:visibility="visible" />
+
+                    <!-- Experimental peer labels: optional display name (empty = anonymous, handle only). -->
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/identityNameButton"
+                        style="@style/Widget.App.Button.Text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/identity_name_none"
+                        android:visibility="gone"
+                        tools:visibility="visible" />
+
+                    <TextView
+                        android:id="@+id/identityNameNote"
+                        style="@style/Widget.App.Description"
+                        android:text="@string/identity_name_note"
+                        android:visibility="gone"
+                        tools:visibility="visible" />
+
+                    <TextView
+                        android:id="@+id/identityFingerprintText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:textAppearance="@style/TextAppearance.App.Mono"
+                        android:textIsSelectable="true"
+                        tools:text="1A2B 3C4D 5E6F 7A8B\n9C0D 1E2F 3A4B 5C6D" />
+
+                    <TextView
+                        android:id="@+id/identitySafetyNumberText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:textAppearance="@style/TextAppearance.App.Body"
+                        android:visibility="gone"
+                        tools:text="Messages safety number: 12345 67890 12345 67890"
+                        tools:visibility="visible" />
+
+                    <TextView
+                        style="@style/Widget.App.Description"
+                        android:layout_marginTop="12dp"
+                        android:text="@string/identity_explanation" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/verifyContactButton"
+                        style="@style/Widget.App.Button.Secondary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:minHeight="48dp"
+                        android:text="@string/verify_contact_action"
+                        app:icon="@drawable/ic_verified_user" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                style="@style/Widget.App.SectionHeader"
+                android:text="@string/settings_section_video" />
+
+            <com.google.android.material.card.MaterialCardView
+                style="@style/Widget.App.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="@dimen/card_padding">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:labelFor="@id/videoScaleModeSpinner"
+                        android:text="@string/settings_video_framing"
+                        android:textAppearance="@style/TextAppearance.App.Title" />
+
+                    <Spinner
+                        android:id="@+id/videoScaleModeSpinner"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp" />
+
+                    <TextView
+                        android:id="@+id/videoScaleModeDescriptionText"
+                        style="@style/Widget.App.Description"
+                        tools:text="Fills the screen without stretching; excess edges are cropped." />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/reachableForCallsSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:text="@string/reachable_for_calls"
+                        android:drawablePadding="16dp"
+                        app:drawableStartCompat="@drawable/ic_call"
+                        app:drawableTint="@color/text_secondary" />
+
+                    <TextView
+                        style="@style/Widget.App.Description"
+                        android:paddingStart="40dp"
+                        android:text="@string/reachable_for_calls_description" />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/forwardReceivedStreamsSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:text="@string/relay_for_others"
+                        android:drawablePadding="16dp"
+                        app:drawableStartCompat="@drawable/ic_relay"
+                        app:drawableTint="@color/text_secondary" />
+
+                    <TextView
+                        style="@style/Widget.App.Description"
+                        android:paddingStart="40dp"
+                        android:text="@string/relay_for_others_description" />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/deviceHealthOverlaySwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:checked="true"
+                        android:text="@string/settings_device_health"
+                        android:drawablePadding="16dp"
+                        app:drawableStartCompat="@drawable/ic_thermostat"
+                        app:drawableTint="@color/text_secondary" />
+
+                    <TextView
+                        style="@style/Widget.App.Description"
+                        android:paddingStart="40dp"
+                        android:text="@string/settings_device_health_description" />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/thermalReductionSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:checked="true"
+                        android:text="@string/settings_thermal"
+                        android:drawablePadding="16dp"
+                        app:drawableStartCompat="@drawable/ic_tune"
+                        app:drawableTint="@color/text_secondary" />
+
+                    <TextView
+                        style="@style/Widget.App.Description"
+                        android:paddingStart="40dp"
+                        android:text="@string/settings_thermal_description" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                style="@style/Widget.App.SectionHeader"
+                android:text="@string/settings_section_safety" />
+
+            <com.google.android.material.card.MaterialCardView
+                style="@style/Widget.App.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="@dimen/card_padding">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/emergencyWipeButton"
+                        style="@style/Widget.App.Button.Destructive"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:text="@string/wipe_action"
+                        android:textColor="@color/white"
+                        app:backgroundTint="@color/danger"
+                        app:icon="@drawable/ic_warning"
+                        app:iconTint="@color/white" />
+
+                    <TextView
+                        style="@style/Widget.App.Description"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/wipe_description" />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/panicGestureSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:text="@string/panic_gesture"
+                        android:drawablePadding="16dp"
+                        app:drawableStartCompat="@drawable/ic_warning"
+                        app:drawableTint="@color/text_secondary" />
+
+                    <TextView
+                        style="@style/Widget.App.Description"
+                        android:paddingStart="40dp"
+                        android:text="@string/panic_gesture_description" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                style="@style/Widget.App.SectionHeader"
+                android:text="@string/reliability_title" />
+
+            <!-- Connection reliability: background restrictions and what to change (filled from code). -->
+            <com.google.android.material.card.MaterialCardView
+                style="@style/Widget.App.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <LinearLayout
+                    android:id="@+id/reliabilityContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="@dimen/card_padding">
+
+                    <TextView
+                        android:id="@+id/reliabilitySummary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:drawablePadding="12dp"
+                        android:gravity="center_vertical"
+                        android:text="@string/reliability_ok"
+                        android:textAppearance="@style/TextAppearance.App.BodyLarge"
+                        app:drawableStartCompat="@drawable/ic_check_circle"
+                        app:drawableTint="@color/success" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <TextView
+                style="@style/Widget.App.SectionHeader"
+                android:text="@string/help_title" />
+
+            <com.google.android.material.card.MaterialCardView
+                style="@style/Widget.App.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="@dimen/card_padding">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/exportDiagnosticsButton"
+                        style="@style/Widget.App.Button.Secondary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:text="@string/help_export" />
+
+                    <TextView
+                        style="@style/Widget.App.Description"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/help_export_description" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/shareAppButton"
+                        style="@style/Widget.App.Button.Secondary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:minHeight="48dp"
+                        android:text="@string/help_share_app"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/shareAppInfoText"
+                        style="@style/Widget.App.Description"
+                        android:layout_marginTop="4dp"
+                        android:textIsSelectable="true"
+                        android:visibility="gone" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/shareAppNearbyButton"
+                        style="@style/Widget.App.Button.Secondary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:minHeight="48dp"
+                        android:text="@string/help_share_app_nearby"
+                        android:visibility="gone" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/reportBugButton"
+                        style="@style/Widget.App.Button.Secondary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:minHeight="48dp"
+                        android:text="@string/help_report_bug" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/aboutRow"
+                style="@style/Widget.App.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:clickable="true"
+                android:focusable="true">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:minHeight="56dp"
+                    android:orientation="horizontal"
+                    android:paddingStart="@dimen/card_padding"
+                    android:paddingEnd="12dp">
+
+                    <ImageView
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_info"
+                        app:tint="@color/text_primary" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="16dp"
+                        android:layout_weight="1"
+                        android:text="@string/about_title"
+                        android:textAppearance="@style/TextAppearance.App.BodyLarge" />
+
+                    <ImageView
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_chevron_right"
+                        app:tint="@color/text_secondary" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- ===== Advanced (collapsed by default) ===== -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/advancedToggleRow"
+                style="@style/Widget.App.Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:clickable="true"
+                android:focusable="true">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:minHeight="64dp"
+                    android:orientation="horizontal"
+                    android:paddingStart="@dimen/card_padding"
+                    android:paddingEnd="12dp">
+
+                    <ImageView
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_tune"
+                        app:tint="@color/text_primary" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="16dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:paddingTop="12dp"
+                        android:paddingBottom="12dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/advanced_title"
+                            android:textAppearance="@style/TextAppearance.App.BodyLarge" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/advanced_subtitle"
+                            android:textAppearance="@style/TextAppearance.App.Body" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:id="@+id/advancedToggleIcon"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_expand_more"
+                        app:tint="@color/text_secondary" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <LinearLayout
+                android:id="@+id/advancedSection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    style="@style/Widget.App.SectionHeader"
+                    android:text="@string/advanced_section_connection" />
+
+                <com.google.android.material.card.MaterialCardView
+                    style="@style/Widget.App.Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="@dimen/card_padding">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:labelFor="@id/transportSpinner"
+                            android:text="@string/advanced_transport"
+                            android:textAppearance="@style/TextAppearance.App.Title" />
+
+                        <Spinner
+                            android:id="@+id/transportSpinner"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp" />
+
+                        <LinearLayout
+                            android:id="@+id/destinationGroup"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:visibility="gone">
+
+                            <TextView
+                                android:id="@+id/destinationLabel"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp"
+                                android:text="@string/paired_device"
+                                android:textAppearance="@style/TextAppearance.App.Title" />
+
+                            <Spinner
+                                android:id="@+id/deviceSpinner"
+                                android:layout_width="match_parent"
+                                android:layout_height="48dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/refreshButton"
+                                style="@style/Widget.App.Button.Secondary"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:minHeight="48dp"
+                                android:text="@string/refresh_devices" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="@string/advanced_next_broadcast"
+                            android:textAppearance="@style/TextAppearance.App.Title" />
+
+                        <TextView
+                            android:id="@+id/homeConfigurationSummary"
+                            style="@style/Widget.App.Description"
+                            tools:text="640×360 | 15 FPS | ~800 kbps\nBLE L2CAP CoC" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="@string/advanced_next_call"
+                            android:textAppearance="@style/TextAppearance.App.Title" />
+
+                        <TextView
+                            android:id="@+id/privateCallProfileSummary"
+                            style="@style/Widget.App.Description"
+                            android:text="Automatic device-compatible call profile" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <TextView
+                    style="@style/Widget.App.SectionHeader"
+                    android:text="@string/advanced_section_video" />
+
+                <com.google.android.material.card.MaterialCardView
+                    style="@style/Widget.App.Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="@dimen/card_padding">
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/advancedSettingsSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/advanced_manual"
+                        android:drawablePadding="16dp"
+                        app:drawableStartCompat="@drawable/ic_tune"
+                        app:drawableTint="@color/text_secondary" />
+
+                        <TextView
+                            android:id="@+id/advancedSettingsDescriptionText"
+                            style="@style/Widget.App.Description"
+                        android:paddingStart="40dp"
+                            android:layout_marginBottom="12dp"
+                            tools:text="Off (recommended): this phone tunes buffering, link rate and encoder speed from measurements." />
+
+                        <TextView
+                            android:id="@+id/codecLabel"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:labelFor="@id/codecSpinner"
+                            android:text="@string/video_codec"
+                            android:textAppearance="@style/TextAppearance.App.Title" />
+
+                        <Spinner
+                            android:id="@+id/codecSpinner"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp" />
+
+                        <TextView
+                            android:id="@+id/rateControlLabel"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:labelFor="@id/rateControlSpinner"
+                            android:text="Bitrate allocation (experimental)"
+                            android:textAppearance="@style/TextAppearance.App.Title" />
+
+                        <Spinner
+                            android:id="@+id/rateControlSpinner"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp" />
+
+                        <TextView
+                            android:id="@+id/rateControlDescriptionText"
+                            style="@style/Widget.App.Description"
+                            tools:text="Aims for predictable radio load; quality can vary when motion changes." />
+
+                        <TextView
+                            android:id="@+id/capabilityText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:background="@drawable/info_panel_background"
+                            android:padding="12dp"
+                            android:textAppearance="@style/TextAppearance.App.Body"
+                            tools:text="Camera input: direct surface\nNative sizes: 12 (176×144 to 3840×2160)\nFPS: 15 / 24 / 30" />
+
+                        <TextView
+                            android:id="@+id/videoSettingsTitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="16dp"
+                            android:text="@string/advanced_quality"
+                            android:textAppearance="@style/TextAppearance.App.Headline"
+                            android:textSize="16sp" />
+
+                        <TextView
+                            android:id="@+id/qualityText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:labelFor="@id/resolutionSpinner"
+                            android:text="@string/advanced_resolution"
+                            android:textAppearance="@style/TextAppearance.App.Title" />
+
+                        <Spinner
+                            android:id="@+id/resolutionSpinner"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp" />
+
+                        <TextView
+                            android:id="@+id/fpsText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:labelFor="@id/fpsSpinner"
+                            android:text="@string/advanced_frame_rate"
+                            android:textAppearance="@style/TextAppearance.App.Title" />
+
+                        <Spinner
+                            android:id="@+id/fpsSpinner"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp" />
+
+                        <TextView
+                            android:id="@+id/bitrateText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textAppearance="@style/TextAppearance.App.Title"
+                            tools:text="Video bitrate: 800 kbps" />
+
+                        <SeekBar
+                            android:id="@+id/bitrateSeekBar"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:contentDescription="@string/advanced_bitrate" />
+
+                        <TextView
+                            android:id="@+id/streamSummaryText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/info_panel_background"
+                            android:padding="12dp"
+                            android:textAppearance="@style/TextAppearance.App.Body"
+                            android:textIsSelectable="true"
+                            tools:text="Bandwidth/stream: ~832 kbps\nVideo: 800 kbps\nMode: 640×360 @ 15 FPS" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <TextView
+                    style="@style/Widget.App.SectionHeader"
+                    android:text="@string/advanced_section_playback" />
+
+                <com.google.android.material.card.MaterialCardView
+                    style="@style/Widget.App.Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="@dimen/card_padding">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/advanced_playback_buffer"
+                            android:textAppearance="@style/TextAppearance.App.Title" />
+
+                        <TextView
+                            android:id="@+id/playbackDelayValueText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:textAppearance="@style/TextAppearance.App.BodyLarge"
+                            tools:text="Added playback delay: ~250 ms" />
+
+                        <com.google.android.material.slider.Slider
+                            android:id="@+id/receiverPlaybackDelaySlider"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:contentDescription="@string/advanced_playback_buffer"
+                            android:stepSize="1"
+                            android:value="1"
+                            android:valueFrom="0"
+                            android:valueTo="2" />
+
+                        <TextView
+                            android:id="@+id/playbackStabilityText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textAppearance="@style/TextAppearance.App.BodyLarge"
+                            tools:text="Playback stability: Medium" />
+
+                        <TextView
+                            style="@style/Widget.App.Description"
+                            android:layout_marginTop="4dp"
+                            android:text="@string/advanced_playback_description" />
+
+                        <TextView
+                            android:id="@+id/decoderLabel"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="16dp"
+                            android:text="@string/advanced_decoders"
+                            android:textAppearance="@style/TextAppearance.App.Title" />
+
+                        <TextView
+                            android:id="@+id/decoderSupportText"
+                            style="@style/Widget.App.Description"
+                            android:layout_marginTop="8dp"
+                            tools:text="VP9 - hardware\nAV1 - hardware" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <TextView
+                    style="@style/Widget.App.SectionHeader"
+                    android:text="@string/advanced_section_experimental" />
+
+                <com.google.android.material.card.MaterialCardView
+                    style="@style/Widget.App.Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="@dimen/card_padding">
+
+                        <!-- Shown while Manual settings is off, which hides the switches below
+                             (unchanged behaviour of applySettingsModeVisibility). -->
+                        <TextView
+                            android:id="@+id/experimentsHiddenHint"
+                            style="@style/Widget.App.Description"
+                            android:text="@string/advanced_experiments_hint" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalTemporalLayersSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Experimental: temporal layering (may drop enhancement frames under congestion)" />
+
+                        <TextView
+                            android:id="@+id/experimentalTemporalLayersDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="Off by default. While a Bluetooth link is tight, every other frame is made droppable and slow links may skip those frames instead of building delay. Costs picture quality; applies to streams started after it is changed." />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/relayChildMediaAgeSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="Relay: slow viewers skip to keyframes" />
+
+                        <TextView
+                            android:id="@+id/relayChildMediaAgeDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="On by default. When this phone forwards a stream and the next phone's link is slower than the stream, that phone skips old video to the next keyframe while its sound continues. Off: nothing is skipped and a viewer that falls too far behind is disconnected so it can find another route. Applies to forwarding started after it is changed." />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalVoiceCallsSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="Experimental: voice calls" />
+
+                        <TextView
+                            android:id="@+id/experimentalVoiceCallsDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="Off by default. Tapping a person asks Voice call or Video call. A voice call starts no camera and sends no video, uses the earpiece, and either person can add or remove their own video during the call. Phones without this option see a video call with your video off." />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalPushToTalkSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="Experimental: push-to-talk button in calls" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalPttModeSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Experimental: PTT mode (calls start muted)" />
+
+                        <TextView
+                            android:id="@+id/experimentalPushToTalkDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="Off by default. Hold the button to talk; your microphone is muted when you let go. PTT mode starts every call muted. Applies to calls started after it is changed." />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalStoreForwardSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="Experimental: store-and-forward messages" />
+
+                        <TextView
+                            android:id="@+id/experimentalStoreForwardDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="Off by default. Adds Messages: end-to-end encrypted text, voice notes and photos for contacts whose card you hold. Messages wait on this phone and move when both phones have Call open and one taps the other and chooses Exchange messages. A call pauses an exchange. Only direct neighbours for now; no other phone carries your messages." />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalPeerLabelsSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/experimental_peer_labels" />
+
+                        <TextView
+                            android:id="@+id/experimentalPeerLabelsDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="@string/experimental_peer_labels_description" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalCocAutoGattSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="Experimental: automatic BLE GATT when L2CAP fails" />
+
+                        <TextView
+                            android:id="@+id/experimentalCocAutoGattDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="Off by default. Some phones stop accepting L2CAP connections after about 15 uses until Bluetooth restarts. When it is on and L2CAP fails, or this Bluetooth session has used the set number of L2CAP registrations (12 by default), calls use BLE GATT and say so. Phones advertising GATT also appear in the call list." />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalClassicBondFreeSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="Experimental: Classic without pairing" />
+
+                        <TextView
+                            android:id="@+id/experimentalClassicBondFreeDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="Off by default. Turn it on in both phones. Classic calls, relays and streams then work without Android pairing: the app's own signed handshake and encryption protect the link, and each phone remembers the Classic address of a phone it has met. A first call to a phone this phone has never met needs that phone to be visible, so a phone ready for Classic calls may ask Android to make it visible for two minutes. Streams use only phones already met." />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalCompactDiscoverySwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="Experimental: find iPhones" />
+
+                        <TextView
+                            android:id="@+id/experimentalCompactDiscoveryDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="Off by default. Searches also look for the short announcement an iPhone can send while its app is open, so iPhone callers, viewers and streams can appear in the lists. This phone's own announcement and every security check stay the same. An iPhone whose app is in the background cannot be found." />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalRotatingIdsSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/experimental_rotating_ids" />
+
+                        <TextView
+                            android:id="@+id/experimentalRotatingIdsDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="@string/experimental_rotating_ids_description" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/rotatingIdsVisibleButton"
+                            style="@style/Widget.App.Button.Text"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/rotating_ids_visible_button" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalOfflineAppShareSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="Experimental: share app nearby" />
+
+                        <TextView
+                            android:id="@+id/experimentalOfflineAppShareDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="Off by default. Adds Share app nearby to Help: this phone starts its own Wi-Fi Direct network and a download page, and shows two codes another phone scans to join it and download the app, without internet. It stops after 10 minutes or when you leave that screen, and it cannot start during a stream or call because Wi-Fi Direct slows Bluetooth." />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+</FrameLayout>

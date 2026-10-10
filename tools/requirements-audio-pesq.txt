@@ -1,0 +1,12 @@
+# OPT-IN: PESQ (ITU-T P.862.2 wideband) for tools/score_audio_quality.py.
+#
+# WARNING - licence restrictions. The `pesq` PyPI package wraps the ITU-T P.862 reference implementation. Its Python
+# wrapper is MIT-licensed, but the ITU reference C code it bundles carries ITU / patent-holder terms that restrict
+# modification, redistribution and commercial use (see the header of pesq/pesq.h in
+# https://github.com/ludlows/PESQ and https://www.itu.int/rec/T-REC-P.862). It is not GPL-compatible and is never
+# part of the MeshLive app. Install it only if those terms are acceptable for your use; without it the scorer reports
+# PESQ as UNMEASURED and still computes STOI/ESTOI.
+#
+#   python -m pip install -r tools/requirements-audio-pesq.txt
+-r requirements-audio.txt
+pesq==0.0.4

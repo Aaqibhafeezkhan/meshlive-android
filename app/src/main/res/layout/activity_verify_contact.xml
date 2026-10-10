@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/verifyRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/app_background"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/screen_gutter"
+        android:paddingTop="8dp"
+        android:paddingEnd="@dimen/screen_gutter"
+        android:paddingBottom="32dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/verifyBackButton"
+                style="@style/Widget.App.TopIconButton"
+                android:contentDescription="@string/action_back"
+                android:src="@drawable/ic_arrow_back" />
+
+            <TextView
+                style="@style/Widget.App.TopBarTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:accessibilityHeading="true"
+                android:text="@string/verify_title"
+                android:textAppearance="@style/TextAppearance.App.Headline" />
+        </LinearLayout>
+
+        <TextView
+            style="@style/Widget.App.Description"
+            android:layout_marginTop="8dp"
+            android:text="@string/verify_intro" />
+
+        <!-- The verified-contact store cannot be read (polled on resume). -->
+        <LinearLayout
+            android:id="@+id/verifyStoreBanner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/warning_banner_background"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/verifyStoreText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:accessibilityLiveRegion="polite"
+                android:drawablePadding="12dp"
+                android:textColor="@color/warning"
+                app:drawableStartCompat="@drawable/ic_warning"
+                app:drawableTint="@color/warning" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/verifyStoreReset"
+                style="@style/Widget.App.Button.Secondary"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:minHeight="48dp"
+                android:text="@string/verify_store_reset"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Loud warning when the connected identity differs from the verified one. -->
+        <TextView
+            android:id="@+id/verifyMismatchBanner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:accessibilityLiveRegion="assertive"
+            android:background="@drawable/mismatch_banner_background"
+            android:drawablePadding="12dp"
+            android:padding="16dp"
+            android:text="@string/verify_state_mismatch"
+            android:textColor="@color/white"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:visibility="gone"
+            app:drawableStartCompat="@drawable/ic_warning"
+            app:drawableTint="@color/white" />
+
+        <!-- Safety code for the active session (opened from a call). -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/verifySessionCard"
+            style="@style/Widget.App.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="@dimen/card_padding">
+
+                <TextView
+                    android:id="@+id/verifySessionTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textAppearance="@style/TextAppearance.App.Title"
+                    tools:text="Safety code with Pixel 7" />
+
+                <TextView
+                    android:id="@+id/verifySafetyCode"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:gravity="center"
+                    android:textAppearance="@style/TextAppearance.App.Mono"
+                    android:textIsSelectable="true"
+                    android:textSize="28sp"
+                    tools:text="12345 67890\n12345 67890" />
+
+                <TextView
+                    style="@style/Widget.App.Description"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/verify_session_text" />
+
+                <TextView
+                    android:id="@+id/verifyStateText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:accessibilityLiveRegion="polite"
+                    android:drawablePadding="8dp"
+                    android:gravity="center_vertical"
+                    android:textAppearance="@style/TextAppearance.App.BodyLarge"
+                    tools:text="Not verified yet." />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/verifyMarkButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:minHeight="48dp"
+                    android:text="@string/verify_mark_verified"
+                    app:icon="@drawable/ic_check_circle" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.App.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:padding="@dimen/card_padding">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/verify_my_code"
+                    android:textAppearance="@style/TextAppearance.App.Title" />
+
+                <!-- White tile so the code scans in dark mode too. -->
+                <ImageView
+                    android:id="@+id/verifyQrImage"
+                    android:layout_width="240dp"
+                    android:layout_height="240dp"
+                    android:layout_marginTop="12dp"
+                    android:background="@color/white"
+                    android:contentDescription="@string/verify_my_code_description"
+                    android:padding="12dp"
+                    android:scaleType="fitCenter"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/verify_my_fingerprint"
+                    android:textAppearance="@style/TextAppearance.App.Body" />
+
+                <TextView
+                    android:id="@+id/verifyFingerprintText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textAppearance="@style/TextAppearance.App.Mono"
+                    android:textIsSelectable="true"
+                    tools:text="1A2B 3C4D 5E6F 7A8B\n9C0D 1E2F 3A4B 5C6D" />
+
+                <TextView
+                    android:id="@+id/verifyUnavailableText"
+                    style="@style/Widget.App.Description"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/verify_unavailable"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/verifyScanButton"
+            style="@style/Widget.App.Button.Secondary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:minHeight="56dp"
+            android:text="@string/verify_scan"
+            app:icon="@drawable/ic_videocam" />
+
+        <TextView
+            android:id="@+id/verifyNoSessionText"
+            style="@style/Widget.App.Description"
+            android:layout_marginTop="12dp"
+            android:text="@string/verify_no_session" />
+    </LinearLayout>
+</ScrollView>

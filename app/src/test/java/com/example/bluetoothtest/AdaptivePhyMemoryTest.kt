@@ -1,0 +1,198 @@
+package com.example.bluetoothtest
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class AdaptivePhyMemoryTest {
+    private val day = 24L * 60 * 60 * 1000
+
+    @Test
+    fun aBad2MEntryExpiresAfterSevenDays() {
+        val at = 1_000_000L
+        assertTrue(AdaptivePhyMemory.fresh(at, at))
+        assertTrue(AdaptivePhyMemory.fresh(at, at + 7 * day - 1))
+        assertFalse(AdaptivePhyMemory.fresh(at, at + 7 * day))
+        assertFalse(AdaptivePhyMemory.fresh(0L, at))
+        // A recording from the future (clock moved back) is not trusted.
+        assertFalse(AdaptivePhyMemory.fresh(at, at - 1))
+    }
+
+    @Test
+    fun earlyLossIsA2MSingleLinkLossWithinFifteenSeconds() {
+        // A15s -> ASUS: the 2M link died 1-8 s after authentication (xpair-asusa15s-405fffae/0003).
+        assertTrue(AdaptivePhyMemory.isEarlyLoss(10_000, 18_000, wasTwoM = true, sendLinks = 1))
+        assertTrue(AdaptivePhyMemory.isEarlyLoss(10_000, 25_000, wasTwoM = true, sendLinks = 0))
+        assertFalse(AdaptivePhyMemory.isEarlyLoss(10_000, 25_001, wasTwoM = true, sendLinks = 1))
+        assertFalse(AdaptivePhyMemory.isEarlyLoss(10_000, 18_000, wasTwoM = false, sendLinks = 1))
+        // Never learned while sending on two or more links (shared airtime, not the pair's 2M).
+        assertFalse(AdaptivePhyMemory.isEarlyLoss(10_000, 18_000, wasTwoM = true, sendLinks = 2))
+        // Never before authentication: the hop peer is unknown.
+        assertFalse(AdaptivePhyMemory.isEarlyLoss(0, 8_000, wasTwoM = true, sendLinks = 1))
+    }
+
+    @Test
+    fun entriesAreKeyedByTransportAndAuthenticatedNode() {
+        assertEquals("bad2m2.BLE_GATT.a1b2c3d4e5f6", AdaptivePhyMemory.key(BluetoothTransportOption.BLE_GATT, "a1b2c3d4e5f6"))
+        assertEquals("bad2m2.BLE_L2CAP.a1b2c3d4e5f6", AdaptivePhyMemory.key(BluetoothTransportOption.BLE_L2CAP, "a1b2c3d4e5f6"))
+    }
+
+    @Test
+    fun theOneSetupRetryIsBoundedAndOnlyFrom2MOnADirectLeLink() {
+        fun eligible(
+            enabled: Boolean = true, running: Boolean = true, le: Boolean = true, direct: Boolean = true,
+            firstOnTwoM: Boolean = true, elapsedMs: Long = 5_000,
+        ) = adaptivePhySetupRetryEligible(enabled, running, le, direct, firstOnTwoM, elapsedMs)
+        assertTrue(eligible())
+        assertFalse(eligible(enabled = false))
+        assertFalse(eligible(running = false))
+        assertFalse(eligible(le = false))
+        // A relayed call's advertised prefix is not the hop peer.
+        assertFalse(eligible(direct = false))
+        // Already on 1M (remembered or retried): no second retry.
+        assertFalse(eligible(firstOnTwoM = false))
+        assertFalse(eligible(elapsedMs = 15_001))
+    }
+
+    @Test
+    fun aFirst2MAttemptWithoutHopAuthenticationAfterTheGuardIsStalled() {
+        // A15s central -> ASUS: after LE PHY Update Complete (2M) the hello never completed
+        // (snoop-asusa15s-1 0002, snoop-asusa15s-phy-1 0001); a healthy hop handshake takes 0.1-0.3 s.
+        val guard = AdaptivePhyMemory.SETUP_STALL_MS
+        assertTrue(adaptivePhySetupStalled(guard, authenticated = false, sinceOpenMs = guard))
+        assertFalse(adaptivePhySetupStalled(guard, authenticated = false, sinceOpenMs = guard - 1))
+        assertFalse(adaptivePhySetupStalled(guard, authenticated = true, sinceOpenMs = guard + 5_000))
+        // Guard off (control arm, 1M attempts, or no retry left): never stalled.
+        assertFalse(adaptivePhySetupStalled(0L, authenticated = false, sinceOpenMs = 60_000))
+        // The stall close plus the peer's re-advertising must still leave the 1M retry inside its window.
+        assertTrue(AdaptivePhyMemory.SETUP_STALL_MS + 2_000 < AdaptivePhyMemory.EARLY_LOSS_MS)
+    }
+
+    @Test
+    fun theRetryRediscoversOnlyTheSameNodePrefixAndRouteCost() {
+        val prefix = ByteArray(6) { 0x10 }
+        fun announcement(nodePrefix: ByteArray, routeCost: Int) = DiscoveryAnnouncement(
+            nodeIdPrefix = nodePrefix,
+            flags = DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS or DiscoveryAnnouncement.FLAG_PRIVATE_CALL_AVAILABLE,
+            capabilitySummary = NodeCapabilities.CODEC_VP9,
+            streamToken = 0,
+            routeCost = routeCost,
+            sequence = 0,
+        )
+        // The ASUS re-advertised under a new random address; the node prefix is what identifies it.
+        assertTrue(matchesRediscoveredPeer(prefix, 0, announcement(prefix.copyOf(), 0)))
+        assertFalse(matchesRediscoveredPeer(prefix, 0, announcement(ByteArray(6) { 0x11 }, 0)))
+        // A relay advertising the same far prefix is a different hop.
+        assertFalse(matchesRediscoveredPeer(prefix, 0, announcement(prefix.copyOf(), 1)))
+    }
+
+    @Test
+    fun onlyADirectOfferRescansForTheRetrySoARelayedOfferKeepsItsRequestedParent() {
+        // Every relay one hop from the callee advertises the callee's prefix at the same cost: a rescan
+        // could pick another relay. A direct offer's advertiser is the callee, verified end to end.
+        assertTrue(adaptivePhyRetryRediscovers(guardOn = true, routeCost = 0))
+        assertFalse(adaptivePhyRetryRediscovers(guardOn = true, routeCost = 1))
+        assertFalse(adaptivePhyRetryRediscovers(guardOn = true, routeCost = 2))
+        // Control arm: the retry reconnects to the original advertisement exactly as before.
+        assertFalse(adaptivePhyRetryRediscovers(guardOn = false, routeCost = 0))
+    }
+
+    @Test
+    fun aHandshakeFinishingAtTheStallDeadlineIsEitherKeptOrClosedNeverBoth() {
+        // Authentication wins the race: the guard must not close the link afterwards.
+        val authenticatedFirst = CallSetupStallState()
+        assertTrue(authenticatedFirst.authenticated())
+        assertFalse(authenticatedFirst.claimStall())
+        assertFalse(authenticatedFirst.stalled)
+        // The guard wins: the late authentication is refused, so setup stops and the 1M retry runs.
+        val stalledFirst = CallSetupStallState()
+        assertTrue(stalledFirst.claimStall())
+        assertFalse(stalledFirst.authenticated())
+        assertTrue(stalledFirst.stalled)
+        // An attempt that already failed for another reason is never claimed (no spurious setup_stall line).
+        val endedFirst = CallSetupStallState()
+        endedFirst.ended()
+        assertFalse(endedFirst.claimStall())
+        assertFalse(endedFirst.stalled)
+        // Leaving establish after authentication keeps the authenticated state.
+        val kept = CallSetupStallState()
+        assertTrue(kept.authenticated())
+        kept.ended()
+        assertFalse(kept.claimStall())
+    }
+
+    @Test
+    fun theStallDeadlineKeepsMarginOverMeasuredHealthyHopAuthentication() {
+        // 353 saved outgoing GATT call setups (PHY report -> "Encrypted private-call link"): healthy p90
+        // S24 221, ASUS 229, M31 171, A15s 1050 ms; worst healthy 1050 ms. Only the A15s -> ASUS 2M defect
+        // was slower (1.8 s, then 5.5-18.8 s).
+        val worstHealthyMs = 1_050L
+        assertTrue(AdaptivePhyMemory.SETUP_STALL_MS >= 2 * worstHealthyMs)
+    }
+
+    @Test
+    fun theOneTimePurgeDropsOnlyGattEntriesLearnedBeforeGattFanOutCounted() {
+        // mesh4-659efc38 0003 left the ASUS as a bad-2M GATT peer on the M31 from a two-child window.
+        val keys = listOf(
+            "bad2m2.BLE_GATT.a1b2c3d4e5f6",
+            "bad2m2via.BLE_GATT.8a1b2c3d4e5f",
+            "bad2m2.BLE_L2CAP.a1b2c3d4e5f6",
+            "bad2m2via.BLE_L2CAP.8a1b2c3d4e5f",
+            AdaptivePhyMemory.GATT_FANOUT_PURGED,
+        )
+        assertEquals(
+            listOf("bad2m2.BLE_GATT.a1b2c3d4e5f6", "bad2m2via.BLE_GATT.8a1b2c3d4e5f"),
+            AdaptivePhyMemory.gattFanOutPollutedKeys(keys),
+        )
+    }
+
+    @Test
+    fun aRelayChildLinkMovesOnlyInTheOnePduBandNotTheCollisionBand() {
+        val oneEventAt15Ms = AdaptivePhyPolicy.oneEventKbps(15.0)
+        // mesh4-8211dc8f 0004: ASUS relay -> A15s at 121 kbps on 2M.
+        assertTrue(relayOnePduBand(121, oneEventAt15Ms))
+        assertTrue(relayOnePduBand(66, oneEventAt15Ms))
+        // relaylink-gattdef-7a6c401c: an anchor collision left 4-37 kbps.
+        assertFalse(relayOnePduBand(37, oneEventAt15Ms))
+        assertFalse(relayOnePduBand(4, oneEventAt15Ms))
+        assertFalse(relayOnePduBand(121, 0))
+    }
+
+    @Test
+    fun aLinkToAHopThatRelaysTheCallIsNotBad2MEvidence() {
+        // relaycall-f40e9f42 0002: ASUS caller -> S24 relay at 122 kbps recorded the S24 as bad-2M.
+        assertTrue(AdaptivePhyMemory.skipsRelayingHop(hopRelays = true, guard = true))
+        assertFalse(AdaptivePhyMemory.skipsRelayingHop(hopRelays = false, guard = true))
+        // test_relay_phy_guard=false is the control arm.
+        assertFalse(AdaptivePhyMemory.skipsRelayingHop(hopRelays = true, guard = false))
+    }
+
+    @Test
+    fun aCallEndpointKnowsItsHopRelaysFromTheOfferTheInviteOrTheSignedHello() {
+        // relaycall-b9726176-loop4-1 0004/0005: endpoints recorded the S24/ASUS relays after cascaded closes.
+        assertTrue(AdaptivePhyMemory.callHopRelays(offerVia = true, relayHops = 0, hopTransportMask = 0))
+        assertTrue(AdaptivePhyMemory.callHopRelays(offerVia = false, relayHops = 2, hopTransportMask = 0))
+        // 0005: the A15s callee lost its relay hop before the invitation arrived.
+        val relayHello = 0x03 or PrivateCallRelayChain.CALL_RELAY_CAPABILITY
+        assertTrue(AdaptivePhyMemory.callHopRelays(offerVia = false, relayHops = 0, hopTransportMask = relayHello))
+        // A direct call keeps recording its early losses.
+        assertFalse(AdaptivePhyMemory.callHopRelays(offerVia = false, relayHops = 0, hopTransportMask = 0x03))
+    }
+
+    @Test
+    fun theOneTimeRelayedCallPurgeDropsOnlyViaEntries() {
+        // relaycall-b9726176-loop4-1 0003: the M31 caller's via entry for the A15s put its ASUS hop on 1M.
+        val keys = listOf(
+            "bad2m2.BLE_GATT.a1b2c3d4e5f6",
+            "bad2m2via.BLE_GATT.8a1b2c3d4e5f",
+            "bad2m2.BLE_L2CAP.8a1b2c3d4e5f",
+            "bad2m2via.BLE_L2CAP.8a1b2c3d4e5f",
+            AdaptivePhyMemory.RELAYED_CALL_PURGED,
+        )
+        assertEquals(
+            listOf("bad2m2via.BLE_GATT.8a1b2c3d4e5f", "bad2m2via.BLE_L2CAP.8a1b2c3d4e5f"),
+            AdaptivePhyMemory.relayedCallViaKeys(keys),
+        )
+    }
+}

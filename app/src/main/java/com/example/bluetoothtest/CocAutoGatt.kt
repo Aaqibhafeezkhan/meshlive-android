@@ -1,0 +1,260 @@
+package com.example.bluetoothtest
+
+import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
+import android.util.Log
+
+/**
+ * Experimental automatic LE CoC -> GATT fallback for private calls (user question Q4, recommendation
+ * A, 2026-10-09). Default off; with the flag off nothing in this file changes any behaviour.
+ *
+ * Evidence: the A15s Bluetooth stack stops accepting LE CoC listens and connects after about 15
+ * registrations per Bluetooth process, and closing sockets does not free the slots
+ * (bmaraw-ab-call-9c121b30-*). The slots return only when the Bluetooth process restarts, which an
+ * adapter off/on cycle does. Root cause and the default-on fix (one long-lived listener per role):
+ * CocListenerHub.kt. Only listens leak; this experimental ledger still counts connects too.
+ *
+ * With the flag on, a session whose requested transport is BLE L2CAP is moved to BLE GATT, visibly
+ * and with the requested and effective transports logged, when
+ *  - a CoC listen (call availability) fails,
+ *  - an outgoing CoC connect fails,
+ *  - the CoC registration count of this Bluetooth-adapter session reached the threshold, or
+ *  - the peer being called advertises GATT (a phone that already fell back).
+ * A GATT or Classic request is never changed.
+ */
+enum class CocFallbackReason(val label: String) {
+    NONE("none"),
+    THRESHOLD("registration_threshold"),
+    AVAILABILITY_FAILED("availability_failed"),
+    CONNECT_FAILED("connect_failed"),
+    PEER_GATT("peer_advertises_gatt"),
+}
+
+/** Effective experimental switches. Threshold is the registration count that makes GATT preferred. */
+data class CocAutoGattSettings(
+    val enabled: Boolean = false,
+    val threshold: Int = DEFAULT_THRESHOLD,
+) {
+    companion object {
+        const val DEFAULT_THRESHOLD = 12
+        const val MIN_THRESHOLD = 1
+        const val MAX_THRESHOLD = 64
+        const val EXTRA_ENABLED = "test_coc_auto_gatt"
+        const val EXTRA_THRESHOLD = "test_coc_gatt_threshold"
+        const val PREF_ENABLED = "experimental_coc_auto_gatt"
+        const val PREF_THRESHOLD = "experimental_coc_gatt_threshold"
+
+        fun clampThreshold(value: Int) = value.coerceIn(MIN_THRESHOLD, MAX_THRESHOLD)
+
+        /**
+         * Same rule as the other experiments: a DEBUG benchmark launch (any `test_` extra) uses only
+         * its own extras, default off, so a stored UI choice never leaks into a measured case.
+         * Otherwise the persisted Advanced setting applies, and only while Advanced settings are on.
+         */
+        fun resolve(
+            benchmarkLaunch: Boolean,
+            extraEnabled: Boolean,
+            extraThreshold: Int,
+            advancedSettings: Boolean,
+            storedEnabled: Boolean,
+            storedThreshold: Int,
+        ): CocAutoGattSettings = when {
+            benchmarkLaunch -> CocAutoGattSettings(extraEnabled, clampThreshold(extraThreshold))
+            advancedSettings -> CocAutoGattSettings(storedEnabled, clampThreshold(storedThreshold))
+            else -> CocAutoGattSettings()
+        }
+    }
+}
+
+/** Process-wide effective switches, refreshed by the activity when settings or launch extras change. */
+object CocAutoGatt {
+    @Volatile var current = CocAutoGattSettings()
+}
+
+/**
+ * Counts LE CoC registrations (listens and outgoing connects) in the current Bluetooth-adapter
+ * session. [reset] starts a new session and bumps [generation], so a decision remembered from an
+ * earlier session stops applying.
+ */
+class CocRegistrationLedger {
+    private var countValue = 0
+    private var generationValue = 0
+
+    val count: Int @Synchronized get() = countValue
+    val generation: Int @Synchronized get() = generationValue
+
+    /** Records one registration and returns the new count. */
+    @Synchronized
+    fun record(): Int = ++countValue
+
+    @Synchronized
+    fun reset() {
+        countValue = 0
+        generationValue++
+    }
+}
+
+/** The transport a session asked for, the one it uses, and why they differ. */
+data class CocTransportChoice(
+    val requested: BluetoothTransportOption,
+    val effective: BluetoothTransportOption,
+    val reason: CocFallbackReason,
+    val registrations: Int,
+    val threshold: Int,
+    val autoGattEnabled: Boolean,
+) {
+    val automatic: Boolean get() = effective != requested
+
+    /** The visible notice for an automatic choice (null when the requested transport is used). */
+    val notice: String?
+        get() = when {
+            !automatic -> null
+            reason == CocFallbackReason.THRESHOLD ->
+                "Using BLE GATT: L2CAP registrations near the Bluetooth limit ($registrations of $threshold)"
+            reason == CocFallbackReason.PEER_GATT -> "Using BLE GATT: the other phone uses GATT"
+            else -> "Using BLE GATT: L2CAP unavailable"
+        }
+
+    /** The BENCHMARK/log line body: requested and effective are always both stated. */
+    fun logLine(): String =
+        "requested=${requested.name} | effective=${effective.name} | automatic=$automatic | " +
+            "reason=${reason.label} | cocRegistrations=$registrations | threshold=$threshold | " +
+            "coc_auto_gatt=$autoGattEnabled"
+}
+
+/**
+ * Decides the effective transport of private-call sessions from the registration count and the
+ * failures seen in this adapter session. Pure JVM logic; [ledger] is the process counter.
+ */
+class CocAutoGattSession(private val ledger: CocRegistrationLedger) {
+    private var forced: CocFallbackReason? = null
+    private var forcedGeneration = -1
+
+    /** Transport for a session that requests [requested]. Never changes anything with the flag off. */
+    @Synchronized
+    fun choose(requested: BluetoothTransportOption, settings: CocAutoGattSettings): CocTransportChoice {
+        val count = ledger.count
+        if (!settings.enabled || requested != BluetoothTransportOption.BLE_L2CAP) {
+            return CocTransportChoice(requested, requested, CocFallbackReason.NONE, count, settings.threshold, settings.enabled)
+        }
+        val reason = forced?.takeIf { forcedGeneration == ledger.generation }
+            ?: CocFallbackReason.THRESHOLD.takeIf { count >= settings.threshold }
+        return if (reason != null) {
+            CocTransportChoice(requested, BluetoothTransportOption.BLE_GATT, reason, count, settings.threshold, true)
+        } else {
+            CocTransportChoice(requested, requested, CocFallbackReason.NONE, count, settings.threshold, true)
+        }
+    }
+
+    /**
+     * A CoC listen or connect failed while the session was using L2CAP. Returns the GATT retry
+     * choice, or null when there is no retry (flag off, not an L2CAP request, or already on GATT).
+     */
+    @Synchronized
+    fun onCocFailure(
+        requested: BluetoothTransportOption,
+        settings: CocAutoGattSettings,
+        reason: CocFallbackReason,
+    ): CocTransportChoice? {
+        require(reason == CocFallbackReason.AVAILABILITY_FAILED || reason == CocFallbackReason.CONNECT_FAILED)
+        return force(requested, settings, reason)
+    }
+
+    /**
+     * The peer being called advertises GATT, so this L2CAP session calls it over GATT. Applies to
+     * that one call only (nothing is remembered): the next endpoint chooses again. Null when the
+     * session is not currently on L2CAP.
+     */
+    @Synchronized
+    fun onPeerAdvertisesGatt(requested: BluetoothTransportOption, settings: CocAutoGattSettings): CocTransportChoice? {
+        if (!settings.enabled || requested != BluetoothTransportOption.BLE_L2CAP) return null
+        val current = choose(requested, settings)
+        if (current.effective != BluetoothTransportOption.BLE_L2CAP) return null
+        return current.copy(effective = BluetoothTransportOption.BLE_GATT, reason = CocFallbackReason.PEER_GATT)
+    }
+
+    private fun force(
+        requested: BluetoothTransportOption,
+        settings: CocAutoGattSettings,
+        reason: CocFallbackReason,
+    ): CocTransportChoice? {
+        if (!settings.enabled || requested != BluetoothTransportOption.BLE_L2CAP) return null
+        if (choose(requested, settings).effective != BluetoothTransportOption.BLE_L2CAP) return null
+        forced = reason
+        forcedGeneration = ledger.generation
+        return choose(requested, settings)
+    }
+
+    @Synchronized
+    fun reset() {
+        forced = null
+        forcedGeneration = -1
+    }
+
+    companion object {
+        /**
+         * Which advertised call transports a scanning phone lists. Off (or not an L2CAP request):
+         * exactly the effective transport, as before. On with an L2CAP request: also GATT phones, so a
+         * phone that fell back stays reachable.
+         */
+        fun acceptsAdvertised(
+            requested: BluetoothTransportOption,
+            effective: BluetoothTransportOption,
+            advertised: BluetoothTransportOption,
+            settings: CocAutoGattSettings,
+        ): Boolean = advertised == effective ||
+            (settings.enabled && requested == BluetoothTransportOption.BLE_L2CAP &&
+                advertised == BluetoothTransportOption.BLE_GATT)
+    }
+}
+
+/** Process-wide CoC registration counter, reset when the Bluetooth adapter turns off or on. */
+object CocRegistrations {
+    val ledger = CocRegistrationLedger()
+    val session = CocAutoGattSession(ledger)
+    private var installed = false
+
+    /** Logs and counts one LE CoC listen or outgoing connect ([kind] is "listen" or "connect"). */
+    fun note(kind: String, owner: String): Int {
+        val count = ledger.record()
+        val settings = CocAutoGatt.current
+        Log.i(
+            "BluetoothVideo",
+            "LE CoC registration: kind=$kind | owner=$owner | count=$count | " +
+                "threshold=${settings.threshold} | coc_auto_gatt=${settings.enabled}",
+        )
+        return count
+    }
+
+    @Synchronized
+    fun install(context: Context) {
+        if (installed) return
+        installed = true
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                if (state != BluetoothAdapter.STATE_OFF && state != BluetoothAdapter.STATE_ON) return
+                val before = ledger.count
+                ledger.reset()
+                session.reset()
+                CocListeners.resetAll(if (state == BluetoothAdapter.STATE_ON) "adapter_on" else "adapter_off")
+                Log.i(
+                    "BluetoothVideo",
+                    "LE CoC registration count reset: adapter=${if (state == BluetoothAdapter.STATE_ON) "on" else "off"} | previousCount=$before",
+                )
+            }
+        }
+        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        val app = context.applicationContext
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            app.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            app.registerReceiver(receiver, filter)
+        }
+    }
+}

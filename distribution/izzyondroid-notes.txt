@@ -1,0 +1,20 @@
+IzzyOnDroid notes (https://gitlab.com/IzzyOnDroid/repo, "inclusion request" issue template)
+
+IzzyOnDroid does not build the app: it downloads the developer-signed APKs from the GitHub release and
+serves them unchanged, so the signing key (certificate SHA-256 in README "Verifying a release") stays ours.
+
+Checklist
+- Public GitHub repository with the GPL-3.0-or-later LICENSE (done in the tree) and a tagged release v<versionName>.
+- Attach tools/make_release.py output to the release: the per-ABI APKs MeshLive-<version>-<abi>.apk
+  (arm64-v8a, armeabi-v7a; the universal one too only if wanted), SHA256SUMS, SOURCE-MANIFEST.txt.
+  IzzyOnDroid reads the .apk assets; keep the file names stable between releases.
+- Per-ABI versionCodes (base*10 + digit) let it pick the right APK per device; a universal APK carries the lowest
+  code (digit 0), so devices still prefer their own ABI build.
+- fastlane/metadata/android/en-US/ is read from the repository (title, short/full description, changelogs/<versionCode>.txt,
+  images/phoneScreenshots/). Add real screenshots (phone, PNG/JPG) before the request; the folder is a placeholder.
+- Izzy checks: no proprietary libraries (the build has none), no tracker SDKs, APK installs and the declared permissions
+  match the description. The experimental Wi-Fi Direct share page is why INTERNET/CHANGE_WIFI_STATE are declared; say so
+  in the request.
+- Izzy usually asks for the app to be on a stable id: do the name/applicationId decision first (a new id is a
+  different app for Android; installs of the old id cannot be updated to it).
+- Updates: publish a new GitHub release with a higher versionCode; Izzy's updater picks it up on its next run.

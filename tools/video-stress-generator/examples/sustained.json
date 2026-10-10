@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "seed": 20261005,
+  "modes": ["720x480@30"],
+  "reference_mode": "native",
+  "lossless": false,
+  "audio": {"enabled": true, "events": [
+    {"id": "sustained_audio", "seconds": 10, "role": "workload", "kind": "noise", "duration_samples": 1920000, "amplitude": 0.12, "seed": 20261005}
+  ]},
+  "cues": {"interval_seconds": 3, "on_frames": 2, "duration_samples": 4800},
+  "timeline": [
+    {"id": "quiet_start", "pattern": "grayscale_gradient", "seconds": 10},
+    {"id": "native_detail", "pattern": "native_checkerboard", "seconds": 10, "params": {"cell": 1}},
+    {"id": "independent_motion", "pattern": "crossing_objects", "seconds": 10},
+    {"id": "complex_motion", "pattern": "turbulent_clouds", "seconds": 10, "params": {"density": 2, "detail": 2, "speed": 1.2}},
+    {"id": "entropy_burst", "pattern": "noise_tracks", "seconds": 10},
+    {"id": "quiet_drain", "pattern": "grayscale_gradient", "seconds": 10}
+  ]
+}

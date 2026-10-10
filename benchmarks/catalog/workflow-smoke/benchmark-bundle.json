@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "suites": [
+    {
+      "path": "benchmarks/catalog/workflow-smoke/raw-suite.json",
+      "execution": "isolated",
+      "required_families": [
+        "picture",
+        "smoothness",
+        "connection",
+        "transport",
+        "lifecycle",
+        "topology",
+        "camera",
+        "acoustic",
+        "physical_latency",
+        "endurance"
+      ],
+      "case_ids": [
+        "raw-210e094d32849d6b949256b5",
+        "raw-39d8bae807de6dcbbafae6c1",
+        "raw-916341f48669ee14f7ebea3a",
+        "raw-e632e8c4780de1608caadbb7"
+      ]
+    },
+    {
+      "path": "benchmarks/catalog/workflow-smoke/gatt-suite.json",
+      "execution": "isolated",
+      "required_families": [
+        "picture",
+        "smoothness",
+        "connection",
+        "transport",
+        "lifecycle",
+        "topology",
+        "camera",
+        "acoustic",
+        "physical_latency",
+        "endurance"
+      ],
+      "case_ids": [
+        "raw-75d3ed6c1d58e0c00949a4ed",
+        "raw-76db74710fe85e9789429a01"
+      ]
+    }
+  ]
+}

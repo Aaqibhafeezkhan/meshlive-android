@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Monochrome dark (UI v8, user request "dark theme, black and white"). White is the only accent;
+     red is reserved for live / recording / end / destructive, muted green for "connected". The app
+     is dark in every system mode, so there is no values-night variant. -->
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <!-- Surfaces: true black ground, near-black raised surfaces, hairline dividers. -->
+    <color name="app_background">#000000</color>
+    <color name="surface">#0B0B0B</color>
+    <color name="surface_variant">#161616</color>
+    <color name="outline">#1F1F1F</color>
+    <color name="outline_strong">#3A3A3A</color>
+    <!-- Text -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#9A9A9A</color>
+    <!-- Accent = white (primary button white with black text). -->
+    <color name="accent">#FFFFFF</color>
+    <color name="on_accent">#000000</color>
+    <color name="accent_container">#1A1A1A</color>
+    <color name="on_accent_container">#FFFFFF</color>
+    <!-- Semantic only -->
+    <color name="success">#5FA77A</color>
+    <color name="success_container">#0F1D14</color>
+    <color name="warning">#FFFFFF</color>
+    <color name="warning_container">#161616</color>
+    <color name="danger">#FF453A</color>
+    <color name="danger_container">#2A0E0C</color>
+    <color name="record_red">#FF3B30</color>
+    <!-- Over video -->
+    <color name="overlay_scrim">#B3000000</color>
+    <color name="overlay_button">#33FFFFFF</color>
+    <color name="overlay_button_on">#F2FFFFFF</color>
+    <color name="overlay_text">#FFFFFFFF</color>
+    <color name="overlay_text_on_light">#FF000000</color>
+    <color name="call_accept">#2E9E5B</color>
+    <color name="call_end">#FF3B30</color>
+    <color name="live_red">#FF3B30</color>
+    <color name="mismatch_red">#FF3B30</color>
+    <color name="call_ground_top">#FF0B0B0B</color>
+    <color name="call_ground_bottom">#FF000000</color>
+</resources>

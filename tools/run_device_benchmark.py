@@ -1,0 +1,1273 @@
+"""Repeatable physical-phone scenarios; no optical-quality claims from log counters."""
+import argparse
+import concurrent.futures
+import ctypes
+import datetime as dt
+import hashlib
+import os
+import json
+import math
+import re
+import struct
+import subprocess
+import sys
+import time
+import uuid
+import wave
+from pathlib import Path
+
+from benchmark_layout import output_path, resolve
+from device_log_capture import LogCapture, merge_dump
+
+PACKAGE = os.environ.get("MESHLIVE_APP_ID", "io.github.meshlive.app")
+COMPONENT = f"{PACKAGE}/com.example.bluetoothtest.MainActivity"
+
+
+# adb.exe failing before it runs (Windows loader failure under load, 0xC0000142 STATUS_DLL_INIT_FAILED) and a
+# transport that is briefly offline are transient. Delays between the bounded retries, in seconds.
+ADB_RETRY_DELAYS_S = (0.5, 1.5, 3.0)
+ADB_SPAWN_FAILURE_CODES = {0xC0000142, 0xC0000142 - (1 << 32)}  # unsigned and signed views of the same status
+ADB_TRANSIENT_OFFLINE = re.compile(r"device offline|device still authorizing", re.I)
+# Safe to run twice: reads, overwrites with identical content, and stops/clean-ups that end in the same state.
+ADB_IDEMPOTENT = (("get-state",), ("push",), ("pull",), ("logcat", "-d"), ("logcat", "-g"), ("logcat", "-G"),
+                  ("shell", "pidof"), ("shell", "sha256sum"), ("shell", "ls"), ("shell", "getprop"),
+                  ("shell", "dumpsys"), ("shell", "pm", "path"), ("shell", "am", "force-stop"),
+                  ("shell", "wm", "dismiss-keyguard"), ("shell", "rm", "-f"),
+                  ("shell", "input", "keyevent", "KEYCODE_WAKEUP"))
+
+
+def adb_is_idempotent(args):
+    parts = tuple(str(item) for item in args)
+    if len(parts) == 2 and parts[0] == "shell" and parts[1].startswith("date "):
+        return True
+    return any(parts[:len(prefix)] == prefix for prefix in ADB_IDEMPOTENT)
+
+
+def adb_retry_delay(returncode, output, args, attempt):
+    """Seconds to wait before retrying a failed adb invocation, or None when it must not be retried.
+
+    A spawn failure means adb never started, so any command is safe to repeat. A transport that is
+    offline is retried only for idempotent commands (reads, force-stop, identical overwrites): a
+    command already delivered must not run twice. A timeout is never retried."""
+    if attempt >= len(ADB_RETRY_DELAYS_S) or not returncode:
+        return None
+    if returncode in ADB_SPAWN_FAILURE_CODES:
+        return ADB_RETRY_DELAYS_S[attempt]
+    if ADB_TRANSIENT_OFFLINE.search(output or "") and adb_is_idempotent(args):
+        return ADB_RETRY_DELAYS_S[attempt]
+    return None
+
+
+def replay_fixture_metadata(case):
+    if "replay_sha256" in case and (not case.get("replay_file") or not isinstance(
+            case["replay_sha256"], str) or not re.fullmatch(r"[0-9a-fA-F]{64}", case["replay_sha256"])):
+        raise ValueError("Replay SHA256 needs a matching input file and a64-digit digest")
+    if not case.get("replay_file"):
+        return None
+    path = resolve(case["replay_file"])
+    checksum = hashlib.sha256()
+    with path.open("rb") as fixture:
+        header = fixture.read(32)
+        checksum.update(header)
+        if len(header) != 32:
+            raise ValueError("Replay needs a complete IVF header")
+        magic, version, header_size, codec, width, height, rate, scale, declared, _ = struct.unpack("<4sHH4sHHIIII", header)
+        if magic != b"DKIF" or version != 0 or header_size < 32 or codec not in (b"VP90", b"AV01"):
+            raise ValueError("Replay needs a supported native IVF header")
+        extra = fixture.read(header_size - 32)
+        checksum.update(extra)
+        if len(extra) != header_size - 32 or not rate or not scale or not declared or rate % scale:
+            raise ValueError("Replay must declare complete frames and an integer native FPS/timebase")
+        profile = case["profile"]
+        if (width, height, rate // scale) != (profile["width"], profile["height"], profile["fps"]):
+            raise ValueError("Replay native geometry/FPS differs from the requested profile; no conversion")
+        frames, first, last = 0, None, None
+        while frame_header := fixture.read(12):
+            checksum.update(frame_header)
+            if len(frame_header) != 12:
+                raise ValueError("Replay contains a truncated IVF frame header")
+            size, timestamp = struct.unpack("<IQ", frame_header)
+            if not 0 < size <= 4 * 1024 * 1024:
+                raise ValueError("Replay IVF frame exceeds the native payload bounds")
+            payload = fixture.read(size)
+            checksum.update(payload)
+            if len(payload) != size:
+                raise ValueError("Replay contains a truncated IVF frame payload")
+            if timestamp >= 2 ** 63 or last is not None and timestamp < last:
+                raise ValueError("Replay IVF timestamps must be nonnegative and ordered")
+            if timestamp * 1_000_000 // (rate // scale) > (2 ** 63 - 1) // 1000 or rate // scale > 2 ** 31 - 1:
+                raise ValueError("Replay IVF format/timestamp exceeds native integer/nanosecond timing")
+            first = timestamp if first is None else first
+            last = timestamp
+            frames += 1
+        size = fixture.tell()
+    digest = checksum.hexdigest()
+    if case.get("replay_sha256") and digest != case["replay_sha256"].lower():
+        raise ValueError("Replay input bytes differ from the frozen case SHA256")
+    if frames != declared:
+        raise ValueError("Replay declared IVF frame count differs from its complete payloads")
+    required_s = case.get("duration_s", 60) + len(case["receivers"]) * case.get("connection_timeout_s", 30)
+    if frames * scale / rate < required_s or last * scale / rate < required_s:
+        raise ValueError("Replay fixture is shorter than measurement plus connection allowance; app replay does not loop")
+    return {"path": str(path), "sha256": digest, "format": "IVF", "codec": codec.decode("ascii"),
+            "width": width, "height": height, "fps": rate // scale, "rate": rate, "scale": scale,
+            "frames": frames, "bytes": size, "first_timestamp": first, "last_timestamp": last, "loops": False,
+            "scope": "Finite preencoded video; transport/decoder isolation; live encoding, camera and audio unmeasured"}
+
+
+def raw_fixture_metadata(case):
+    if not case.get("raw_fixture_file"):
+        return None
+    fixture = resolve(case["raw_fixture_file"])
+    with fixture.open("rb") as handle:
+        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    if case.get("raw_fixture_sha256") and digest != case["raw_fixture_sha256"].lower():
+        raise ValueError("Raw input bytes differ from the frozen case SHA256")
+    width, height = case["profile"]["width"], case["profile"]["height"]
+    size = fixture.stat().st_size
+    return {"path": str(fixture), "sha256": digest, "format": "I420", "width": width, "height": height,
+            "bytes": size, "frames": size // (width * height * 3 // 2), "loops": True,
+            "declared_metadata": case.get("raw_fixture_metadata"),
+            "scope": "Selected encoder plus real media path; optical camera capture/controls unmeasured"}
+
+
+def reference_audio_metadata(case):
+    entry = case.get("reference_audio")
+    if entry is None:
+        return None
+    if not isinstance(entry, dict) or set(entry) != {"path", "sha256"} or not isinstance(entry["path"], str) or not entry["path"]:
+        raise ValueError("Reference audio requires exactly path and sha256")
+    if not case.get("raw_fixture_file") or case.get("audio_enabled") is False or not case.get("media_trace"):
+        raise ValueError("Reference audio requires matching raw video, enabled audio and media tracing")
+    path = resolve(entry["path"])
+    with path.open("rb") as handle:
+        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    if not isinstance(entry["sha256"], str) or digest != entry["sha256"].lower():
+        raise ValueError("Reference audio hash differs from requested bytes")
+    with wave.open(str(path), "rb") as wav:
+        if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getcomptype()) != (1, 2, 48000, "NONE"):
+            raise ValueError("Reference audio must be PCM16 mono48000 Hz; no conversion")
+        samples = wav.getnframes()
+        # Verify the entire declared PCM, not just the WAV header.
+        remaining = samples * 2
+        while remaining:
+            chunk = wav.readframes(min(48000, remaining // 2))
+            if not chunk:
+                raise ValueError("Reference audio WAV payload is truncated")
+            remaining -= len(chunk)
+    raw = raw_fixture_metadata(case)
+    numerator = raw["frames"] * 48000
+    fps = case["profile"]["fps"]
+    if numerator % fps or samples != numerator // fps:
+        raise ValueError("Reference audio must match the exact whole-sample raw-video loop")
+    return {"path": str(path), "sha256": digest, "sample_count": samples, "sample_rate": 48000,
+            "channels": 1, "format": "PCM16", "scope": "Reference injected before actual Opus encoding; acoustics UNMEASURED"}
+
+
+def media_impairment_metadata(case):
+    entry = case.get("media_impairment")
+    if entry is None:
+        return None
+    if not isinstance(entry, dict) or set(entry) != {"path", "sha256"} or not case.get("media_trace"):
+        raise ValueError("Media impairment requires hashed config and media tracing")
+    path = resolve(entry["path"])
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if not isinstance(entry["sha256"], str) or digest != entry["sha256"].lower():
+        raise ValueError("Media impairment config hash differs from requested bytes")
+    from score_impairment_trace import validate_config
+    config = json.loads(path.read_text(encoding="utf-8-sig"))
+    validate_config(config)
+    return {"path": str(path), "sha256": digest, "config": config,
+            "scope": "Outgoing whole media before encryption; bounded producer delay; not radio impairment"}
+
+
+def validate_case(case, devices):
+    required_hash = case.get("expected_apk_sha256")
+    if required_hash is not None and (not isinstance(required_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", required_hash)):
+        raise ValueError("Expected APK SHA256 must be a64-digit digest")
+    source = case["source"]
+    parents = {item["phone"]: item["parent"] for item in case["receivers"]}
+    if len(parents) != len(case["receivers"]) or source in parents:
+        raise ValueError("A phone cannot have two roles or two active parents")
+    participants = {source, *parents}
+    if not participants <= devices.keys():
+        raise ValueError("Scenario contains an unknown phone")
+    serials, prefixes = [], []
+    for phone in participants:
+        device = devices[phone]
+        if not device.get("serial") or not re.fullmatch(r"[0-9a-f]{12}", device.get("node_prefix", "")):
+            raise ValueError("Every participant needs a serial and a 12-digit signed-node prefix")
+        serials.append(device["serial"])
+        prefixes.append(device["node_prefix"])
+    if len(set(serials)) != len(serials) or len(set(prefixes)) != len(prefixes):
+        raise ValueError("Aliases must not assign one physical phone to multiple roles")
+    for value in [case.get("duration_s", 60), case.get("connection_timeout_s", 30),
+                  *(case.get("profile", {}).get(key) for key in ("width", "height", "fps", "bitrate_kbps"))]:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise ValueError("Duration, timeout, dimensions, FPS, and bitrate must be positive")
+    profile = case["profile"]
+    if any(not isinstance(profile[key], int) for key in ("width", "height", "fps", "bitrate_kbps")):
+        raise ValueError("Android profile extras require integer dimensions, FPS, and bitrate")
+    transport_maximum = {"classic": 1500, "gatt": 1100, "ble": 1200}.get(case["transport"])
+    if transport_maximum and profile["bitrate_kbps"] > transport_maximum:
+        raise ValueError("Requested bitrate exceeds the Settings limit; do not silently clamp tests")
+    if profile.get("playback", "balanced") not in {"low", "balanced", "stable", "auto"}:
+        raise ValueError("Unknown playback choice would silently become Balanced")
+    if profile.get("rate_control", "cbr") not in {"automatic", "cbr", "vbr", "cbr_fd"}:
+        raise ValueError("Unknown bitrate allocation would silently become Automatic")
+    if "stream_flush" in case and case["stream_flush"] not in {"frame", "5ms", "10ms", "16k", "32k"}:
+        raise ValueError("Unknown flush policy would silently become 5ms")
+    if "audio_enabled" in case and not isinstance(case["audio_enabled"], bool):
+        raise ValueError("Audio override must be a boolean")
+    if "media_trace" in case and not isinstance(case["media_trace"], bool):
+        raise ValueError("Media trace override must be a boolean")
+    if "video_presentation_timing" in case and not isinstance(case["video_presentation_timing"], bool):
+        raise ValueError("Video presentation timing override must be a boolean")
+    if "release_video_at_playout" in case and (
+            not isinstance(case["release_video_at_playout"], bool) or
+            (case["release_video_at_playout"] and not case.get("video_presentation_timing"))):
+        raise ValueError("Output release pacing requires an explicit boolean and presentation tracing")
+    if "gatt_write_timing" in case and (
+            not isinstance(case["gatt_write_timing"], bool) or case["transport"] != "gatt" or len(parents) != 1):
+        raise ValueError("GATT write timing is a boolean diagnostic for one direct GATT receiver")
+    if "direct_gatt_heartbeat" in case:
+        if (not isinstance(case["direct_gatt_heartbeat"], bool) or case["transport"] != "gatt" or
+                len(parents) != 1 or any(node.get("forwarding_enabled", False) for node in case["receivers"])):
+            raise ValueError("Direct GATT heartbeat is a boolean diagnostic for one ordinary leaf only")
+    if "viewer_scan_mode" in case:
+        if case["viewer_scan_mode"] not in {"balanced", "low_latency", "off_when_full"}:
+            raise ValueError("Unknown viewer scan diagnostic would silently use production behavior")
+        if case["transport"] != "classic" and not (
+                case["transport"] == "gatt" and case["viewer_scan_mode"] == "off_when_full"):
+            raise ValueError("Viewer scan diagnostics require Classic, or explicit GATT off_when_full")
+    for node in case["receivers"]:
+        if "forwarding_enabled" in node:
+            if not isinstance(node["forwarding_enabled"], bool) or case["transport"] != "gatt":
+                raise ValueError("Forwarding override is a boolean GATT-only debug diagnostic")
+            if not node["forwarding_enabled"] and node["phone"] in parents.values():
+                raise ValueError("An actual middle must forward to its requested child")
+        if "forwarder_gatt_priority" in node:
+            if node["forwarder_gatt_priority"] not in {"high", "dck", "balanced"}:
+                raise ValueError("Forwarder GATT priority diagnostic must be high or dck")
+            if case["transport"] != "gatt" or node["phone"] not in parents.values():
+                raise ValueError("Forwarder GATT priority applies only to a GATT middle with a child")
+    for phone in parents:
+        visited = set()
+        current = phone
+        while current != source:
+            if current in visited or current not in parents:
+                raise ValueError("Receiver graph must be an acyclic tree rooted at the source")
+            visited.add(current)
+            current = parents[current]
+    for event in case.get("actions", []):
+        if event["phone"] not in participants or not 0 <= event["at_s"] < case.get("duration_s", 60):
+            raise ValueError("Action must target a participant within the measurement duration")
+        if event["action"] not in {"kill", "restart_receiver", "background", "foreground", "pause", "resume", "flip", "end"}:
+            raise ValueError("Unknown benchmark action")
+        if event["action"] == "restart_receiver" and event["phone"] not in parents:
+            raise ValueError("Only a receiver may be restarted in a recovery scenario")
+        if event["action"] in {"pause", "resume", "flip", "end"} and event["phone"] != source:
+            raise ValueError("Broadcast controls must target the source")
+    if case["transport"] not in {"classic", "gatt", "ble"}:
+        raise ValueError("Transport must be classic, gatt, or ble (CoC)")
+    if "raw_fixture_sha256" in case and (not case.get("raw_fixture_file") or not isinstance(
+            case["raw_fixture_sha256"], str) or not re.fullmatch(r"[0-9a-fA-F]{64}", case["raw_fixture_sha256"])):
+        raise ValueError("Raw fixture SHA256 needs a matching input file and a64-digit digest")
+    if case.get("raw_fixture_file"):
+        if case.get("replay_file"):
+            raise ValueError("Raw live-encoder fixture and preencoded replay are mutually exclusive")
+        fixture = resolve(case["raw_fixture_file"])
+        if not fixture.is_file():
+            raise ValueError("Raw I420 fixture does not exist")
+        if profile["width"] % 2 or profile["height"] % 2:
+            raise ValueError("Raw I420 fixture requires even width and height")
+        frame_bytes = profile["width"] * profile["height"] * 3 // 2
+        if not fixture.stat().st_size or fixture.stat().st_size % frame_bytes:
+            raise ValueError("Raw fixture must contain whole exact-size I420 frames for the requested dimensions")
+    if case.get("replay_file") and not resolve(case["replay_file"]).is_file():
+        raise ValueError("Replay fixture does not exist")
+    replay_fixture_metadata(case)
+    reference_audio_metadata(case)
+    media_impairment_metadata(case)
+    return participants
+
+
+LOG_BUFFER_BYTES = 8 << 20
+# Tags of the app capture; the end-of-case dump merge asks logd for the same set.
+APP_LOG_FILTERS = ("BluetoothVideo:I", "GattVideoSetup:I", "AndroidRuntime:E", "*:S")
+
+
+
+# Exact tunables a sweep case may set; each maps to one debug launch extra on every participant.
+# Unknown names are rejected so a typo can never silently test the default.
+TUNABLES = {
+    "stream_buffer_kib": ("test_stream_buffer_kib", int),
+    "stream_flush": ("test_stream_flush", str),
+    "playback_delay_ms": ("test_playback_delay_ms", int),
+    "decoder_low_latency": ("test_decoder_low_latency", bool),
+    "release_video_at_playout": ("test_release_video_at_playout", bool),
+    "source_gatt_priority": ("test_source_gatt_priority", str),
+    "forwarder_gatt_priority": ("test_forwarder_gatt_priority", str),
+    # DEBUG experiment (off): relay CoC child-link priority high|balanced|low|dck (relaylink 2026-10-09).
+    "forwarder_coc_priority": ("test_forwarder_coc_priority", str),
+    "forwarder_child_interval_units": ("test_forwarder_child_interval_units", int),
+    "decoder": ("test_decoder", str),
+    "encoder_rate_trim": ("test_encoder_rate_trim", bool),
+    # Default-on WebRTC-style bitrate adjuster for MediaCodec encoders; false is the control arm.
+    "encoder_bitrate_adjuster": ("test_encoder_bitrate_adjuster", bool),
+    "encoder_framerate_adjuster": ("test_encoder_framerate_adjuster", bool),
+    # Experimental temporal layering (app default off; may drop enhancement frames under congestion).
+    "temporal_layers": ("test_temporal_layers", bool),
+    "link_pacing": ("test_link_pacing", bool),
+    # Default-on BLE scan-failure recovery (2026-10-10); false restores stop-and-report on any failure.
+    "scan_recovery": ("test_scan_recovery", bool),
+    # Lock-screen notification privacy (2026-10-10): true shows the caller's name (user opt-in).
+    "lock_screen_peer_names": ("test_lock_screen_peer_names", bool),
+    # Always reachable for calls (2026-10-10): app default on for normal launches, off for every
+    # benchmark launch unless true, so cases keep the advertising role they request.
+    "always_reachable": ("test_always_reachable", bool),
+    # Call resolution ladder (2026-10-10): app default on for user calls, off for every benchmark
+    # launch unless true, so cases keep their exact requested geometry.
+    "call_resolution_ladder": ("test_call_resolution_ladder", bool),
+    # Default-on fixes kept switchable for A/B: pacer seeded at join, early fan-out release at the rate floor.
+    "link_pacer_seed": ("test_link_pacer_seed", bool),
+    "fanout_early_release": ("test_fanout_early_release", bool),
+    # Experimental (app default off): seed a child link pacer from that child's own last report.
+    "link_pacer_peer_seed": ("test_link_pacer_peer_seed", bool),
+    # LE link experiments and control arms (2026-10-09): CoC control PHY order (default
+    # sequenced), GATT request MTU 23-517 (app default 517; ignored by Android 14+ clients), GATT
+    # values sized to whole 251-octet LE PDUs (default off), LE PHY "1m"/"coded-s2"/"coded-s8"
+    # (app default 2M).
+    "coc_sequenced_phy": ("test_coc_sequenced_phy", bool),
+    # Experimental (app default off): the CoC central requests the PHY only after the socket connected
+    # and hop authentication finished, then waits for onPhyUpdate (readPhy fallback after 1 s).
+    "coc_phy_after_connect": ("test_coc_phy_after_connect", bool),
+    # Experimental (app default off): the higher node-ID phone of a direct call pair holds its outgoing
+    # call 1.5 s and yields to the peer's call (one CoC initiator per pair).
+    "coc_single_initiator": ("test_coc_single_initiator", bool),
+    # Experimental (app default off): peers tracked by node prefix; stale/replaced addresses rescanned first.
+    "peer_address_book": ("test_peer_address_book", bool),
+    # Experimental (app default off): Android <= 11 CoC SDUs coalesced up to 8,000 bytes (replaces single-PDU there).
+    "coc_coalesce_sdus": ("test_coc_coalesce_sdus", bool),
+    "le_priority_retry": ("test_le_priority_retry", bool),
+    # Default-on (2026-10-09) kept switchable: adaptive 2M -> 1M on a backlogged one-PDU-per-event link;
+    # CoC SDUs sized to one 251-octet PDU.
+    "adaptive_phy": ("test_adaptive_phy", bool),
+    "adaptive_phy_memory": ("test_adaptive_phy_memory", bool),
+    # Default-on (2026-10-10) call 2M setup-stall guard: a first 2M call link without hop authentication
+    # 3 s after it opened is closed and the 1M retry rescans a direct callee; false = control arm.
+    "phy_setup_stall": ("test_phy_setup_stall", bool),
+    "relay_phy_guard": ("test_relay_phy_guard", bool),
+    "relay_one_pdu_move": ("test_relay_one_pdu_move", bool),
+    "relay_reanchor": ("test_relay_reanchor", bool),
+    "coc_single_pdu_sdus": ("test_coc_single_pdu_sdus", bool),
+    "gatt_request_mtu": ("test_gatt_request_mtu", int),
+    "gatt_aligned_writes": ("test_gatt_aligned_writes", bool),
+    "ble_phy": ("test_ble_phy", str),
+    # Experimental call FPS ladder from 0.4 x request (app default off: geometry floor).
+    "call_ladder_from_request": ("test_call_ladder_from_request", bool),
+    # Experimental bounded media age (app default off: no frame loss); sheds stale video codec-safely.
+    "bounded_media_age": ("test_bounded_media_age", bool),
+    "relay_child_media_age": ("test_relay_child_media_age", bool),
+    "relay_child_reanchor": ("test_relay_child_reanchor", bool),
+    # Default-on relay cold start (one child on the carried incoming link); false is the control arm.
+    "relay_cold_start": ("test_relay_cold_start", bool),
+    # Default-on relay parent fallback after repeated link-establishment failures; false is the control arm.
+    "relay_establish_fallback": ("test_relay_establish_fallback", bool),
+    # Default-on fan-out growth in planned-link units; false is the control arm.
+    "fanout_proven_links": ("test_fanout_proven_links", bool),
+    "relay_parent_trickle": ("test_relay_parent_trickle", bool),
+    # Experimental calls (app default off): authenticated 2 KB video fragments with audio between them,
+    # and speech-led call playout (late video may grow the shared call delay by at most 150 ms).
+    "call_video_fragments": ("test_call_video_fragments", bool),
+    "call_speech_led_playout": ("test_call_speech_led_playout", bool),
+    # Default-on call fixes kept switchable for A/B: audio headroom in the call send queue, and the
+    # legacy VP9-only decode restriction widened when the peer encodes no VP9.
+    "call_audio_headroom": ("test_call_audio_headroom", bool),
+    "call_codec_fallback": ("test_call_codec_fallback", bool),
+    # Experimental calls (app default off): legacy route low delay (40 ms audio pairs, normal call
+    # playout), legacy Qualcomm call protections lifted on this phone, call screen over the lock
+    # screen with an incoming-call alert, first call frame shown on arrival.
+    "call_legacy_low_delay": ("test_call_legacy_low_delay", bool),
+    "call_legacy_relief": ("test_call_legacy_relief", bool),
+    "call_lock_screen": ("test_call_lock_screen", bool),
+    "call_first_frame_now": ("test_call_first_frame_now", bool),
+    # Call UX (2026-10-10). Benchmark launches keep the former behaviour unless a tunable opts in: audio
+    # focus with hold on transient loss and the silent/vibrate/DND ringer policy (both on for user
+    # sessions), and the experiments ringback, CallStyle notifications, camera pause at the ear and
+    # audio starvation concealment with silence-gated catch-up (all app default off).
+    "call_audio_focus": ("test_call_audio_focus", bool),
+    "call_ringer_policy": ("test_call_ringer_policy", bool),
+    "call_ringback": ("test_call_ringback", bool),
+    "call_style_notification": ("test_call_style_notification", bool),
+    "call_proximity_camera_pause": ("test_call_proximity_camera_pause", bool),
+    "call_audio_conceal": ("test_call_audio_conceal", bool),
+    # Experimental call encoder fit (app default off; live camera only): smaller call geometry after
+    # this phone's native encoder overloaded at its fastest settings in an earlier call.
+    "call_encoder_fit": ("test_call_encoder_fit", bool),
+    # Experimental native libopus call audio (app default off): VOIP mode, in-band FEC with a loss hint,
+    # decoder PLC/FEC recovery; sub-switches FEC (default on), loss hint % (default 10), DTX (default off).
+    "call_native_opus": ("test_call_native_opus", bool),
+    "call_native_opus_fec": ("test_call_native_opus_fec", bool),
+    "call_native_opus_loss_pct": ("test_call_native_opus_loss_pct", int),
+    "call_native_opus_dtx": ("test_call_native_opus_dtx", bool),
+    # Control arm for private-call relay chains (app default on): false = one relay, its child the callee.
+    "call_relay_chain": ("test_call_relay_chain", bool),
+    # Experimental relayed call cap from this phone's measured link (app default off: 15 FPS / 110 kbps).
+    "relayed_call_measured_cap": ("test_relayed_call_measured_cap", bool),
+    # Experimental delivery-based probing (app default off): probe ceiling, probe undo, queue overuse.
+    "delivery_rate_control": ("test_delivery_rate_control", bool),
+    # Control arm for link report version 3 (app default on); false = pre-2026-10-09 behaviour exactly.
+    "delivery_reports": ("test_delivery_reports", bool),
+    # Experimental stream delivery reports (app default off; every phone in the stream on this build).
+    "stream_delivery_reports": ("test_stream_delivery_reports", bool),
+    # A/B arms: clear the 24 h learned start rates at launch (the launch log records them either way).
+    "reset_learned_rates": ("test_reset_learned_rates", bool),
+    # DEBUG: clear learned relay/fan-out ceilings, sustained rates and bad-2M marks before the launch.
+    "reset_learned_state": ("test_reset_learned_state", bool),
+    # Experimental learned-limit recovery (app default off): ceiling probe after a cool-down, 24 h bad-2M.
+    "ceiling_probe_recovery": ("test_ceiling_probe_recovery", bool),
+    # Control arm for the learned call start (app default on): false = build-keyed learned rates and
+    # unmeasured calls starting at the request, as before 2026-10-09.
+    "start_rate_guard": ("test_start_rate_guard", bool),
+    "hw_qp_min": ("test_hw_qp_min", int),
+    "hw_qp_max": ("test_hw_qp_max", int),
+    "keyframe_shaping": ("test_keyframe_shaping", float),
+    "bitrate_mode": ("test_bitrate_mode", int),
+    # Workstream C burst experiments (app default off; see the app's DebugTunables):
+    # scene-cut shaping 0 off / 1 sync frame + lowered target / 2 lowered target only.
+    "scene_cut_shaping": ("test_scene_cut_shaping", int),
+    # VP9 quantizer headroom: lower the target while parsed base_q_idx stays below this floor.
+    "vp9_q_floor": ("test_vp9_q_floor", int),
+    # Encoder ranking by measured burst size / encode headroom (default choice only).
+    "encoder_ranking": ("test_encoder_ranking", bool),
+    # Child lateness after a large frame on a link that keeps up is one burst, not congestion.
+    "burst_drain": ("test_burst_drain", bool),
+    # Receiver playout grows once by this multiple of a frame's lateness (lane-b P2), 1.0-4.0.
+    "playout_burst_growth": ("test_playout_burst_growth", float),
+    # Hardware intra refresh period in frames (MediaFormat intra-refresh-period).
+    "intra_refresh_frames": ("test_intra_refresh_frames", int),
+    # Experimental intercom features (app default off): voice calls, push-to-talk button, PTT mode (starts muted).
+    "voice_calls": ("test_voice_calls", bool),
+    "push_to_talk": ("test_push_to_talk", bool),
+    "ptt_mode": ("test_ptt_mode", bool),
+    # Call audio (2026-10-09): sender-gap realignment is a default-on fix kept switchable for A/B;
+    # low-delay voice playout and a separate call audio clock are experimental (app default off).
+    "audio_gap_align": ("test_audio_gap_align", bool),
+    "voice_call_low_delay": ("test_voice_call_low_delay", bool),
+    "call_audio_own_clock": ("test_call_audio_own_clock", bool),
+    # Experimental bond-free Classic (app default off): insecure RFCOMM + BMH2 on every role, learned
+    # peer addresses, inquiry first contact; set it on every participant. Visibility prompt is opt-in.
+    "classic_bond_free": ("test_classic_bond_free", bool),
+    # Experimental bounded Classic connect path alone (bond-free implies it; app default off).
+    "classic_bounded_connect": ("test_classic_bounded_connect", bool),
+    "classic_request_visible": ("test_classic_request_visible", bool),
+    # DEBUG Classic address overrides read over adb: "nodeprefix=AA:BB:CC:DD:EE:FF,...".
+    "classic_addresses": ("test_classic_addresses", str),
+    # Experimental call-link pacing on Classic/CoC calls (app default off).
+    "call_link_pacing": ("test_call_link_pacing", bool),
+}
+
+
+def tunable_extras(tunables):
+    extras = {}
+    for name, value in tunables.items():
+        if name not in TUNABLES:
+            raise ValueError(f"Unknown tunable {name!r}")
+        extra, kind = TUNABLES[name]
+        if kind is int and (isinstance(value, bool) or not isinstance(value, int)) or \
+                kind is not int and not isinstance(value, kind):
+            raise ValueError(f"Tunable {name!r} must be {kind.__name__}")
+        extras[extra] = value
+    return extras
+
+
+STAGE_RECORD = re.compile(r'BENCHMARK stage v1 (\{.*\})')
+
+
+def stage_sequence_gaps(lines):
+    """Count app stage records the device log lost: each (scope, role) stream numbers its records
+    1, 2, 3...; a jump means logd never kept the lines between (ASUS mesh4-smoke-b9029e48: the app's
+    and the Bluetooth process's logs both went silent for 10-14 s while frames kept arriving).
+    Returns (missing records, streams checked). Lines without a parsable record are ignored."""
+    last = {}
+    missing = 0
+    for line in lines:
+        match = STAGE_RECORD.search(line)
+        if not match:
+            continue
+        try:
+            record = json.loads(match[1])
+            key = (record.get("scope"), record.get("role"))
+            sequence = int(record["sequence"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        previous = last.get(key)
+        if previous is not None and sequence > previous + 1:
+            missing += sequence - previous - 1
+        if previous is None or sequence > previous:
+            last[key] = sequence
+    return missing, len(last)
+
+
+class Runner:
+    def __init__(self, adb, devices, case, output):
+        self.adb_path, self.devices, self.case, self.output = adb, devices, case, output
+        self.logs, self.captures, self.events, self.intervals = [], [], [], []
+        # Bluetooth-process logs are diagnostics only; kept apart because captures align with logs.
+        self.stack_logs, self.stack_captures = [], []
+        self.log_buffers = {}
+        self.active_intervals = {}
+        self.expected_stopped = set()
+        self.source_end_applied = False
+        self.pids = {}
+        self.observed_lines = {}
+        self.health_events = []
+        self.topology_changes = []
+        self.pending_planned_losses = {}
+        self.participants = validate_case(case, devices)
+        self.run_id = (re.sub(r"[^A-Za-z0-9_.-]", "_", output.name)[:40] or "run") + "-" + uuid.uuid4().hex
+        self.trace_session = self.run_id if case.get("media_trace") else None
+        self.trace_artifacts = []
+        self.raw_fixture = raw_fixture_metadata(case)
+        self.replay_fixture = replay_fixture_metadata(case)
+        self.reference_audio = reference_audio_metadata(case)
+        self.media_impairment = media_impairment_metadata(case)
+
+    def check_cancelled(self):
+        event = getattr(self, "cancel_event", None)
+        if event is not None and event.is_set():
+            raise InterruptedError("Suite stopped by user")
+
+    def adb(self, phone, *args, timeout=20):
+        command = [self.adb_path, "-s", self.devices[phone]["serial"], *map(str, args)]
+        attempt = 0
+        while True:
+            # Device text is UTF-8. The host locale (cp1252 on Windows) turned a non-ASCII app line into
+            # mojibake, so a logcat dump never equalled the byte-exact live capture of the same line.
+            result = subprocess.run(command, capture_output=True, encoding="utf-8", errors="replace", timeout=timeout)
+            delay = adb_retry_delay(result.returncode, result.stderr or result.stdout, args, attempt)
+            if delay is None:
+                break
+            attempt += 1
+            self.events.append({"device": phone, "action": "adb_retry", "attempt": attempt,
+                                "returncode": result.returncode, "command": " ".join(map(str, args))[:120],
+                                "delay_s": delay, "host_monotonic_ns": time.monotonic_ns()})
+            time.sleep(delay)
+        if result.returncode:
+            raise RuntimeError(f"{phone}: ADB {args!r} exited {result.returncode}: {result.stderr.strip() or result.stdout.strip()}")
+        return result.stdout.strip()
+
+    def phone_time(self, phone):
+        value = self.adb(phone, "shell", "date '+%m-%d %H:%M:%S.%3N'")
+        if not re.fullmatch(r"\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}", value):
+            raise RuntimeError(f"{phone}: device clock format unavailable: {value!r}")
+        return value
+
+    def inventory(self, phone):
+        props = dict(re.findall(r"\[([^]]+)\]: \[([^]]*)\]", self.adb(phone, "shell", "getprop")))
+        keys = ["ro.product.manufacturer", "ro.product.model", "ro.build.version.sdk",
+                "ro.build.fingerprint", "ro.board.platform", "ro.hardware", "ro.soc.model", "ro.soc.manufacturer"]
+        apk = self.adb(phone, "shell", "pm", "path", PACKAGE).splitlines()[0].removeprefix("package:")
+        digest = self.adb(phone, "shell", "sha256sum", apk).split()[0]
+        return {"serial": self.devices[phone]["serial"], "node_prefix": self.devices[phone]["node_prefix"], "apk_sha256": digest,
+                "properties": {key: props.get(key) or None for key in keys},
+                "battery_at_start": self.adb(phone, "shell", "dumpsys", "battery"),
+                "thermal_at_start": self.adb(phone, "shell", "dumpsys", "thermalservice"),
+                "bluetooth_controller": "UNMEASURED - SoC is not proof of controller identity"}
+
+    def stage_raw_fixture(self, phone):
+        digest = self.raw_fixture["sha256"]
+        remote = f"/sdcard/Android/data/{PACKAGE}/files/benchmark-raw-{digest}.yuv"
+        existing = self.adb(phone, "shell", f"if [ -f {remote} ]; then sha256sum {remote}; fi")
+        reused = bool(existing and existing.split()[0].lower() == digest)
+        if not reused:
+            self.adb(phone, "push", self.raw_fixture["path"], remote, timeout=180)
+            verified = self.adb(phone, "shell", "sha256sum", remote)
+            if not verified or verified.split()[0].lower() != digest:
+                raise RuntimeError(f"{phone}: uploaded raw fixture hash mismatch")
+        self.events.append({"device": phone, "action": "raw_fixture_reused" if reused else "raw_fixture_uploaded",
+                            "time": self.phone_time(phone), "sha256": digest, "remote": remote})
+        return remote
+
+    def stage_replay_fixture(self, phone):
+        entry = self.replay_fixture
+        if replay_fixture_metadata(self.case)["sha256"] != entry["sha256"]:
+            raise RuntimeError("Replay input changed after the execution was frozen")
+        remote = f"/sdcard/Android/data/{PACKAGE}/files/benchmark-replay-{entry['sha256']}.ivf"
+        entry["staging"] = {"device": phone, "remote": remote, "status": "PENDING"}
+        self.adb(phone, "push", entry["path"], remote, timeout=180)
+        verified = self.adb(phone, "shell", "sha256sum", remote).split()
+        if not verified or verified[0].lower() != entry["sha256"]:
+            raise RuntimeError(f"{phone}: uploaded replay fixture hash mismatch")
+        entry["staging"].update(status="VERIFIED", sha256=verified[0].lower())
+        return remote
+
+    def collect_media_traces(self, phone, role):
+        remote_directory = f"/sdcard/Android/data/{PACKAGE}/files/media-traces"
+        prefix = f"{self.trace_session}-{role}"
+        audio_prefix = f"{self.trace_session}-audio-{role}"
+        phase_pattern = re.compile("(?:" + re.escape(prefix) + "|" + re.escape(audio_prefix) + r")(?:-\d+)?")
+        owned_pids = {log["pid"] for log in self.logs if log.get("device") == phone and type(log.get("pid")) is int}
+        local_directory = self.output / phone / "media-traces"
+        try:
+            names = self.adb(phone, "shell", "ls", remote_directory).splitlines()
+        except (RuntimeError, subprocess.TimeoutExpired) as error:
+            self.trace_artifacts.append({"device": phone, "role": role, "state": "UNMEASURED", "reason": str(error)})
+            return
+        phases = sorted({match[1] for name in names if
+                         (match := re.fullmatch(r"(.+?)(?:-summary\.json|\.csv|\.ivf|\.wav)", name)) and
+                         phase_pattern.fullmatch(match[1])})
+        deadline = time.monotonic() + 3
+        while any(phase + "-summary.json" not in names for phase in phases) and time.monotonic() < deadline:
+            time.sleep(0.1)
+            try:
+                names = self.adb(phone, "shell", "ls", remote_directory).splitlines()
+            except (RuntimeError, subprocess.TimeoutExpired):
+                break
+        if not phases:
+            self.trace_artifacts.append({"device": phone, "role": role, "state": "UNMEASURED",
+                                         "reason": "No exact owned session/role trace phase found"})
+        for phase in phases:
+            artifact = {"device": phone, "role": role, "phase": phase, "state": "UNMEASURED", "files": []}
+            audio = phase.startswith(audio_prefix + "-")
+            artifact["kind"] = "audio_pcm" if audio else "video_access_units"
+            self.trace_artifacts.append(artifact)
+            summary_name = phase + "-summary.json"
+            finalized = summary_name in names
+            failure = None
+            if summary_name not in names:
+                artifact["reason"] = "Trace phase was not finalized; summary absent; remote files retained"
+            try:
+                local_directory.mkdir(parents=True, exist_ok=True)
+                verified_names = []
+                extension = ".wav" if audio else ".ivf"
+                for name in (summary_name, phase + ".csv", phase + extension):
+                    if name not in names:
+                        finalized = False
+                        continue
+                    remote = f"{remote_directory}/{name}"
+                    remote_hash = self.adb(phone, "shell", "sha256sum", remote).split()[0].lower()
+                    if not re.fullmatch(r"[0-9a-f]{64}", remote_hash):
+                        raise RuntimeError("Media trace remote hash is unavailable")
+                    local_name = hashlib.sha256(phase.encode("utf-8")).hexdigest()[:16] + name.removeprefix(phase)
+                    local = local_directory / local_name
+                    self.adb(phone, "pull", remote, str(local), timeout=120)
+                    with local.open("rb") as handle:
+                        local_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+                    if local_hash != remote_hash:
+                        raise RuntimeError(f"Media trace pull hash mismatch: {name}")
+                    if self.adb(phone, "shell", "sha256sum", remote).split()[0].lower() != remote_hash:
+                        raise RuntimeError(f"Media trace changed during collection: {name}; local interrupted snapshot retained")
+                    if name == summary_name:
+                        summary = json.loads(local.read_text(encoding="utf-8-sig"))
+                        if (summary.get("session") != self.trace_session or summary.get("role") != role or
+                                summary.get("csv") != phase + ".csv" or summary.get("wav" if audio else "ivf") != phase + extension or
+                                summary.get("phase", phase) != phase):
+                            raise RuntimeError("Media trace summary does not match exact owned phase")
+                        if type(summary.get("pid")) is not int or summary["pid"] not in owned_pids:
+                            raise RuntimeError("Media trace summary PID does not belong to this phone execution; remote evidence retained")
+                        artifact["summary"] = summary
+                        if summary.get("finalized") is False or audio and summary.get("finalized") is not True:
+                            finalized = False
+                            failure = "Media trace finalization failed; remote files retained"
+                    artifact["files"].append({"path": local.relative_to(self.output).as_posix(),
+                                              "remote_name": name,
+                                              "sha256": local_hash, "bytes": local.stat().st_size})
+                    verified_names.append(name)
+                if not finalized:
+                    artifact.update(state="FAIL" if failure else "UNMEASURED", reason=failure or artifact.get("reason", "Incomplete trace files; remote evidence retained"))
+                    continue
+                artifact["state"] = "MEASURED"
+                artifact["remote_cleanup"] = "complete"
+                for name in verified_names:
+                    self.adb(phone, "shell", "rm", "-f", f"{remote_directory}/{name}")
+            except (RuntimeError, subprocess.TimeoutExpired, OSError, ValueError, IndexError) as error:
+                if artifact["state"] == "MEASURED":
+                    artifact["remote_cleanup"] = str(error)
+                else:
+                    artifact.update(state="FAIL" if finalized else "UNMEASURED", reason=str(error))
+
+    def graceful_stop(self, phone, wait_s=3.0):
+        """Ask the app to close its Bluetooth sockets, then force-stop. Killing a process with an
+        LE CoC listener open leaked PSMs on older stacks (A15s l2cap_listen failures)."""
+        try:
+            # Only a running app gets the control: am start would relaunch an exited app.
+            self.adb(phone, "shell", "pidof", PACKAGE, timeout=5)
+            self.adb(phone, "shell", "am", "start", "-n", COMPONENT, "-W", "--es", "test_control", "shutdown", timeout=10)
+            for _ in range(int(wait_s / 0.25)):
+                if not self.adb(phone, "shell", "pidof", PACKAGE, timeout=5).strip():
+                    break
+                time.sleep(0.25)
+        except Exception:
+            pass
+        # The asynchronous shutdown intent can start a fresh process after the app already exited
+        # (bmaraw-ab-call-9c121b30-run1: a new ASUS process 19 s after cleanup quarantined the phone),
+        # so force-stop until no process remains.
+        # A late relaunch can still land after the first empty pidof (mesh4-b9726176-loop3-1: ASUS
+        # PID 21638 alive at the suite's cleanup check), so require it to stay empty for 3 s.
+        try:
+            self.adb(phone, "shell", "am", "force-stop", PACKAGE, timeout=5)
+        except Exception:
+            pass
+        quiet = 0
+        for _ in range(16):
+            try:
+                running = self.adb(phone, "shell", "pidof", PACKAGE, timeout=5).strip()
+            except Exception:
+                running = ""
+            if running:
+                quiet = 0
+                try:
+                    self.adb(phone, "shell", "am", "force-stop", PACKAGE, timeout=5)
+                except Exception:
+                    pass
+            else:
+                quiet += 1
+                # A cancelled run must not keep sleeping; the suite still verifies pidof afterwards.
+                cancelled = getattr(getattr(self, "cancel_event", None), "is_set", lambda: False)()
+                if quiet >= 6 or cancelled is True:
+                    break
+            time.sleep(0.5)
+
+    def launch(self, phone, source=False):
+        self.check_cancelled()
+        replay_remote = self.stage_replay_fixture(phone) if source and self.replay_fixture else None
+        self.adb(phone, "shell", "am", "force-stop", PACKAGE)
+        try:
+            self.adb(phone, "shell", "input", "keyevent", "KEYCODE_WAKEUP")
+            self.adb(phone, "shell", "wm", "dismiss-keyguard")
+        except RuntimeError as error:
+            # Some OEMs restrict shell input even on an already unlocked phone.
+            # Confirm that state instead of requiring a security-setting override.
+            if "INJECT_EVENTS" not in str(error):
+                raise
+            policy = self.adb(phone, "shell", "dumpsys", "window", "policy")
+            if not (re.search(r"^\s*showing=false\s*$", policy, re.M) and
+                    "screenState=SCREEN_STATE_ON" in policy):
+                raise RuntimeError(f"{phone}: unlock the phone; OEM policy blocks automatic wake") from error
+            self.events.append({"device": phone, "action": "already_unlocked",
+                                "time": self.phone_time(phone), "reason": "OEM restricts INJECT_EVENTS"})
+        started = self.phone_time(phone)
+        args = ["shell", "am", "start", "-W", "-n", COMPONENT]
+        profile = self.case["profile"]
+        extras = {"test_transport": self.case["transport"], "test_codec": profile.get("codec", "vp9"),
+                  "test_playback_delay": profile.get("playback", "balanced"),
+                  "test_thermal_reduction": profile.get("thermal_reduction", False)}
+        if self.trace_session:
+            extras["test_media_trace"] = self.trace_session
+        if "direct_gatt_heartbeat" in self.case:
+            extras["test_direct_gatt_heartbeat"] = self.case["direct_gatt_heartbeat"]
+        if source:
+            if "gatt_write_timing" in self.case:
+                extras["test_gatt_write_timing"] = self.case["gatt_write_timing"]
+            extras.update(test_auto_broadcast=True, test_role="send", test_width=profile["width"],
+                          test_height=profile["height"], test_fps=profile["fps"],
+                          test_bitrate_kbps=profile["bitrate_kbps"], test_rate_control=profile.get("rate_control", "cbr"))
+            if self.case.get("viewer_scan_mode"):
+                extras["test_viewer_scan_mode"] = self.case["viewer_scan_mode"]
+            if "audio_enabled" in self.case:
+                extras["test_audio"] = self.case["audio_enabled"]
+            if "stream_flush" in self.case:
+                extras["test_stream_flush"] = self.case["stream_flush"]
+            if replay_remote:
+                extras["test_replay_ivf"] = replay_remote
+            if self.case.get("raw_fixture_file"):
+                extras["test_raw_yuv"] = self.stage_raw_fixture(phone)
+            if self.reference_audio:
+                entry = self.reference_audio
+                remote = f"/sdcard/Android/data/{PACKAGE}/files/benchmark-audio-{entry['sha256']}.wav"
+                self.adb(phone, "push", entry["path"], remote, timeout=180)
+                if self.adb(phone, "shell", "sha256sum", remote).split()[0].lower() != entry["sha256"]:
+                    raise RuntimeError(f"{phone}: uploaded reference audio hash mismatch")
+                extras["test_reference_audio"] = remote
+            if self.media_impairment:
+                entry = self.media_impairment
+                remote = f"/sdcard/Android/data/{PACKAGE}/files/benchmark-impairment-{entry['sha256']}.json"
+                self.adb(phone, "push", entry["path"], remote)
+                if self.adb(phone, "shell", "sha256sum", remote).split()[0].lower() != entry["sha256"]:
+                    raise RuntimeError(f"{phone}: uploaded impairment config hash mismatch")
+                extras["test_media_impairment"] = remote
+        else:
+            if self.case.get("video_presentation_timing"):
+                extras["test_video_presentation_timing"] = True
+            if self.case.get("release_video_at_playout"):
+                extras["test_release_video_at_playout"] = True
+            node = next(item for item in self.case["receivers"] if item["phone"] == phone)
+            extras.update(test_auto_select_stream=True, test_role="receive",
+                          test_forward_received_streams=node.get("forwarding_enabled",
+                              any(item["parent"] == phone for item in self.case["receivers"])),
+                          test_stream_node=self.devices[node["parent"]]["node_prefix"])
+            if "forwarder_gatt_priority" in node:
+                extras["test_forwarder_gatt_priority"] = node["forwarder_gatt_priority"]
+        extras.update(tunable_extras(self.case.get("tunables", {})))
+        # Quiet speakers for automated runs (generated reference audio on four phones at once);
+        # measured PCM is captured before this output gain. BENCHMARK_PLAYBACK_GAIN=1 restores full volume.
+        extras["test_playback_gain"] = float(os.environ.get("BENCHMARK_PLAYBACK_GAIN", "0.05"))
+        for key, value in extras.items():
+            flag = "--ez" if isinstance(value, bool) else "--ei" if isinstance(value, int) else                 "--ef" if isinstance(value, float) else "--es"
+            args.extend([flag, key, str(value).lower() if isinstance(value, bool) else str(value)])
+        self.adb(phone, *args)
+        pid = self.adb(phone, "shell", "pidof", PACKAGE)
+        if not pid.isdigit():
+            raise RuntimeError(f"{phone}: application did not start")
+        self.pids[phone] = pid
+        log_path = self.output / f"{phone}-{pid}.log"
+        capture = LogCapture(self.adb_path, self.devices[phone]["serial"], pid, started, log_path, APP_LOG_FILTERS)
+        self.captures.append((capture, capture))
+        self.logs.append({"device": phone, "role": "sender" if source else "receiver", "pid": int(pid),
+                          "start": started, "path": log_path.name})
+        self.enlarge_log_buffer(phone)
+        self.start_stack_log(phone, started)
+        self.expected_stopped.discard(phone)
+        self.events.append({"device": phone, "action": "launch", "time": started,
+                            "host_monotonic_ns": time.monotonic_ns()})
+
+    def recover_log_lines(self, phone):
+        """Lines of the device log buffer that the live capture lacks (see dump_log_lines)."""
+        return self.dump_log_lines(phone)[1]
+
+    def dump_log_lines(self, phone):
+        """Re-read the app's whole device log buffer for this execution's PID (`logcat -d --pid`).
+        Returns (all dump lines, lines the live capture lacks); both empty when the buffer cannot be read.
+
+        The live `adb logcat` stream is not a clock: on the Oppo A15s (Android 10/ColorOS) it ran 4-21 s
+        behind the app's own timestamps (the S24 stream: 0.2 s; voice-speech-s24a15s-51cc8028), so a
+        short evidence wait can expire before an on-time line reaches the host file. The dump reads
+        logd directly and is the authority for what the app logged. Lines missing from the live capture
+        go to a separate recovered file named in an event; the captured log is never rewritten."""
+        pid = self.pids.get(phone)
+        log = next((item for item in reversed(self.logs) if item["device"] == phone and item.get("pid") == int(pid or 0)), None)
+        if not pid or log is None:
+            return [], []
+        try:
+            dump = self.adb(phone, "logcat", "-d", f"--pid={pid}", "-v", "threadtime", *APP_LOG_FILTERS, timeout=30)
+            captured = set((self.output / log["path"]).read_text(encoding="utf-8", errors="replace").splitlines())
+        except Exception:
+            return [], []
+        every = [line for line in dump.splitlines() if line.strip() and not line.startswith("---------")]
+        missing = [line for line in every if line not in captured]
+        path = self.output / f"{phone}-{pid}-recovered.log"
+        if path.exists():  # periodic polls re-dump: keep one copy of each recovered line
+            captured |= set(path.read_text(encoding="utf-8", errors="replace").splitlines())
+            missing = [line for line in missing if line not in captured]
+        if missing:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(chr(10).join(missing) + chr(10))
+            self.events.append({"device": phone, "action": "log_lines_recovered", "path": path.name,
+                                "lines": len(missing), "pid": int(pid),
+                                "reason": "Device log buffer held lines the live capture lacked",
+                                "host_monotonic_ns": time.monotonic_ns()})
+        return every, missing
+
+    def supervise_captures(self):
+        """Restart a live logcat reader that died or went silent while its app is alive (once a second at
+        most). The restart resumes from the reader's last timestamp, de-duplicated, and is an event."""
+        now = time.perf_counter()
+        if now - getattr(self, "last_supervised", float("-inf")) < 1.0:
+            return
+        self.last_supervised = now
+        for log, (capture, _) in zip(self.logs, self.captures):
+            phone = log["device"]
+            if not isinstance(capture, LogCapture) or phone in self.expected_stopped:
+                continue
+
+            def alive(phone=phone, pid=str(log["pid"])):
+                try:
+                    return self.adb(phone, "shell", "pidof", PACKAGE, timeout=5) == pid
+                except Exception:
+                    return False
+
+            record = capture.supervise(alive)
+            if record:
+                self.events.append({"device": phone, "action": "log_capture_restarted", "pid": log["pid"],
+                                    "path": log["path"], "host_monotonic_ns": time.monotonic_ns(), **record})
+
+    def merge_device_logs(self):
+        """After the live captures stop, merge each PID's complete `logcat -d` into its physical log: only
+        lines of that PID inside the capture window the live stream lacked, in timestamp order, under a
+        header that states how many came from the dump. The scorer then sees what the app logged even when
+        the live stream stalled or died. Failures leave the live log as captured and are recorded."""
+        ends = {log["device"]: log.get("end") for log in self.logs}
+        for entry, filters in [*((log, APP_LOG_FILTERS) for log in self.logs),
+                               *((log, ()) for log in self.stack_logs if log.get("pid"))]:
+            try:
+                dump = self.adb(entry["device"], "logcat", "-d", f"--pid={entry['pid']}", "-v", "threadtime",
+                                *filters, timeout=60)
+                path = self.output / entry["path"]
+                live = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                end = entry.get("end") or ends.get(entry["device"])
+                merged, added = merge_dump(live, dump.splitlines(), entry["pid"], entry.get("start"), end)
+                entry["live_lines"] = sum(1 for line in live if line and not line.startswith("---------"))
+                entry["dump_merged_lines"] = len(added)
+                if added:
+                    header = (f"--------- merged {len(added)} line(s) from logcat -d --pid={entry['pid']}; "
+                              f"the live capture held {entry['live_lines']}")
+                    with path.open("w", encoding="utf-8", newline="\n") as handle:
+                        handle.write("\n".join([header, *merged]) + "\n")
+                    self.events.append({"device": entry["device"], "action": "log_dump_merged", "path": entry["path"],
+                                        "pid": entry["pid"], "lines": len(added), "live_lines": entry["live_lines"],
+                                        "host_monotonic_ns": time.monotonic_ns()})
+            except Exception as error:
+                self.events.append({"device": entry["device"], "action": "log_dump_merge_failed",
+                                    "path": entry.get("path"), "reason": str(error)[:200],
+                                    "host_monotonic_ns": time.monotonic_ns()})
+        for log, (capture, _) in zip(self.logs, self.captures):
+            if isinstance(capture, LogCapture):
+                log["capture_restarts"] = len(capture.restarts)
+
+    def enlarge_log_buffer(self, phone):
+        """A 1 MiB main buffer lost the app's End acknowledgement on ASUS (logd prunes the chattiest
+        app first). Raise it for the run and restore the recorded size during cleanup."""
+        if phone in self.log_buffers:
+            return
+        try:
+            report = self.adb(phone, "logcat", "-g", "-b", "main", timeout=5)
+            match = re.search(r"ring buffer is (\d+)\s*(KiB|MiB|Kb|Mb|K|M)?", report)
+            if not match:
+                self.log_buffers[phone] = {"status": "UNKNOWN", "report": report[:200]}
+                return
+            size = int(match[1]) * {"MiB": 1 << 20, "Mb": 1 << 20, "M": 1 << 20}.get(match[2], 1 << 10)
+            self.log_buffers[phone] = {"status": "UNCHANGED", "original_bytes": size}
+            if size < LOG_BUFFER_BYTES:
+                self.adb(phone, "logcat", "-G", f"{LOG_BUFFER_BYTES >> 20}M", timeout=5)
+                self.log_buffers[phone]["status"] = "ENLARGED"
+        except Exception as error:
+            self.log_buffers[phone] = {"status": "UNKNOWN", "error": str(error)}
+
+    def restore_log_buffers(self):
+        for phone, item in self.log_buffers.items():
+            if item.get("status") == "ENLARGED":
+                try:
+                    self.adb(phone, "logcat", "-G", f"{item['original_bytes'] >> 10}K", timeout=5)
+                    item["status"] = "RESTORED"
+                except Exception as error:
+                    item.update(status="RESTORE_FAILED", error=str(error))
+
+    def start_stack_log(self, phone, started):
+        """Capture the Bluetooth process log: page/SDP, LL collision and scan-throttle evidence
+        is logged there, not by the app. Failure to find it is recorded, never fatal."""
+        for package in ("com.android.bluetooth", "com.google.android.bluetooth"):
+            try:
+                pid = self.adb(phone, "shell", "pidof", package, timeout=5)
+            except Exception:
+                continue
+            if pid.isdigit():
+                path = self.output / f"{phone}-bluetooth-{pid}.log"
+                capture = LogCapture(self.adb_path, self.devices[phone]["serial"], pid, started, path)
+                self.stack_captures.append((capture, capture))
+                self.stack_logs.append({"device": phone, "process": package, "pid": int(pid),
+                                        "start": started, "path": path.name,
+                                        "purpose": "Diagnose Bluetooth stack setup/scan failures"})
+                return
+        self.stack_logs.append({"device": phone, "process": None, "start": started,
+                                "reason": "Bluetooth process not found"})
+
+    def wait_first_frame(self, phone):
+        deadline = time.monotonic() + self.case.get("connection_timeout_s", 30)
+        path = self.output / next(log["path"] for log in reversed(self.logs) if log["device"] == phone)
+        while time.monotonic() < deadline:
+            self.check_cancelled()
+            text = path.read_text(encoding="utf-8")
+            if "selection-to-first-surface" in text:
+                return
+            if "FATAL EXCEPTION" in text:
+                raise RuntimeError(f"{phone}: application crashed during connection")
+            self.supervise_captures()
+            time.sleep(1)
+        # A lagging live stream (dump_log_lines) may have delivered the line while the dump ran.
+        dumped = self.dump_log_lines(phone)[0]
+        live = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        if "selection-to-first-surface" in live or any("selection-to-first-surface" in line for line in dumped):
+            return
+        reason = f"{phone}: no first surface within {self.case.get('connection_timeout_s', 30)}s connection timeout"
+        lost, streams = stage_sequence_gaps(live.splitlines() + dumped)
+        if lost:
+            # The first-surface line may simply be among the lost lines: device logging, not the
+            # app, is then unproven. Keep the timeout visible, but name the log loss.
+            reason += (f"; device log lost {lost} app stage records across {streams} stream(s), "
+                       "so the missing first surface is UNMEASURED log loss, not proof of no picture")
+            self.events.append({"device": phone, "action": "log_loss", "time": self.phone_time(phone),
+                                "missing_stage_records": lost, "streams": streams,
+                                "reason": "Stage record sequence gaps in the device log"})
+        self.events.append({"device": phone, "action": "connection_timeout", "time": self.phone_time(phone), "reason": reason})
+        raise RuntimeError(reason)
+
+    def wait_paused_connection(self, phone):
+        deadline = time.monotonic() + self.case.get("connection_timeout_s", 30)
+        parent = next(node["parent"] for node in self.case["receivers"] if node["phone"] == phone)
+        identity = (f"original={self.devices[self.case['source']]['node_prefix']} | "
+                    f"parent={self.devices[parent]['node_prefix']} |")
+        path = self.output / next(log["path"] for log in reversed(self.logs) if log["device"] == phone)
+        while time.monotonic() < deadline:
+            self.check_cancelled()
+            text = path.read_text(encoding="utf-8")
+            current_authentication = text.rpartition("Authenticated stream identity: ")[2]
+            if current_authentication.startswith(identity) and "Stream paused by broadcaster." in current_authentication:
+                self.events.append({"device": phone, "action": "authenticated_paused_join",
+                                    "time": self.phone_time(phone), "parent": parent})
+                return
+            if "FATAL EXCEPTION" in text:
+                raise RuntimeError(f"{phone}: application crashed during paused connection")
+            time.sleep(1)
+        reason = (f"{phone}: no authenticated paused state via {parent} within "
+                  f"{self.case.get('connection_timeout_s', 30)}s connection timeout")
+        self.events.append({"device": phone, "action": "paused_connection_timeout", "time": self.phone_time(phone), "reason": reason})
+        raise RuntimeError(reason)
+
+    @staticmethod
+    def beep():
+        if sys.platform == "win32":
+            for frequency in (1400, 900, 1400):
+                ctypes.windll.kernel32.Beep(frequency, 150)
+
+    def action(self, event):
+        phone, action = event["phone"], event["action"]
+        when = self.phone_time(phone)
+        self.events.append({"device": phone, "action": action, "time": when,
+                            "host_monotonic_ns": time.monotonic_ns()})
+        print(f"{phone}: planned {action}", flush=True)
+        if action in {"kill", "background", "pause"}:
+            self.active_intervals.setdefault((phone, action), {"device": phone, "start": when, "action": action})
+        if action == "kill":
+            parents = {item["phone"]: item["parent"] for item in self.case["receivers"]}
+            for child in sorted(parents):
+                ancestor = parents[child]
+                while ancestor is not None:
+                    if ancestor == phone:
+                        change = {"device": child, "action": "planned_parent_change",
+                                  "time": self.phone_time(child), "removed_ancestor": phone}
+                        self.topology_changes.append(change)
+                        self.pending_planned_losses[child] = change
+                        break
+                    ancestor = parents.get(ancestor)
+            self.adb(phone, "shell", "am", "force-stop", PACKAGE)
+            self.expected_stopped.add(phone)
+            next(log for log in reversed(self.logs) if log["device"] == phone)["end"] = self.phone_time(phone)
+        elif action == "restart_receiver":
+            self.launch(phone)
+            if (self.case["source"], "pause") in self.active_intervals:
+                self.wait_paused_connection(phone)
+            else:
+                self.wait_first_frame(phone)
+        elif action == "background":
+            self.adb(phone, "shell", "input", "keyevent", "KEYCODE_HOME")
+        elif action == "foreground":
+            self.adb(phone, "shell", "am", "start", "-n", COMPONENT)
+        else:
+            result = self.adb(phone, "shell", "am", "start", "-n", COMPONENT, "--es", "test_control", action)
+            # The application marker, not successful am-start, proves the action ran.
+            deadline = time.monotonic() + 5
+            acknowledged = False
+            while time.monotonic() < deadline:
+                self.check_cancelled()
+                marker = self.adb(phone, "logcat", "-d", f"--pid={self.pids[phone]}", "-T", when, "-s", "BluetoothVideo:I")
+                if f"BENCHMARK control {action} applied" in marker:
+                    acknowledged = True
+                    break
+                if f"BENCHMARK control {action} rejected" in marker:
+                    raise RuntimeError(f"{phone}: application explicitly rejected control {action}")
+                time.sleep(0.1)
+            if not acknowledged:
+                raise RuntimeError(f"{phone}: control {action} was not acknowledged: {result}")
+            if action == "end":
+                self.source_end_applied = True
+        closes = {"restart_receiver": "kill", "foreground": "background", "resume": "pause"}
+        key = (phone, closes.get(action))
+        if key in self.active_intervals:
+            interval = self.active_intervals.pop(key)
+            interval["end"] = self.phone_time(phone)
+            self.intervals.append(interval)
+
+    def health_check(self, phone):
+        if self.adb(phone, "get-state", timeout=15) != "device":
+            raise RuntimeError(f"{phone}: wireless debugging disconnected")
+        if phone in self.expected_stopped:
+            return
+        if self.adb(phone, "shell", "pidof", PACKAGE, timeout=5) != self.pids[phone]:
+            raise RuntimeError(f"{phone}: application exited or restarted unexpectedly")
+        log = next(log for log in reversed(self.logs) if log["device"] == phone)
+        index = self.logs.index(log)
+        self.supervise_captures()
+        if self.captures[index][0].poll() is not None:
+            raise RuntimeError(f"{phone}: log capture stopped unexpectedly")
+        lines = (self.output / log["path"]).read_text(encoding="utf-8", errors="replace").splitlines()
+        for line in lines[self.observed_lines.get(log["path"], 0):]:
+            planned_loss = self.pending_planned_losses.get(phone)
+            match = re.match(r"^(\d\d-\d\d \d\d:\d\d:\d\d\.\d+)", line)
+            since_loss = None
+            if planned_loss and match:
+                since_loss = (dt.datetime.strptime("2000-" + match[1], "%Y-%m-%d %H:%M:%S.%f") -
+                              dt.datetime.strptime("2000-" + planned_loss["time"], "%Y-%m-%d %H:%M:%S.%f")).total_seconds()
+                if since_loss >= 0 and "Receiver startup: selection-to-first-surface " in line:
+                    self.pending_planned_losses.pop(phone)
+                    planned_loss = None
+            if phone == self.case["source"] and "Deterministic IVF replay finished" in line:
+                raise RuntimeError(f"{phone}: replay exhausted before the measurement ended; not a Bluetooth freeze")
+            if re.search(r"Connection lost|Detached downstream child|parent withdrew|FATAL EXCEPTION|Fatal signal|Incoming GATT stream stopped:|BAD_DECRYPT", line):
+                planned = bool(planned_loss and since_loss is not None and
+                               0 <= since_loss <= self.case.get("connection_timeout_s", 30) and
+                               re.search(r"Connection lost|parent withdrew", line) and
+                               not re.search(r"FATAL EXCEPTION|Fatal signal", line))
+                event = {"device": phone, "message": line, "planned": planned}
+                if planned:
+                    event["removed_ancestor"] = planned_loss["removed_ancestor"]
+                    self.pending_planned_losses.pop(phone)
+                else:
+                    self.beep()
+                self.health_events.append(event)
+                print(f"{'EXPECTED' if planned else 'ALERT'}: {phone}: {line}", flush=True)
+        self.observed_lines[log["path"]] = len(lines)
+
+    def close_intervals(self, phone, when):
+        for key in [key for key in self.active_intervals if key[0] == phone]:
+            interval = self.active_intervals.pop(key)
+            interval["end"] = when
+            self.intervals.append(interval)
+
+    def run(self):
+        self.output.mkdir(parents=True, exist_ok=False)
+        manifest = {"schema_version": 1, "run_id": self.run_id, "scenario": self.case,
+                    "media_trace_session": self.trace_session,
+                    "expected_fps": self.case["profile"]["fps"],
+                    "expected_bitrate_kbps": self.case["profile"]["bitrate_kbps"],
+                    "expected_width": self.case["profile"]["width"], "expected_height": self.case["profile"]["height"],
+                    "optical_results": [], "source_kind": "raw_fixture_live_encoder" if self.case.get("raw_fixture_file") else
+                    "preencoded_video_only" if self.case.get("replay_file") else "live_camera"}
+        if self.raw_fixture:
+            manifest["source_fixture"] = self.raw_fixture
+        if self.replay_fixture:
+            manifest["replay_fixture"] = self.replay_fixture
+        if self.reference_audio:
+            manifest["reference_audio"] = self.reference_audio
+        if self.media_impairment:
+            manifest["media_impairment"] = self.media_impairment
+        try:
+            self.check_cancelled()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                manifest["devices"] = dict(zip(sorted(self.participants), executor.map(self.inventory, sorted(self.participants))))
+            if self.case.get("expected_apk_sha256") and any(
+                item["apk_sha256"].lower() != self.case["expected_apk_sha256"].lower() for item in manifest["devices"].values()
+            ):
+                raise RuntimeError("A participant does not have the required frozen APK hash")
+            self.launch(self.case["source"], source=True)
+            launched = {self.case["source"]}
+            pending = list(self.case["receivers"])
+            while pending:
+                self.check_cancelled()
+                node = next(item for item in pending if item["parent"] in launched)
+                self.launch(node["phone"])
+                self.wait_first_frame(node["phone"])
+                launched.add(node["phone"])
+                pending.remove(node)
+            start = time.monotonic()
+            events = iter(sorted(self.case.get("actions", []), key=lambda item: item["at_s"]))
+            next_event = next(events, None)
+            deadline = start + self.case.get("duration_s", 60)
+            last_health = start
+            while time.monotonic() < deadline:
+                self.check_cancelled()
+                if next_event and time.monotonic() - start >= next_event["at_s"]:
+                    self.action(next_event)
+                    next_event = next(events, None)
+                if time.monotonic() - last_health >= 3:
+                    for phone in sorted(self.participants):
+                        try:
+                            self.health_check(phone)
+                        except (RuntimeError, subprocess.TimeoutExpired) as error:
+                            self.beep()
+                            raise RuntimeError(f"{phone}: health check failed: {error}") from error
+                    last_health = time.monotonic()
+                time.sleep(0.25)
+            if next_event is not None:
+                raise RuntimeError(f"Scenario ended before action executed: {next_event}")
+            if self.case["source"] not in self.expected_stopped and not any(
+                event["action"] == "end" for event in self.case.get("actions", [])
+            ):
+                self.action({"phone": self.case["source"], "action": "end"})
+                time.sleep(2)
+        except Exception as error:
+            manifest["runner_error"] = str(error) or type(error).__name__
+            self.beep()
+            print(f"FAIL: {manifest['runner_error']}", flush=True)
+        finally:
+            source = self.case["source"]
+            if (manifest.get("runner_error") and source in self.pids and
+                    source not in self.expected_stopped and not self.source_end_applied):
+                try:
+                    if self.adb(source, "shell", "pidof", PACKAGE, timeout=5) != self.pids[source]:
+                        raise RuntimeError(f"{source}: owned source PID changed or missing; graceful End skipped")
+                    self.action({"phone": source, "action": "end"})
+                    time.sleep(2)
+                except Exception as error:
+                    manifest["trace_finalization_error"] = str(error)
+            if self.trace_session:
+                for phone in sorted(self.participants):
+                    self.collect_media_traces(phone, "sender" if phone == self.case["source"] else "receiver")
+            for phone in sorted(self.participants):
+                try:
+                    when = self.phone_time(phone)
+                    self.close_intervals(phone, when)
+                    for log in self.logs:
+                        if log["device"] == phone:
+                            log.setdefault("end", when)
+                except Exception:
+                    # An absent clock must stay absent, not be guessed from a different phone.
+                    pass
+            for process, handle in [*self.captures, *self.stack_captures]:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                handle.close()
+            self.restore_log_buffers()
+            for phone in sorted(self.participants):
+                self.graceful_stop(phone)
+            self.merge_device_logs()
+            manifest.update(logs=self.logs, planned_intervals=self.intervals, selection_events=self.events,
+                            health_events=self.health_events, topology_changes=self.topology_changes,
+                            media_traces=self.trace_artifacts, bluetooth_stack_logs=self.stack_logs,
+                            log_buffers=self.log_buffers)
+            (self.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        from score_device_run import score_manifest
+        score = score_manifest(manifest, self.output)
+        (self.output / "score.json").write_text(json.dumps(score, indent=2) + "\n", encoding="utf-8")
+        print(f"Objective score: {score['overall_status']}", flush=True)
+        return manifest
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--devices", type=Path, required=True)
+    parser.add_argument("--suite", type=Path, required=True)
+    parser.add_argument("--case", required=True)
+    parser.add_argument("--adb", default="adb")
+    parser.add_argument("--apk-sha256", help="Require this frozen APK on every participant before launch")
+    parser.add_argument("--output", type=Path, help="Explicit run-owned output directory; required for execution")
+    parser.add_argument("--plan", action="store_true", help="Validate without touching phones")
+    args = parser.parse_args()
+    if not args.plan and args.output is None:
+        parser.error("Execution requires --output with a run-owned directory")
+    if args.output is not None:
+        args.output = output_path(args.output, "runs")
+    args.devices, args.suite = resolve(args.devices), resolve(args.suite)
+    devices = json.loads(args.devices.read_text(encoding="utf-8"))["devices"]
+    cases = json.loads(args.suite.read_text(encoding="utf-8"))["cases"]
+    case = next((item for item in cases if item["id"] == args.case), None)
+    if case is None:
+        parser.error(f"Unknown scenario: {args.case}")
+    if args.apk_sha256:
+        case = {**case, "expected_apk_sha256": args.apk_sha256}
+    validate_case(case, devices)
+    if args.plan:
+        print(json.dumps(case, indent=2))
+        return
+    manifest = Runner(args.adb, devices, case, args.output).run()
+    print(f"Evidence: {args.output / 'manifest.json'}", flush=True)
+    if manifest.get("runner_error"):
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

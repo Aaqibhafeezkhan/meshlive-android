@@ -1,0 +1,47 @@
+# Android / Gradle / IDE
+*.iml
+.gradle/
+.kotlin/
+/build
+/app/build/
+/captures
+.externalNativeBuild/
+.cxx/
+local.properties
+/.idea/
+.DS_Store
+
+# Python and host tools
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+.pytest_cache/
+/.venv/
+*.egg-info/
+
+# C# receiver and file sender build outputs
+bin/
+obj/
+
+# Native third-party sources fetched by tools/fetch_native_sources.py
+/reference-repos/
+
+# Local-only material: your phone registry, session handoffs, assistant settings
+/tools/benchmark_devices.json
+/local/
+/.claude/
+
+# Benchmark evidence stays on your machine (raw captures, logs, APK builds, the case ledger).
+# Only the small examples below are part of the repository.
+/benchmarks/runs/
+/benchmarks/builds/
+/benchmarks/index.html
+/benchmarks/inputs/*
+# speech-v1 (openly licensed speech reference, attributed in THIRD_PARTY_NOTICES.md) is part of the repository
+!/benchmarks/inputs/speech-v1/
+/benchmarks/catalog/*
+!/benchmarks/catalog/capabilities/
+!/benchmarks/catalog/workflow-smoke/
+
+# Signed release outputs (tools/make_release.py)
+/release/

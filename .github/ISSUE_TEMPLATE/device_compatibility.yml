@@ -1,0 +1,54 @@
+name: Device compatibility report
+description: Tell us what worked on which phone pair (also welcome when everything worked).
+labels: ["device-compat", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports like this feed the device-family registry. Paste the diagnostics block from each phone
+        (About > Export diagnostics); it contains no media, messages, contact names or full identity keys.
+  - type: input
+    id: pair
+    attributes:
+      label: Phone A -> Phone B
+      description: Model and Android version of both phones (A is the sender / caller).
+      placeholder: "Samsung SM-S901B Android 14 -> Pixel 8 Android 15"
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: App version and signing fingerprint (About)
+    validations:
+      required: true
+  - type: checkboxes
+    id: worked
+    attributes:
+      label: Worked on this pair
+      description: Tick what worked for at least a few minutes.
+      options:
+        - label: Discovery (each phone saw the other)
+        - label: GATT broadcast and viewing
+        - label: LE CoC broadcast and viewing
+        - label: Classic RFCOMM broadcast and viewing
+        - label: Private call, audio both ways
+        - label: Private call, video both ways
+        - label: Forwarding to a third phone
+        - label: "Screen locked or app in background kept working"
+  - type: textarea
+    id: failed
+    attributes:
+      label: What did not work, or worked badly
+      description: "Per feature from the list above, what you saw and roughly when."
+  - type: textarea
+    id: diag_a
+    attributes:
+      label: Diagnostics block, phone A
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: diag_b
+    attributes:
+      label: Diagnostics block, phone B
+      render: text

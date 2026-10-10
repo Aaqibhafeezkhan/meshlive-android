@@ -1,0 +1,19 @@
+MeshLive sends live camera video and microphone audio between nearby Android phones over encrypted Bluetooth, with no internet connection, account or server. It is meant for places where the network is down, blocked or not trusted.
+
+<b>What it does</b>
+<ul>
+<li>Broadcast: stream your camera (VP9 or AV1 video with Opus audio) to a phone nearby; a viewer can pass the stream on to one more phone.</li>
+<li>Private calls: voice or video calls between two phones, started from a list of people nearby.</li>
+<li>Bluetooth only: media never uses Wi-Fi or mobile data. Choose between Bluetooth Classic, LE L2CAP and LE GATT links; LE GATT needs no pairing.</li>
+<li>Authenticated and encrypted: each phone has its own key; you can compare a QR verification code with the other person.</li>
+<li>No tracking, no ads, no analytics. The app needs no account and makes no internet connection for media.</li>
+</ul>
+
+<b>Permissions</b>
+Camera and Microphone (to capture), Nearby devices (to find and connect to phones), Notifications and foreground services (to keep a stream or call alive with the screen off). An experimental, off-by-default "Share app nearby" screen uses a local Wi-Fi Direct link, which is why the internet and Wi-Fi state permissions are declared; it never contacts the internet.
+
+<b>Status</b>
+This is an unofficial, experimental build. Video quality, delay and recovery depend heavily on the phone and its Bluetooth stack, and some combinations still fail; the project tracks them openly. Please use it for testing and feedback, not for situations where your safety depends on it.
+
+<b>Licence</b>
+Free software, GNU GPL version 3 or later.

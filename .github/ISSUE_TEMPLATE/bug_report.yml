@@ -1,0 +1,67 @@
+name: Bug report
+description: Something failed (connection, video, audio, crash, pairing).
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please paste the in-app diagnostics block (About > Export diagnostics). It contains no media, messages,
+        contact names or full identity keys. Do not attach photos, videos, recordings or screenshots of other people.
+        Security problems (authentication, encryption, key handling): do not post details here. Report them
+        privately through GitHub Security Advisories (the repository's Security tab, "Report a vulnerability");
+        see SECURITY.md.
+  - type: input
+    id: device
+    attributes:
+      label: Phone model(s)
+      description: Both phones if it involves two (for example "Samsung S24 -> Pixel 8").
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android version and security patch
+      placeholder: "14, patch 2025-09-01"
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: App version and signing fingerprint
+      description: From About. The fingerprint should match the one in the release notes; if it does not, say so.
+      placeholder: "1.0 (1), 2E:EF:C0:5A:..."
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options: ["GATT (default)", "LE L2CAP CoC", "Classic RFCOMM", "Not sure", "Several / switched"]
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: What were you doing
+      options: ["Broadcast", "Viewing a broadcast", "Forwarding a broadcast", "Private call", "Pairing / discovery", "Other"]
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened, and what did you expect
+      description: Include how far apart the phones were, whether either screen was locked, and whether Wi-Fi was on.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / how often
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics block
+      description: Paste everything from "=== BLUETOOTH-VIDEO DIAGNOSTICS v1 ===" to "=== END ... ===".
+      render: text
+    validations:
+      required: true

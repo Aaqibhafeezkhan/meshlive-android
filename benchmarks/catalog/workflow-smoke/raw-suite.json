@@ -1,0 +1,600 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "source": "s24",
+      "receivers": [
+        {
+          "phone": "m31",
+          "parent": "s24"
+        }
+      ],
+      "transport": "classic",
+      "profile": {
+        "codec": "c2.exynos.vp9.encoder",
+        "width": 640,
+        "height": 360,
+        "fps": 15,
+        "bitrate_kbps": 500,
+        "rate_control": "automatic",
+        "playback": "balanced",
+        "thermal_reduction": false
+      },
+      "duration_s": 12,
+      "connection_timeout_s": 20,
+      "audio_enabled": true,
+      "media_trace": true,
+      "video_presentation_timing": true,
+      "workflow_only": true,
+      "actions": [
+        {
+          "phone": "s24",
+          "action": "pause",
+          "at_s": 3
+        },
+        {
+          "phone": "s24",
+          "action": "resume",
+          "at_s": 5
+        }
+      ],
+      "id": "raw-210e094d32849d6b949256b5",
+      "state": "NOT RUN",
+      "environment": "Native raw input bound offline; actual execution and radio environment UNMEASURED",
+      "eligibility": "Bound file hashes/declarations verified; live readiness, sustained load and quality unmeasured",
+      "raw_fixture_file": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+      "raw_fixture_sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+      "raw_fixture_metadata": {
+        "width": 640,
+        "height": 360,
+        "fps": 15,
+        "format": "I420",
+        "bit_depth": 8,
+        "frame_count": 180,
+        "color": {
+          "range": "limited",
+          "primaries": "bt709",
+          "matrix": "bt709",
+          "transfer": "bt709",
+          "chroma_location": "center"
+        },
+        "variant_id": "7b004e4b77b2cac9655b1fff0eb15d91ebb2f00e140c2a0edbd533d6279ce920",
+        "sidecars": {
+          "reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+            "sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+            "bytes": 62208000
+          },
+          "unmarked_reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/unmarked.i420",
+            "sha256": "01e18f681455b96343567a0acc7cf3ae190763225880794e585a5ed023da2d2f",
+            "bytes": 62208000
+          },
+          "frames": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/frames.csv",
+            "sha256": "7b413d9b2cb1f0ef131b68e6061b04e5ad67cc014b5b63ef73e5782dae141152",
+            "bytes": 82037
+          },
+          "events": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/events.json",
+            "sha256": "65c967531a5edf81a26de73f2f9066142a9a3aaa5ed1bda15c9a9bf08423b8a9",
+            "bytes": 7996
+          },
+          "marker_layout": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/marker-layout.json",
+            "sha256": "97c25504f83add48eb59b4f916a6cf64976f9454b340bb4ea0904d5133cb294a",
+            "bytes": 3821
+          },
+          "provenance": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/provenance.json",
+            "sha256": "d076564641cf61999df1e5214df709d58a1fdc0cbd8bf7d69bb40d8236acba4c",
+            "bytes": 27422
+          },
+          "measurements": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/metrics.csv",
+            "sha256": "1e0a1cdb40bb6860516d3f0026dee660843553939371c8d3f18d2ad0dd01f42d",
+            "bytes": 18272
+          },
+          "report": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/report.json",
+            "sha256": "b14df8c32345330b0baf89a9f7fad8f20635aa2065c3a2d9bcd689c705141685",
+            "bytes": 5472
+          },
+          "reference_audio": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+            "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e",
+            "bytes": 1152044
+          },
+          "calibration_reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.rgb24",
+            "sha256": "6baee79bf6862f3ace84775cec585a9646d8bc50a51e5cb515d16e3542d21838",
+            "bytes": 691200
+          },
+          "calibration": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.json",
+            "sha256": "237f70c1d37ed7e49cf430f2de02955795ecf885970aec5ac581d50cdd0b3eb2",
+            "bytes": 4006
+          }
+        },
+        "bytes": 62208000
+      },
+      "reference_audio": {
+        "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+        "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e"
+      }
+    },
+    {
+      "source": "m31",
+      "receivers": [
+        {
+          "phone": "asus",
+          "parent": "m31"
+        }
+      ],
+      "transport": "classic",
+      "profile": {
+        "codec": "OMX.Exynos.VP9.Encoder",
+        "width": 640,
+        "height": 360,
+        "fps": 15,
+        "bitrate_kbps": 500,
+        "rate_control": "automatic",
+        "playback": "balanced",
+        "thermal_reduction": false
+      },
+      "duration_s": 12,
+      "connection_timeout_s": 20,
+      "audio_enabled": true,
+      "media_trace": true,
+      "video_presentation_timing": true,
+      "workflow_only": true,
+      "actions": [
+        {
+          "phone": "m31",
+          "action": "pause",
+          "at_s": 3
+        },
+        {
+          "phone": "m31",
+          "action": "resume",
+          "at_s": 5
+        }
+      ],
+      "id": "raw-39d8bae807de6dcbbafae6c1",
+      "state": "NOT RUN",
+      "environment": "Native raw input bound offline; actual execution and radio environment UNMEASURED",
+      "eligibility": "Bound file hashes/declarations verified; live readiness, sustained load and quality unmeasured",
+      "raw_fixture_file": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+      "raw_fixture_sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+      "raw_fixture_metadata": {
+        "width": 640,
+        "height": 360,
+        "fps": 15,
+        "format": "I420",
+        "bit_depth": 8,
+        "frame_count": 180,
+        "color": {
+          "range": "limited",
+          "primaries": "bt709",
+          "matrix": "bt709",
+          "transfer": "bt709",
+          "chroma_location": "center"
+        },
+        "variant_id": "7b004e4b77b2cac9655b1fff0eb15d91ebb2f00e140c2a0edbd533d6279ce920",
+        "sidecars": {
+          "reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+            "sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+            "bytes": 62208000
+          },
+          "unmarked_reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/unmarked.i420",
+            "sha256": "01e18f681455b96343567a0acc7cf3ae190763225880794e585a5ed023da2d2f",
+            "bytes": 62208000
+          },
+          "frames": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/frames.csv",
+            "sha256": "7b413d9b2cb1f0ef131b68e6061b04e5ad67cc014b5b63ef73e5782dae141152",
+            "bytes": 82037
+          },
+          "events": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/events.json",
+            "sha256": "65c967531a5edf81a26de73f2f9066142a9a3aaa5ed1bda15c9a9bf08423b8a9",
+            "bytes": 7996
+          },
+          "marker_layout": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/marker-layout.json",
+            "sha256": "97c25504f83add48eb59b4f916a6cf64976f9454b340bb4ea0904d5133cb294a",
+            "bytes": 3821
+          },
+          "provenance": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/provenance.json",
+            "sha256": "d076564641cf61999df1e5214df709d58a1fdc0cbd8bf7d69bb40d8236acba4c",
+            "bytes": 27422
+          },
+          "measurements": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/metrics.csv",
+            "sha256": "1e0a1cdb40bb6860516d3f0026dee660843553939371c8d3f18d2ad0dd01f42d",
+            "bytes": 18272
+          },
+          "report": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/report.json",
+            "sha256": "b14df8c32345330b0baf89a9f7fad8f20635aa2065c3a2d9bcd689c705141685",
+            "bytes": 5472
+          },
+          "reference_audio": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+            "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e",
+            "bytes": 1152044
+          },
+          "calibration_reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.rgb24",
+            "sha256": "6baee79bf6862f3ace84775cec585a9646d8bc50a51e5cb515d16e3542d21838",
+            "bytes": 691200
+          },
+          "calibration": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.json",
+            "sha256": "237f70c1d37ed7e49cf430f2de02955795ecf885970aec5ac581d50cdd0b3eb2",
+            "bytes": 4006
+          }
+        },
+        "bytes": 62208000
+      },
+      "reference_audio": {
+        "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+        "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e"
+      }
+    },
+    {
+      "source": "asus",
+      "receivers": [
+        {
+          "phone": "s24",
+          "parent": "asus"
+        }
+      ],
+      "transport": "classic",
+      "profile": {
+        "codec": "c2.android.vp9.encoder",
+        "width": 640,
+        "height": 480,
+        "fps": 15,
+        "bitrate_kbps": 500,
+        "rate_control": "automatic",
+        "playback": "balanced",
+        "thermal_reduction": false
+      },
+      "duration_s": 12,
+      "connection_timeout_s": 20,
+      "audio_enabled": true,
+      "media_trace": true,
+      "video_presentation_timing": true,
+      "workflow_only": true,
+      "actions": [
+        {
+          "phone": "asus",
+          "action": "pause",
+          "at_s": 3
+        },
+        {
+          "phone": "asus",
+          "action": "resume",
+          "at_s": 5
+        }
+      ],
+      "id": "raw-916341f48669ee14f7ebea3a",
+      "state": "NOT RUN",
+      "environment": "Native raw input bound offline; actual execution and radio environment UNMEASURED",
+      "eligibility": "Bound file hashes/declarations verified; live readiness, sustained load and quality unmeasured",
+      "raw_fixture_file": "benchmarks/inputs/framing-640x480-15/640x480-15fps/source.i420",
+      "raw_fixture_sha256": "9cf39a02eef61301748fa7156c156a5554d72cc3201900459cd038062c915dfe",
+      "raw_fixture_metadata": {
+        "width": 640,
+        "height": 480,
+        "fps": 15,
+        "format": "I420",
+        "bit_depth": 8,
+        "frame_count": 180,
+        "color": {
+          "range": "limited",
+          "primaries": "bt709",
+          "matrix": "bt709",
+          "transfer": "bt709",
+          "chroma_location": "center"
+        },
+        "variant_id": "18a0f673f321399304bb60f79f43ff52bb4788a761f9b0d66f7b70212ee574f4",
+        "sidecars": {
+          "reference": {
+            "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/source.i420",
+            "sha256": "9cf39a02eef61301748fa7156c156a5554d72cc3201900459cd038062c915dfe",
+            "bytes": 82944000
+          },
+          "unmarked_reference": {
+            "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/unmarked.i420",
+            "sha256": "c658feb05dfd2869b0618175b42b87df254df291fc1ae27426f69595d42d6777",
+            "bytes": 82944000
+          },
+          "frames": {
+            "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/frames.csv",
+            "sha256": "8d95302fca4cb7fd3242c6836d016153eb24b16bc8fef18c881fb01ac3f60c1a",
+            "bytes": 82037
+          },
+          "events": {
+            "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/events.json",
+            "sha256": "9f055a3b5b9ea19ca2be77523c5e1e279bd67873162ca83373148c53c7b8039d",
+            "bytes": 7996
+          },
+          "marker_layout": {
+            "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/marker-layout.json",
+            "sha256": "c775867d1b654dd90143697d331f64ec2df26cbd3b3c7fb5da2f625b72e37468",
+            "bytes": 3820
+          },
+          "provenance": {
+            "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/provenance.json",
+            "sha256": "fcfaf1bac8de672c1361d9303dba71d457dc21e5da7e2a05588455242e0dd37f",
+            "bytes": 27422
+          },
+          "measurements": {
+            "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/metrics.csv",
+            "sha256": "43e54b81ea8ed6b2e134b6c9a605310b25c9e79377cb0d7ddba4b9d79229a0bd",
+            "bytes": 18091
+          },
+          "report": {
+            "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/report.json",
+            "sha256": "059bcab0453c9ce3828923449daad92bafc1cdd389781ea64c00753a51968a83",
+            "bytes": 5464
+          },
+          "reference_audio": {
+            "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/reference_audio.wav",
+            "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e",
+            "bytes": 1152044
+          },
+          "calibration_reference": {
+            "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/calibration.rgb24",
+            "sha256": "620751cfd607bde82f8a9c94886dcaf019bebc7d05b221d5fe8e1e64b4ef0137",
+            "bytes": 921600
+          },
+          "calibration": {
+            "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/calibration.json",
+            "sha256": "04a8e5d6d44877eb639c5c06dfa4c0b85093336b2d67224ac722f2e43b41cf36",
+            "bytes": 4006
+          }
+        },
+        "bytes": 82944000
+      },
+      "reference_audio": {
+        "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/reference_audio.wav",
+        "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e"
+      }
+    },
+    {
+      "caller": "s24",
+      "callee": "asus",
+      "profiles": {
+        "s24": {
+          "codec": "c2.exynos.vp9.encoder",
+          "width": 640,
+          "height": 360,
+          "fps": 15,
+          "bitrate_kbps": 500,
+          "rate_control": "automatic",
+          "playback": "balanced",
+          "thermal_reduction": false
+        },
+        "asus": {
+          "codec": "c2.android.vp9.encoder",
+          "width": 640,
+          "height": 480,
+          "fps": 15,
+          "bitrate_kbps": 500,
+          "rate_control": "automatic",
+          "playback": "balanced",
+          "thermal_reduction": false
+        }
+      },
+      "transport": "classic",
+      "duration_s": 16,
+      "connection_timeout_s": 20,
+      "media_trace": true,
+      "call_pipeline_timing": true,
+      "workflow_only": true,
+      "actions": [
+        {
+          "phone": "s24",
+          "action": "mute",
+          "at_s": 3
+        },
+        {
+          "phone": "s24",
+          "action": "unmute",
+          "at_s": 5
+        },
+        {
+          "phone": "asus",
+          "action": "video_off",
+          "at_s": 7
+        },
+        {
+          "phone": "asus",
+          "action": "video_on",
+          "at_s": 9
+        }
+      ],
+      "id": "raw-e632e8c4780de1608caadbb7",
+      "state": "NOT RUN",
+      "environment": "Native raw input bound offline; actual execution and radio environment UNMEASURED",
+      "eligibility": "Bound file hashes/declarations verified; live readiness, sustained load and quality unmeasured",
+      "raw_fixture_files": {
+        "s24": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+        "asus": "benchmarks/inputs/framing-640x480-15/640x480-15fps/source.i420"
+      },
+      "raw_fixture_sha256s": {
+        "s24": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+        "asus": "9cf39a02eef61301748fa7156c156a5554d72cc3201900459cd038062c915dfe"
+      },
+      "raw_fixture_metadatas": {
+        "s24": {
+          "width": 640,
+          "height": 360,
+          "fps": 15,
+          "format": "I420",
+          "bit_depth": 8,
+          "frame_count": 180,
+          "color": {
+            "range": "limited",
+            "primaries": "bt709",
+            "matrix": "bt709",
+            "transfer": "bt709",
+            "chroma_location": "center"
+          },
+          "variant_id": "7b004e4b77b2cac9655b1fff0eb15d91ebb2f00e140c2a0edbd533d6279ce920",
+          "sidecars": {
+            "reference": {
+              "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+              "sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+              "bytes": 62208000
+            },
+            "unmarked_reference": {
+              "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/unmarked.i420",
+              "sha256": "01e18f681455b96343567a0acc7cf3ae190763225880794e585a5ed023da2d2f",
+              "bytes": 62208000
+            },
+            "frames": {
+              "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/frames.csv",
+              "sha256": "7b413d9b2cb1f0ef131b68e6061b04e5ad67cc014b5b63ef73e5782dae141152",
+              "bytes": 82037
+            },
+            "events": {
+              "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/events.json",
+              "sha256": "65c967531a5edf81a26de73f2f9066142a9a3aaa5ed1bda15c9a9bf08423b8a9",
+              "bytes": 7996
+            },
+            "marker_layout": {
+              "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/marker-layout.json",
+              "sha256": "97c25504f83add48eb59b4f916a6cf64976f9454b340bb4ea0904d5133cb294a",
+              "bytes": 3821
+            },
+            "provenance": {
+              "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/provenance.json",
+              "sha256": "d076564641cf61999df1e5214df709d58a1fdc0cbd8bf7d69bb40d8236acba4c",
+              "bytes": 27422
+            },
+            "measurements": {
+              "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/metrics.csv",
+              "sha256": "1e0a1cdb40bb6860516d3f0026dee660843553939371c8d3f18d2ad0dd01f42d",
+              "bytes": 18272
+            },
+            "report": {
+              "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/report.json",
+              "sha256": "b14df8c32345330b0baf89a9f7fad8f20635aa2065c3a2d9bcd689c705141685",
+              "bytes": 5472
+            },
+            "reference_audio": {
+              "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+              "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e",
+              "bytes": 1152044
+            },
+            "calibration_reference": {
+              "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.rgb24",
+              "sha256": "6baee79bf6862f3ace84775cec585a9646d8bc50a51e5cb515d16e3542d21838",
+              "bytes": 691200
+            },
+            "calibration": {
+              "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.json",
+              "sha256": "237f70c1d37ed7e49cf430f2de02955795ecf885970aec5ac581d50cdd0b3eb2",
+              "bytes": 4006
+            }
+          },
+          "bytes": 62208000
+        },
+        "asus": {
+          "width": 640,
+          "height": 480,
+          "fps": 15,
+          "format": "I420",
+          "bit_depth": 8,
+          "frame_count": 180,
+          "color": {
+            "range": "limited",
+            "primaries": "bt709",
+            "matrix": "bt709",
+            "transfer": "bt709",
+            "chroma_location": "center"
+          },
+          "variant_id": "18a0f673f321399304bb60f79f43ff52bb4788a761f9b0d66f7b70212ee574f4",
+          "sidecars": {
+            "reference": {
+              "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/source.i420",
+              "sha256": "9cf39a02eef61301748fa7156c156a5554d72cc3201900459cd038062c915dfe",
+              "bytes": 82944000
+            },
+            "unmarked_reference": {
+              "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/unmarked.i420",
+              "sha256": "c658feb05dfd2869b0618175b42b87df254df291fc1ae27426f69595d42d6777",
+              "bytes": 82944000
+            },
+            "frames": {
+              "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/frames.csv",
+              "sha256": "8d95302fca4cb7fd3242c6836d016153eb24b16bc8fef18c881fb01ac3f60c1a",
+              "bytes": 82037
+            },
+            "events": {
+              "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/events.json",
+              "sha256": "9f055a3b5b9ea19ca2be77523c5e1e279bd67873162ca83373148c53c7b8039d",
+              "bytes": 7996
+            },
+            "marker_layout": {
+              "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/marker-layout.json",
+              "sha256": "c775867d1b654dd90143697d331f64ec2df26cbd3b3c7fb5da2f625b72e37468",
+              "bytes": 3820
+            },
+            "provenance": {
+              "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/provenance.json",
+              "sha256": "fcfaf1bac8de672c1361d9303dba71d457dc21e5da7e2a05588455242e0dd37f",
+              "bytes": 27422
+            },
+            "measurements": {
+              "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/metrics.csv",
+              "sha256": "43e54b81ea8ed6b2e134b6c9a605310b25c9e79377cb0d7ddba4b9d79229a0bd",
+              "bytes": 18091
+            },
+            "report": {
+              "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/report.json",
+              "sha256": "059bcab0453c9ce3828923449daad92bafc1cdd389781ea64c00753a51968a83",
+              "bytes": 5464
+            },
+            "reference_audio": {
+              "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/reference_audio.wav",
+              "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e",
+              "bytes": 1152044
+            },
+            "calibration_reference": {
+              "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/calibration.rgb24",
+              "sha256": "620751cfd607bde82f8a9c94886dcaf019bebc7d05b221d5fe8e1e64b4ef0137",
+              "bytes": 921600
+            },
+            "calibration": {
+              "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/calibration.json",
+              "sha256": "04a8e5d6d44877eb639c5c06dfa4c0b85093336b2d67224ac722f2e43b41cf36",
+              "bytes": 4006
+            }
+          },
+          "bytes": 82944000
+        }
+      },
+      "reference_audios": {
+        "s24": {
+          "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+          "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e"
+        },
+        "asus": {
+          "path": "benchmarks/inputs/framing-640x480-15/640x480-15fps/reference_audio.wav",
+          "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e"
+        }
+      }
+    }
+  ],
+  "source_suites": {
+    "benchmarks/catalog/workflow-smoke-template.json": "d6136dc5e0893fc0702afbac490c2ffe3d27b313ffc01ddd8e53d0daf818bbe5"
+  }
+}

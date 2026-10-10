@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "seed": 20261005,
+  "modes": ["720x480@30"],
+  "reference_mode": "native",
+  "lossless": false,
+  "audio": {"enabled": true, "events": [
+    {"id": "sustained_audio", "seconds": 10, "role": "workload", "kind": "noise", "duration_samples": 1920000, "amplitude": 0.12, "seed": 20261005}
+  ]},
+  "cues": {"interval_seconds": 3, "on_frames": 2, "duration_samples": 4800},
+  "timeline": [{
+    "id": "competing_regions",
+    "seconds": 60,
+    "grid": [2, 2],
+    "panels": [
+      {"id": "native_detail", "pattern": "native_checkerboard", "seed": 11, "params": {"cell": 1}},
+      {"id": "independent_motion", "pattern": "crossing_objects", "seed": 23, "params": {"speed": 1.3}},
+      {"id": "complex_texture", "pattern": "turbulent_clouds", "seed": 37, "params": {"density": 2, "detail": 2, "speed": 1.2}},
+      {"id": "entropy_motion", "pattern": "noise_tracks", "seed": 53}
+    ]
+  }]
+}

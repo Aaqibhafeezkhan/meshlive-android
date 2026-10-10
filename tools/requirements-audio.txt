@@ -1,0 +1,6 @@
+# Optional host dependencies for tools/build_speech_reference.py and tools/score_audio_quality.py.
+# soundfile decodes the cached FLAC sources; pystoi (STOI/ESTOI) is a documented quality metric because no reproducible
+# Windows ViSQOL build exists. numpy/scipy come from requirements-measurements.txt.
+# PESQ is NOT included here because of its licence; see requirements-audio-pesq.txt (opt-in).
+soundfile>=0.13,<1
+pystoi==0.4.1

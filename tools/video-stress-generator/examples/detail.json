@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "seed": 123,
+  "modes": ["82x82@11"],
+  "lossless": true,
+  "marker": {"enabled": false, "cell_size": 2},
+  "audio": {"enabled": false},
+  "timeline": [
+    {"id": "one-pixel", "pattern": "native_checkerboard", "frames": 3, "params": {"cell": 1}},
+    {"id": "two-pixel", "pattern": "native_checkerboard", "frames": 3, "params": {"cell": 2}}
+  ]
+}

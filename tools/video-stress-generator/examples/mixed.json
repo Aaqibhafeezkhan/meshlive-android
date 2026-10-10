@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "seed": 20261004,
+  "modes": ["160x96@5", "176x144@7"],
+  "lossless": true,
+  "marker": {"enabled": true, "cell_size": 2},
+  "timeline": [
+    {"id": "calibration", "pattern": "color_bars", "frames": 4},
+    {"id": "native-detail", "pattern": "native_checkerboard", "frames": 4, "repeat": 2, "params": {"cell": 1}},
+    {"id": "clouds", "pattern": "turbulent_clouds", "frames": 6, "params": {"density": 1.4, "detail": 1.8, "speed": 1.2, "entropy": 0.6}},
+    {"id": "particles", "pattern": "confetti", "frames": 6, "params": {"density": 1.5, "speed": 0.8}},
+    {"id": "cuts", "pattern": "hard_cuts", "frames": 8, "params": {"hold_frames": 2}},
+    {"id": "sync", "pattern": "visual_audio_sync", "frames": 8, "params": {"interval_frames": 3}},
+    {"id": "machine-track", "pattern": "machine_sync_track", "frames": 4}
+  ],
+  "audio": {
+    "enabled": true,
+    "amplitude": 0.35,
+    "originals": [{"sample_rate": 44100, "channels": 2}],
+    "events": [
+      {"id": "start-beep", "frame": 0, "kind": "beep", "duration_samples": 480},
+      {"id": "reference-sweep", "frame": 14, "kind": "sweep", "duration_samples": 4800, "frequency": 250, "end_frequency": 5500},
+      {"id": "seeded-noise", "frame": 20, "kind": "noise", "duration_samples": 2400, "seed": 42}
+    ]
+  }
+}

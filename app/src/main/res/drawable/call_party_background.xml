@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Calm dark gradient behind the caller card and the voice-call panel (same in light/dark mode). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:endColor="@color/call_ground_bottom"
+        android:startColor="@color/call_ground_top" />
+</shape>

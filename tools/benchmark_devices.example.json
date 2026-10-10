@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "_comment": "Example registry. Copy to tools/benchmark_devices.json (git-ignored) and replace each serial with your phone's `adb devices` serial (USB serial or the adb-tls mDNS name for wireless debugging). node_prefix is the first 12 hex digits of the phone's MeshLive node ID (shown in the app and logged as 'BENCHMARK call available: node=...'); the values below are placeholders. Aliases must match tools/benchmark_scope.json and tools/device_policy_registry.json; add your own aliases for other phones.",
+  "devices": {
+    "asus": {
+      "serial": "<adb-serial-of-asus>",
+      "node_prefix": "a1b2c3d4e5f6"
+    },
+    "xiaomi": {
+      "serial": "<adb-serial-of-xiaomi>",
+      "node_prefix": "b0b1b2b3b4b5"
+    },
+    "m31": {
+      "serial": "<adb-serial-of-m31>",
+      "node_prefix": "9c8d7e6f5a40"
+    },
+    "s22": {
+      "serial": "<adb-serial-of-s22>",
+      "node_prefix": "c0c1c2c3c4c5"
+    },
+    "s24": {
+      "serial": "<adb-serial-of-s24>",
+      "node_prefix": "f0e1d2c3b4a5"
+    },
+    "a55": {
+      "serial": "<adb-serial-of-a55>",
+      "node_prefix": "d0d1d2d3d4d5"
+    },
+    "a15s": {
+      "serial": "<adb-serial-of-a15s>",
+      "node_prefix": "8a1b2c3d4e5f"
+    }
+  }
+}

@@ -1,0 +1,436 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "source": "s24",
+      "receivers": [
+        {
+          "phone": "m31",
+          "parent": "s24"
+        }
+      ],
+      "transport": "gatt",
+      "profile": {
+        "codec": "c2.exynos.vp9.encoder",
+        "width": 640,
+        "height": 360,
+        "fps": 15,
+        "bitrate_kbps": 500,
+        "rate_control": "automatic",
+        "playback": "balanced",
+        "thermal_reduction": false
+      },
+      "duration_s": 12,
+      "connection_timeout_s": 20,
+      "audio_enabled": true,
+      "media_trace": true,
+      "video_presentation_timing": true,
+      "workflow_only": true,
+      "actions": [
+        {
+          "phone": "s24",
+          "action": "pause",
+          "at_s": 3
+        },
+        {
+          "phone": "s24",
+          "action": "resume",
+          "at_s": 5
+        }
+      ],
+      "id": "raw-75d3ed6c1d58e0c00949a4ed",
+      "state": "NOT RUN",
+      "environment": "Native raw input bound offline; actual execution and radio environment UNMEASURED",
+      "eligibility": "Bound file hashes/declarations verified; live readiness, sustained load and quality unmeasured",
+      "raw_fixture_file": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+      "raw_fixture_sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+      "raw_fixture_metadata": {
+        "width": 640,
+        "height": 360,
+        "fps": 15,
+        "format": "I420",
+        "bit_depth": 8,
+        "frame_count": 180,
+        "color": {
+          "range": "limited",
+          "primaries": "bt709",
+          "matrix": "bt709",
+          "transfer": "bt709",
+          "chroma_location": "center"
+        },
+        "variant_id": "7b004e4b77b2cac9655b1fff0eb15d91ebb2f00e140c2a0edbd533d6279ce920",
+        "sidecars": {
+          "reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+            "sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+            "bytes": 62208000
+          },
+          "unmarked_reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/unmarked.i420",
+            "sha256": "01e18f681455b96343567a0acc7cf3ae190763225880794e585a5ed023da2d2f",
+            "bytes": 62208000
+          },
+          "frames": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/frames.csv",
+            "sha256": "7b413d9b2cb1f0ef131b68e6061b04e5ad67cc014b5b63ef73e5782dae141152",
+            "bytes": 82037
+          },
+          "events": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/events.json",
+            "sha256": "65c967531a5edf81a26de73f2f9066142a9a3aaa5ed1bda15c9a9bf08423b8a9",
+            "bytes": 7996
+          },
+          "marker_layout": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/marker-layout.json",
+            "sha256": "97c25504f83add48eb59b4f916a6cf64976f9454b340bb4ea0904d5133cb294a",
+            "bytes": 3821
+          },
+          "provenance": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/provenance.json",
+            "sha256": "d076564641cf61999df1e5214df709d58a1fdc0cbd8bf7d69bb40d8236acba4c",
+            "bytes": 27422
+          },
+          "measurements": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/metrics.csv",
+            "sha256": "1e0a1cdb40bb6860516d3f0026dee660843553939371c8d3f18d2ad0dd01f42d",
+            "bytes": 18272
+          },
+          "report": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/report.json",
+            "sha256": "b14df8c32345330b0baf89a9f7fad8f20635aa2065c3a2d9bcd689c705141685",
+            "bytes": 5472
+          },
+          "reference_audio": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+            "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e",
+            "bytes": 1152044
+          },
+          "calibration_reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.rgb24",
+            "sha256": "6baee79bf6862f3ace84775cec585a9646d8bc50a51e5cb515d16e3542d21838",
+            "bytes": 691200
+          },
+          "calibration": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.json",
+            "sha256": "237f70c1d37ed7e49cf430f2de02955795ecf885970aec5ac581d50cdd0b3eb2",
+            "bytes": 4006
+          }
+        },
+        "bytes": 62208000
+      },
+      "reference_audio": {
+        "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+        "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e"
+      }
+    },
+    {
+      "source": "m31",
+      "receivers": [
+        {
+          "phone": "asus",
+          "parent": "m31"
+        }
+      ],
+      "transport": "gatt",
+      "profile": {
+        "codec": "OMX.Exynos.VP9.Encoder",
+        "width": 640,
+        "height": 360,
+        "fps": 15,
+        "bitrate_kbps": 500,
+        "rate_control": "automatic",
+        "playback": "balanced",
+        "thermal_reduction": false
+      },
+      "duration_s": 12,
+      "connection_timeout_s": 20,
+      "audio_enabled": true,
+      "media_trace": true,
+      "video_presentation_timing": true,
+      "workflow_only": true,
+      "actions": [
+        {
+          "phone": "m31",
+          "action": "pause",
+          "at_s": 3
+        },
+        {
+          "phone": "m31",
+          "action": "resume",
+          "at_s": 5
+        }
+      ],
+      "id": "raw-76db74710fe85e9789429a01",
+      "state": "NOT RUN",
+      "environment": "Native raw input bound offline; actual execution and radio environment UNMEASURED",
+      "eligibility": "Bound file hashes/declarations verified; live readiness, sustained load and quality unmeasured",
+      "raw_fixture_file": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+      "raw_fixture_sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+      "raw_fixture_metadata": {
+        "width": 640,
+        "height": 360,
+        "fps": 15,
+        "format": "I420",
+        "bit_depth": 8,
+        "frame_count": 180,
+        "color": {
+          "range": "limited",
+          "primaries": "bt709",
+          "matrix": "bt709",
+          "transfer": "bt709",
+          "chroma_location": "center"
+        },
+        "variant_id": "7b004e4b77b2cac9655b1fff0eb15d91ebb2f00e140c2a0edbd533d6279ce920",
+        "sidecars": {
+          "reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+            "sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+            "bytes": 62208000
+          },
+          "unmarked_reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/unmarked.i420",
+            "sha256": "01e18f681455b96343567a0acc7cf3ae190763225880794e585a5ed023da2d2f",
+            "bytes": 62208000
+          },
+          "frames": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/frames.csv",
+            "sha256": "7b413d9b2cb1f0ef131b68e6061b04e5ad67cc014b5b63ef73e5782dae141152",
+            "bytes": 82037
+          },
+          "events": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/events.json",
+            "sha256": "65c967531a5edf81a26de73f2f9066142a9a3aaa5ed1bda15c9a9bf08423b8a9",
+            "bytes": 7996
+          },
+          "marker_layout": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/marker-layout.json",
+            "sha256": "97c25504f83add48eb59b4f916a6cf64976f9454b340bb4ea0904d5133cb294a",
+            "bytes": 3821
+          },
+          "provenance": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/provenance.json",
+            "sha256": "d076564641cf61999df1e5214df709d58a1fdc0cbd8bf7d69bb40d8236acba4c",
+            "bytes": 27422
+          },
+          "measurements": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/metrics.csv",
+            "sha256": "1e0a1cdb40bb6860516d3f0026dee660843553939371c8d3f18d2ad0dd01f42d",
+            "bytes": 18272
+          },
+          "report": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/report.json",
+            "sha256": "b14df8c32345330b0baf89a9f7fad8f20635aa2065c3a2d9bcd689c705141685",
+            "bytes": 5472
+          },
+          "reference_audio": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+            "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e",
+            "bytes": 1152044
+          },
+          "calibration_reference": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.rgb24",
+            "sha256": "6baee79bf6862f3ace84775cec585a9646d8bc50a51e5cb515d16e3542d21838",
+            "bytes": 691200
+          },
+          "calibration": {
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.json",
+            "sha256": "237f70c1d37ed7e49cf430f2de02955795ecf885970aec5ac581d50cdd0b3eb2",
+            "bytes": 4006
+          }
+        },
+        "bytes": 62208000
+      },
+      "reference_audio": {
+        "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+        "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e"
+      }
+    }
+  ],
+  "source_suites": {
+    "benchmarks/catalog/workflow-smoke/gatt-template.json": "df296e3c018127203e6e9d02510cd4e2617ccc8b9b6689a800d4af9091bc8469"
+  },
+  "input_binding": {
+    "schema": "benchmark-input-binding-v1",
+    "source_manifest": {
+      "path": "benchmarks/catalog/workflow-smoke/source-fixtures.json",
+      "sha256": "e8538da4b1fe904d105ae481e16e357fb72f8c357d4aa1da6bc86593ae5cbdb4"
+    },
+    "bindings": [
+      {
+        "original_case_id": "workflow-gatt-ffd84d6a524f55f2687dd0fb",
+        "original_request_key": "ffd84d6a524f55f2687dd0fb6dde8b786defdb99134c89fc6d635080c7714fd1",
+        "case_id": "raw-75d3ed6c1d58e0c00949a4ed",
+        "request_key": "75d3ed6c1d58e0c00949a4edeba6c5459b8eea27b89118777508c6a9618a04ae",
+        "source_suite": "benchmarks/catalog/workflow-smoke/gatt-template.json",
+        "source_suite_sha256": "df296e3c018127203e6e9d02510cd4e2617ccc8b9b6689a800d4af9091bc8469",
+        "source_inputs": {
+          "s24": {
+            "width": 640,
+            "height": 360,
+            "fps": 15,
+            "format": "I420",
+            "bit_depth": 8,
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+            "sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+            "frame_count": 180,
+            "color": {
+              "range": "limited",
+              "primaries": "bt709",
+              "matrix": "bt709",
+              "transfer": "bt709",
+              "chroma_location": "center"
+            },
+            "variant_id": "7b004e4b77b2cac9655b1fff0eb15d91ebb2f00e140c2a0edbd533d6279ce920",
+            "sidecars": {
+              "reference": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+                "sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+                "bytes": 62208000
+              },
+              "unmarked_reference": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/unmarked.i420",
+                "sha256": "01e18f681455b96343567a0acc7cf3ae190763225880794e585a5ed023da2d2f",
+                "bytes": 62208000
+              },
+              "frames": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/frames.csv",
+                "sha256": "7b413d9b2cb1f0ef131b68e6061b04e5ad67cc014b5b63ef73e5782dae141152",
+                "bytes": 82037
+              },
+              "events": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/events.json",
+                "sha256": "65c967531a5edf81a26de73f2f9066142a9a3aaa5ed1bda15c9a9bf08423b8a9",
+                "bytes": 7996
+              },
+              "marker_layout": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/marker-layout.json",
+                "sha256": "97c25504f83add48eb59b4f916a6cf64976f9454b340bb4ea0904d5133cb294a",
+                "bytes": 3821
+              },
+              "provenance": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/provenance.json",
+                "sha256": "d076564641cf61999df1e5214df709d58a1fdc0cbd8bf7d69bb40d8236acba4c",
+                "bytes": 27422
+              },
+              "measurements": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/metrics.csv",
+                "sha256": "1e0a1cdb40bb6860516d3f0026dee660843553939371c8d3f18d2ad0dd01f42d",
+                "bytes": 18272
+              },
+              "report": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/report.json",
+                "sha256": "b14df8c32345330b0baf89a9f7fad8f20635aa2065c3a2d9bcd689c705141685",
+                "bytes": 5472
+              },
+              "reference_audio": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+                "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e",
+                "bytes": 1152044
+              },
+              "calibration_reference": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.rgb24",
+                "sha256": "6baee79bf6862f3ace84775cec585a9646d8bc50a51e5cb515d16e3542d21838",
+                "bytes": 691200
+              },
+              "calibration": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.json",
+                "sha256": "237f70c1d37ed7e49cf430f2de02955795ecf885970aec5ac581d50cdd0b3eb2",
+                "bytes": 4006
+              }
+            },
+            "bytes": 62208000
+          }
+        },
+        "state": "NOT RUN"
+      },
+      {
+        "original_case_id": "workflow-gatt-b7317c0e2817bdb2b88209e7",
+        "original_request_key": "b7317c0e2817bdb2b88209e7698bfe8ffca9bf1bdbc4c4c851b0aa8d2f0a1456",
+        "case_id": "raw-76db74710fe85e9789429a01",
+        "request_key": "76db74710fe85e9789429a0151413fd771e016ae9372143551a7e2e90cd4167f",
+        "source_suite": "benchmarks/catalog/workflow-smoke/gatt-template.json",
+        "source_suite_sha256": "df296e3c018127203e6e9d02510cd4e2617ccc8b9b6689a800d4af9091bc8469",
+        "source_inputs": {
+          "m31": {
+            "width": 640,
+            "height": 360,
+            "fps": 15,
+            "format": "I420",
+            "bit_depth": 8,
+            "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+            "sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+            "frame_count": 180,
+            "color": {
+              "range": "limited",
+              "primaries": "bt709",
+              "matrix": "bt709",
+              "transfer": "bt709",
+              "chroma_location": "center"
+            },
+            "variant_id": "7b004e4b77b2cac9655b1fff0eb15d91ebb2f00e140c2a0edbd533d6279ce920",
+            "sidecars": {
+              "reference": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/source.i420",
+                "sha256": "243a0d4cabb413e3061e38e4659eb16a3743d938ff2d76178e1935bda840f9d3",
+                "bytes": 62208000
+              },
+              "unmarked_reference": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/unmarked.i420",
+                "sha256": "01e18f681455b96343567a0acc7cf3ae190763225880794e585a5ed023da2d2f",
+                "bytes": 62208000
+              },
+              "frames": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/frames.csv",
+                "sha256": "7b413d9b2cb1f0ef131b68e6061b04e5ad67cc014b5b63ef73e5782dae141152",
+                "bytes": 82037
+              },
+              "events": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/events.json",
+                "sha256": "65c967531a5edf81a26de73f2f9066142a9a3aaa5ed1bda15c9a9bf08423b8a9",
+                "bytes": 7996
+              },
+              "marker_layout": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/marker-layout.json",
+                "sha256": "97c25504f83add48eb59b4f916a6cf64976f9454b340bb4ea0904d5133cb294a",
+                "bytes": 3821
+              },
+              "provenance": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/provenance.json",
+                "sha256": "d076564641cf61999df1e5214df709d58a1fdc0cbd8bf7d69bb40d8236acba4c",
+                "bytes": 27422
+              },
+              "measurements": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/metrics.csv",
+                "sha256": "1e0a1cdb40bb6860516d3f0026dee660843553939371c8d3f18d2ad0dd01f42d",
+                "bytes": 18272
+              },
+              "report": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/report.json",
+                "sha256": "b14df8c32345330b0baf89a9f7fad8f20635aa2065c3a2d9bcd689c705141685",
+                "bytes": 5472
+              },
+              "reference_audio": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/reference_audio.wav",
+                "sha256": "129216bdb207f4fa11ff69bc376f66ae0f7e93157f5bd19b2f9c7f41270a841e",
+                "bytes": 1152044
+              },
+              "calibration_reference": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.rgb24",
+                "sha256": "6baee79bf6862f3ace84775cec585a9646d8bc50a51e5cb515d16e3542d21838",
+                "bytes": 691200
+              },
+              "calibration": {
+                "path": "benchmarks/inputs/framing-640x360-15/640x360-15fps/calibration.json",
+                "sha256": "237f70c1d37ed7e49cf430f2de02955795ecf885970aec5ac581d50cdd0b3eb2",
+                "bytes": 4006
+              }
+            },
+            "bytes": 62208000
+          }
+        },
+        "state": "NOT RUN"
+      }
+    ],
+    "scope": "Existing exact native inputs verified through bind_benchmark_inputs.bind_jobs; no new pixels or conversions"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "required_phones": [
+    "s24",
+    "s22",
+    "m31",
+    "asus",
+    "xiaomi",
+    "a55"
+  ],
+  "registry": "tools/benchmark_devices.json",
+  "transports": [
+    "classic",
+    "ble",
+    "gatt"
+  ],
+  "duration_s": 90,
+  "lifecycle_duration_s": 120,
+  "settings_sweep": {
+    "duration_s": 45,
+    "pairs": [
+      [
+        "s24",
+        "s22"
+      ],
+      [
+        "s22",
+        "m31"
+      ],
+      [
+        "m31",
+        "asus"
+      ],
+      [
+        "asus",
+        "xiaomi"
+      ],
+      [
+        "xiaomi",
+        "a55"
+      ],
+      [
+        "a55",
+        "s24"
+      ]
+    ]
+  },
+  "retired_requirements": [],
+  "capabilities": {
+    "s24": "benchmarks/catalog/capabilities/s24.json",
+    "s22": "benchmarks/catalog/capabilities/s22.json",
+    "m31": "benchmarks/catalog/capabilities/m31-20261005.json",
+    "asus": "benchmarks/catalog/capabilities/asus.json",
+    "xiaomi": "benchmarks/catalog/capabilities/xiaomi.json",
+    "a55": "benchmarks/catalog/capabilities/a55.json",
+    "a15s": "benchmarks/catalog/capabilities/a15s.json"
+  },
+  "acceptance_profile": "device-run-v4-user"
+}

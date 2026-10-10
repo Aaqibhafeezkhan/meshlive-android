@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AppShare only: the copied APK in cache/app-share/. Keep this the provider's single path. -->
+<paths>
+    <cache-path name="app_share" path="app-share/" />
+</paths>

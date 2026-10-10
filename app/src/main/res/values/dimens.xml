@@ -1,0 +1,8 @@
+<resources>
+    <dimen name="screen_gutter">20dp</dimen>
+    <dimen name="card_radius">20dp</dimen>
+    <dimen name="card_padding">0dp</dimen>
+    <dimen name="key_radius">6dp</dimen>
+    <dimen name="key_min_height">112dp</dimen>
+    <dimen name="action_tile_height">128dp</dimen>
+</resources>

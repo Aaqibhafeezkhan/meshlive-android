@@ -1,0 +1,3631 @@
+{
+  "schema_version": 1,
+  "revision": "2026-10-10.6",
+  "generated_by": "app/src/test/java/com/example/bluetoothtest/DeviceFamilyPolicyTest.kt (run :app:testDebugUnitTest with DEVICE_POLICY_UPDATE=1 to rewrite); source of truth: app/src/main/java/com/example/bluetoothtest/DevicePolicyRegistry.kt",
+  "off_switch": "DEBUG launch extra test_device_policy_off=<id>[,<id>...] or all",
+  "entries": [
+    {
+      "id": "qcom-legacy-gatt-call",
+      "title": "Legacy Qualcomm GATT call profile",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 32,
+        "hardware": ["qcom"],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 32; Build.HARDWARE in [qcom]",
+      "component": null,
+      "effects": ["call video on GATT: <=426x240, <=15 FPS, <=150 kbps (not when the selected rate is preserved)", "call Opus 16 kbps on GATT", "batch call audio packets on GATT", "coalesce call media writes every 40 ms on GATT", "call codec VP9 (encode and advertised decode) on GATT"],
+      "behaviour": "GATT private calls send VP9 (not AV1) at <=426x240, <=15 FPS, <=150 kbps with Opus 16 kbps in paired records and 40 ms write coalescing, and advertise VP9-only decoding.",
+      "sources": [
+        {
+          "kind": "CDD",
+          "reference": "https://source.android.com/docs/compatibility/14/android-14-cdd",
+          "note": "5.3.7: VP9 decoding of the SD profiles is a MUST on every device (Android 10-16) while no VP9 encoder is required (5.2), so VP9 is the call codec every peer decodes; supports the VP9 choice, not the family limits"
+        }
+      ],
+      "source_status": "EVIDENCE_ONLY",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/three_phone_2026-10-01", "benchmarks/runs/three_phone_2026-10-02", "benchmarks/runs/tracing_2c59d214", "benchmarks/runs/20261003-024421-asus-m31-gatt-call-rawpan320240-vp9-smoke", "benchmarks/runs/calls-noloss-m31asus-51cc8028 (cost: CoC audio batch fill p50 380 ms, playout 500-800 ms)", "benchmarks/runs/bmaraw-ab-stream-9c121b30-m31asus-r1 (counter-evidence: the ASUS received native AV1 640x480 at 300-1000 kbps over CoC and GATT with 0 freezes, 14.3-14.8 FPS worst window, in 12 stream cases)"],
+      "confidence": "MEDIUM",
+      "confidence_note": "Historical ASUS (msmnile) and Redmi Note 9 Pro (atoll) call failures before pacing; no Qualcomm, ASUS or AOSP document names these limits. Counter-evidence is listed; the relief A/B is pending.",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=qcom-legacy-gatt-call",
+      "legacy_switches": ["test_call_legacy_relief=true (call paths only; every LEGACY_QUALCOMM_CALL entry)"],
+      "origin": "BluetoothStackCompatibility.legacyQualcommGattCallFlushIntervalMs (40 ms) and the legacyGatt branches of PrivateCallMedia.privateCallVideoSettings/AudioBitRate/pairPrivateCallAudioForRoute, VideoCodec.privateCallCodec, privateCallDecodeCodecMask"
+    },
+    {
+      "id": "qcom-legacy-coc-call",
+      "title": "Legacy Qualcomm LE CoC call profile",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 32,
+        "hardware": ["qcom"],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 32; Build.HARDWARE in [qcom]",
+      "component": null,
+      "effects": ["call video on CoC: <=426x240, <=20 FPS, <=160 kbps (not when the selected rate is preserved)", "advertise call max 160 kbps on CoC", "call Opus 16 kbps on CoC", "batch call audio packets on CoC", "coalesce call media writes every 20 ms on CoC", "constrained call playback profile on CoC"],
+      "behaviour": "CoC private calls cap video at <=426x240, <=20 FPS, <=160 kbps, advertise 160 kbps to the peer, send Opus 16 kbps in 20-packet records, coalesce writes every 20 ms and start with the constrained call buffer.",
+      "sources": [],
+      "source_status": "EVIDENCE_ONLY",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/three_phone_2026-10-01", "benchmarks/runs/three_phone_2026-10-02", "benchmarks/runs/tracing_2c59d214", "benchmarks/runs/20261003-024421-asus-m31-gatt-call-rawpan320240-vp9-smoke", "benchmarks/runs/calls-noloss-m31asus-51cc8028 (cost: CoC audio batch fill p50 380 ms, playout 500-800 ms)", "benchmarks/runs/bmaraw-ab-stream-9c121b30-m31asus-r1 (counter-evidence: the ASUS received native AV1 640x480 at 300-1000 kbps over CoC and GATT with 0 freezes, 14.3-14.8 FPS worst window, in 12 stream cases)"],
+      "confidence": "MEDIUM",
+      "confidence_note": "Historical ASUS (msmnile) and Redmi Note 9 Pro (atoll) call failures before pacing; no Qualcomm, ASUS or AOSP document names these limits. Counter-evidence is listed; the relief A/B is pending.",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=qcom-legacy-coc-call",
+      "legacy_switches": ["test_call_legacy_relief=true (call paths only; every LEGACY_QUALCOMM_CALL entry)"],
+      "origin": "PrivateCallMedia legacyCoc branches, privateCallCapabilityMaxBitrateKbps (CONSTRAINED_COC_BITRATE_KBPS), privateCallMediaFlushIntervalMs, privateCallPlaybackDelayProfile"
+    },
+    {
+      "id": "qcom-legacy-classic-call",
+      "title": "Legacy Qualcomm Classic call profile",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 32,
+        "hardware": ["qcom"],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 32; Build.HARDWARE in [qcom]",
+      "component": null,
+      "effects": ["call video on Classic: <=640x360, <=15 FPS, <=200 kbps (not when the selected rate is preserved)", "advertise call max 250 kbps on Classic", "call Opus 16 kbps on Classic", "batch call audio packets on Classic", "coalesce call media writes every 20 ms on Classic", "+8 call video decode-queue frames on Classic", "constrained call playback profile on Classic", "call codec VP9 (encode and advertised decode) on Classic"],
+      "behaviour": "Classic private calls send VP9 at <=640x360, <=15 FPS, <=200 kbps, advertise 250 kbps, send Opus 16 kbps in paired records, coalesce writes every 20 ms, add 8 decode-queue frames and start with the constrained call buffer.",
+      "sources": [
+        {
+          "kind": "CDD",
+          "reference": "https://source.android.com/docs/compatibility/14/android-14-cdd",
+          "note": "5.3.7: VP9 decoding of the SD profiles is a MUST on every device (Android 10-16) while no VP9 encoder is required (5.2), so VP9 is the call codec every peer decodes; supports the VP9 choice, not the family limits"
+        }
+      ],
+      "source_status": "EVIDENCE_ONLY",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/three_phone_2026-10-01", "benchmarks/runs/three_phone_2026-10-02", "benchmarks/runs/tracing_2c59d214", "benchmarks/runs/20261003-024421-asus-m31-gatt-call-rawpan320240-vp9-smoke", "benchmarks/runs/calls-noloss-m31asus-51cc8028 (cost: CoC audio batch fill p50 380 ms, playout 500-800 ms)", "benchmarks/runs/bmaraw-ab-stream-9c121b30-m31asus-r1 (counter-evidence: the ASUS received native AV1 640x480 at 300-1000 kbps over CoC and GATT with 0 freezes, 14.3-14.8 FPS worst window, in 12 stream cases)"],
+      "confidence": "MEDIUM",
+      "confidence_note": "Historical ASUS (msmnile) and Redmi Note 9 Pro (atoll) call failures before pacing; no Qualcomm, ASUS or AOSP document names these limits. Counter-evidence is listed; the relief A/B is pending.",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=qcom-legacy-classic-call",
+      "legacy_switches": ["test_call_legacy_relief=true (call paths only; every LEGACY_QUALCOMM_CALL entry)"],
+      "origin": "PrivateCallMedia legacyRfcomm branch (LEGACY_RFCOMM_SEND_BITRATE_KBPS 200, CONSTRAINED_RFCOMM_BITRATE_KBPS 250), privateCallVideoQueueCapacity"
+    },
+    {
+      "id": "qcom-msmnile-call",
+      "title": "Qualcomm msmnile (SM8150) call cap",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 32,
+        "hardware": ["qcom"],
+        "boards": ["msmnile"],
+        "board_prefixes": ["sm8150"],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 32; Build.HARDWARE in [qcom]; Build.BOARD in [msmnile] or prefix [sm8150]",
+      "component": null,
+      "effects": ["call video on all transports: <=426x240, <=15 FPS", "call video on Classic/CoC: <=110 kbps (not when the selected rate is preserved)", "advertise call max 110 kbps on Classic/CoC", "call codec VP9 (encode and advertised decode) on all transports"],
+      "behaviour": "On every transport calls use VP9 at <=426x240 and <=15 FPS; on CoC and Classic video is capped and advertised at 110 kbps (the 'ASUS legacy 426x240 cap').",
+      "sources": [
+        {
+          "kind": "CDD",
+          "reference": "https://source.android.com/docs/compatibility/14/android-14-cdd",
+          "note": "5.3.7: VP9 decoding of the SD profiles is a MUST on every device (Android 10-16) while no VP9 encoder is required (5.2), so VP9 is the call codec every peer decodes; supports the VP9 choice, not the family limits"
+        }
+      ],
+      "source_status": "EVIDENCE_ONLY",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/three_phone_2026-10-01", "benchmarks/runs/three_phone_2026-10-02", "benchmarks/runs/tracing_2c59d214", "benchmarks/runs/20261003-024421-asus-m31-gatt-call-rawpan320240-vp9-smoke", "benchmarks/runs/calls-noloss-m31asus-51cc8028 (cost: CoC audio batch fill p50 380 ms, playout 500-800 ms)", "benchmarks/runs/bmaraw-ab-stream-9c121b30-m31asus-r1 (counter-evidence: the ASUS received native AV1 640x480 at 300-1000 kbps over CoC and GATT with 0 freezes, 14.3-14.8 FPS worst window, in 12 stream cases)", "benchmarks/runs/media-workflow-7396b46e-call", "benchmarks/runs/calls-noloss-m31asus-51cc8028"],
+      "confidence": "MEDIUM",
+      "confidence_note": "Historical ASUS (msmnile) and Redmi Note 9 Pro (atoll) call failures before pacing; no Qualcomm, ASUS or AOSP document names these limits. Counter-evidence is listed; the relief A/B is pending.",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=qcom-msmnile-call",
+      "legacy_switches": ["test_call_legacy_relief=true (call paths only; every LEGACY_QUALCOMM_CALL entry)"],
+      "origin": "BluetoothStackCompatibility.isLegacyQualcommMsmnileStack; PrivateCallMedia legacyMsmnile and MSMNILE_COC_BITRATE_KBPS; VideoCodec.privateCallCodec CoC exception"
+    },
+    {
+      "id": "qcom-atoll-coc-call",
+      "title": "Qualcomm atoll (SM7125) CoC call cap",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 32,
+        "hardware": ["qcom"],
+        "boards": ["atoll", "curtana"],
+        "board_prefixes": ["sm7125"],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 32; Build.HARDWARE in [qcom]; Build.BOARD in [atoll, curtana] or prefix [sm7125]",
+      "component": null,
+      "effects": ["call video on CoC: <=15 FPS, <=110 kbps (not when the selected rate is preserved)"],
+      "behaviour": "CoC calls from this family send <=15 FPS and <=110 kbps (the peer is still told 160 kbps).",
+      "sources": [],
+      "source_status": "EVIDENCE_ONLY",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/three_phone_2026-10-01", "benchmarks/runs/three_phone_2026-10-02"],
+      "confidence": "LOW",
+      "confidence_note": "Historical ASUS (msmnile) and Redmi Note 9 Pro (atoll) call failures before pacing; no Qualcomm, ASUS or AOSP document names these limits. Counter-evidence is listed; the relief A/B is pending.",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=qcom-atoll-coc-call",
+      "legacy_switches": ["test_call_legacy_relief=true (call paths only; every LEGACY_QUALCOMM_CALL entry)"],
+      "origin": "BluetoothStackCompatibility.isLegacyQualcommAtollStack; PrivateCallMedia ATOLL_COC_SEND_BITRATE_KBPS"
+    },
+    {
+      "id": "qcom-legacy-call-vp9-software-decoder",
+      "title": "Legacy Qualcomm call VP9 software decoder",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 32,
+        "hardware": ["qcom"],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 32; Build.HARDWARE in [qcom]",
+      "component": null,
+      "effects": ["call VP9 decoder c2.android.vp9.decoder"],
+      "behaviour": "Incoming call VP9 is decoded by the AOSP software decoder c2.android.vp9.decoder (when it accepts the format) instead of the framework's first choice.",
+      "sources": [],
+      "source_status": "EVIDENCE_ONLY",
+      "area": "CODEC",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/20261003-024421-asus-m31-gatt-call-rawpan320240-vp9-smoke"],
+      "confidence": "LOW",
+      "confidence_note": "Historical ASUS (msmnile) and Redmi Note 9 Pro (atoll) call failures before pacing; no Qualcomm, ASUS or AOSP document names these limits. Counter-evidence is listed; the relief A/B is pending.",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=qcom-legacy-call-vp9-software-decoder",
+      "legacy_switches": ["test_call_legacy_relief=true (call paths only; every LEGACY_QUALCOMM_CALL entry)"],
+      "origin": "BluetoothStackCompatibility.privateCallPreferredDecoderName"
+    },
+    {
+      "id": "qcom-legacy-call-relay-gatt-acknowledged-writes",
+      "title": "Legacy Qualcomm call-relay GATT writes with response",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 32,
+        "hardware": ["qcom"],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 32; Build.HARDWARE in [qcom]",
+      "component": null,
+      "effects": ["call relay GATT writes with response, paced at 24 KB/s"],
+      "behaviour": "The hidden one-hop call relay opens its downstream GATT link with acknowledged writes paced at 24 KB/s.",
+      "sources": [],
+      "source_status": "EVIDENCE_ONLY",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "EXPERIMENTAL",
+      "fallback": "",
+      "evidence": ["none located: the rule predates the git history and no retained run has a legacy-Qualcomm call relay"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=qcom-legacy-call-relay-gatt-acknowledged-writes",
+      "legacy_switches": [],
+      "origin": "BluetoothPrivateCallRelay: legacyQualcommGattCallFlushIntervalMs(...) > 0 as acknowledgedWrites"
+    },
+    {
+      "id": "qcom-msmnile-classic-source-balanced-scan",
+      "title": "msmnile Classic source: no continuous low-latency viewer scan",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 32,
+        "hardware": ["qcom"],
+        "boards": ["msmnile"],
+        "board_prefixes": ["sm8150"],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 32; Build.HARDWARE in [qcom]; Build.BOARD in [msmnile] or prefix [sm8150]",
+      "component": null,
+      "effects": ["Classic source viewer discovery uses balanced scanning, never continuous low latency"],
+      "behaviour": "A Classic broadcast source on this family scans for viewer requests with balanced scanning instead of continuous low latency.",
+      "sources": [],
+      "source_status": "EVIDENCE_ONLY",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/coverage-av1-c39c75b6", "benchmarks/runs/coverage-av1-5a709ed5"],
+      "confidence": "MEDIUM",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=qcom-msmnile-classic-source-balanced-scan",
+      "legacy_switches": [],
+      "origin": "BluetoothStackCompatibility.LegacyQualcommClassicCompatibility / useContinuousLowLatencyViewerDiscovery"
+    },
+    {
+      "id": "gatt-context-map-race",
+      "title": "Android 10/11 GattService ContextMap race: deferred GATT close",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 30,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 30",
+      "component": null,
+      "effects": ["GATT client close() waits for the disconnect callback (at most 2 s)"],
+      "behaviour": "Close a GATT client only after its disconnect completes or 2 s (GattClientTeardown); an expired control attempt is cancelled first so its late callbacks do nothing.",
+      "sources": [
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/refs/heads/android11-release/src/com/android/bluetooth/gatt/ContextMap.java#283",
+          "note": "removeConnectionsByAppId iterates mConnections without synchronization (android10-release line 276 too)"
+        },
+        {
+          "kind": "AOSP_COMMIT",
+          "reference": "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/1a2c1e97d203bd8e635104c72abdba16944ee3b6",
+          "note": "'Fully synchronize access to gatt connections' (2021-02-16, b/178334266): ConcurrentModificationException iterating mConnections; first in android12-release, in no android10/11 branch"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/refs/heads/android10-release/src/com/android/bluetooth/gatt/GattService.java#2190",
+          "note": "an exception in the ContextMap removal skips gattClientUnregisterAppNative, leaving the client registered"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/bmaraw-ab-stream-9c121b30-s24a15s-run2c (0017 a15s-bluetooth-19107.log:690-710: ConcurrentModificationException 22 ms after clientDisconnect)", "benchmarks/runs/lane-b-r3-529f36cc (0007: the same exception class on the ASUS, Android 11)", "benchmarks/runs/bmaraw-ab-stream-9c121b30-s24a15s-run3d"],
+      "confidence": "HIGH",
+      "confidence_note": "high for the race; unproven as the cause of the run3d discovery outage",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=gatt-context-map-race",
+      "legacy_switches": ["test_deferred_gatt_close=true|false (forces either on any stack)"],
+      "origin": "GattClientTeardown.deferredFor (d587725; scoped through the first DeviceFamilyPolicy in 9284736)"
+    },
+    {
+      "id": "le-coc-server-leak",
+      "title": "Android 10 LE CoC server leak: one long-lived listener per role",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 29,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 29",
+      "component": null,
+      "effects": ["one long-lived LE CoC listener per role with session leases"],
+      "behaviour": "Keep one long-lived LE CoC listener per role and lease it to sessions (CocListenerHub); fixed stacks open and close one listener per session.",
+      "sources": [
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android10-release/btif/src/btif_sock_l2cap.cc#250",
+          "note": "btsock_l2cap_free_l: an LE CoC server only calls BTA_JvFreeChannel (no BTA_JvL2capStopServer)"
+        },
+        {
+          "kind": "AOSP_COMMIT",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/d3c9966624530772fbdc469179726bd9191314c5",
+          "note": "'LE-COC: Free LE-COC server resource when BluetoothServerSocket is closed' (2020-01-16, b/144148429): closed LE CoC servers kept FDs, PSMs and security IDs; in android11-release, backported to android10-qpr2/qpr3, absent from android10-release and android10-qpr1"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android10-release/bta/include/bta_jv_api.h#72",
+          "note": "BTA_JV_NUM_SERVICE_ID = 18 security IDs shared by RFCOMM/L2CAP/LE CoC servers (Android 10 and 11)"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android10-release/bta/jv/bta_jv_act.cc#1090",
+          "note": "bta_jv_l2cap_start_server takes one JV security ID per server; only bta_jv_l2cap_stop_server frees it"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/bmaraw-ab-call-e3351065-r1 (0007 a15s-bluetooth-25059.log:189-190: 18 GAP opens, then every listen and connect failed)", "benchmarks/runs/lane-a-matrix-529f36cc"],
+      "confidence": "HIGH",
+      "confidence_note": "high for stock Android 10; OEM backports of d3c996662453 (android10-qpr2/qpr3 carry it) are not detected",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=le-coc-server-leak",
+      "legacy_switches": ["test_coc_shared_listener=true|false (forces either on any stack)"],
+      "origin": "CocListeners.sharedEnabledFor (d587725; scoped to Android 10 through the first DeviceFamilyPolicy in 9284736)"
+    },
+    {
+      "id": "le-coc-eatt-stranded-channels",
+      "title": "Android 12/13 refused-EATT stranded L2CAP channels: LE CoC client on a fresh ACL",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": 31,
+        "sdk_max": 33,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API 31-33",
+      "component": null,
+      "effects": ["LE CoC client connects on a fresh ACL (PSM read, GATT closed first)"],
+      "behaviour": "Read the PSM over GATT, close that GATT client and wait (<= 2 s) for the ACL to drop, connect the CoC on a fresh ACL, then reattach a GATT client for priority/PHY (BleCocClient).",
+      "sources": [
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android12-release/stack/l2cap/l2c_ble.cc#654",
+          "note": "a refused EATT (ECFC) response fails only the first of the 5 channels; the others stay in CST_W4_L2CAP_CONNECT_RSP with the EATT registration (stack/eatt/eatt.cc:37-45 sets no pL2CA_ConnectCfm_Cb); android13-release is the same; android14-release adds l2cble_handle_connect_rsp_neg over pending_ecoc_connection_cids"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android12-release/stack/l2cap/l2c_ble.cc#927",
+          "note": "an LE CoC response matches the first CCB with that signal id; l2cu_allocate_ccb does not reset local_id; l2c_csm_indicate_connection_open then calls the null callback"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android12-release/stack/gatt/gatt_main.cc#416",
+          "note": "EATT starts on every LE ATT link-up as central; l2c_api.cc:529-540 allocates the CoC CCB before link-up, so on a fresh ACL it is ahead of EATT's"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/xpair2-s24m31-431d40dc (0003 m31-bluetooth-9989.log 19:56:11.217-12.433: M31 (Android 12) SIGSEGV pc 0 in l2c_csm_indicate_connection_open 12 ms after its CoC request to the S24 (Android 14, EATT refused 0x0005 unencrypted); 6 of 6 saved M31 CoC connects after a refused EATT crashed, 0 of 293 without one)"],
+      "confidence": "HIGH",
+      "confidence_note": "high for the crash mechanism; the fresh-ACL avoidance is unmeasured on phones",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=le-coc-eatt-stranded-channels",
+      "legacy_switches": ["test_coc_fresh_acl=true|false (forces either on any stack)"],
+      "origin": "BleCocClient.freshAclFor (81a3289; first DeviceFamilyPolicy entry format)"
+    },
+    {
+      "id": "app-bluetooth-toggle-allowed",
+      "title": "App may toggle Bluetooth (API <= 32)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 32,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 32",
+      "component": null,
+      "effects": ["DEBUG bt_restart may toggle the adapter (idle only)"],
+      "behaviour": "The DEBUG bt_restart control may turn the adapter off and on (idle only); refused on API 33+.",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/bluetooth/BluetoothAdapter#disable()",
+          "note": "deprecated in API 33: for apps targeting TIRAMISU or above enable()/disable() always fail and return false"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "",
+      "evidence": ["none: refusal path only; no phone run yet"],
+      "confidence": "HIGH",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=app-bluetooth-toggle-allowed",
+      "legacy_switches": [],
+      "origin": "BluetoothRestart.allowed (LAST_APP_TOGGLE_SDK = 32), commit d587725"
+    },
+    {
+      "id": "codec2-encoder-tie-break",
+      "title": "Prefer Codec2 encoders at equal rank",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone; component prefix [c2.]",
+      "component": {
+        "names": [],
+        "prefixes": ["c2."]
+      },
+      "effects": ["encoder tie-break: matching component first"],
+      "behaviour": "Among encoders equal on hardware, codec and surface input, Codec2 (c2.*) components sort before OMX ones; only the Codec2 path honours QP bounds.",
+      "sources": [
+        {
+          "kind": "CDD",
+          "reference": "https://source.android.com/docs/compatibility/16/android-16-cdd",
+          "note": "5.1.9 Media Codec Security (same in Android 10-16): Codec 2.0 STRONGLY RECOMMENDED [C-SR]; c2.android.* and OMX.google.* names MUST be AOSP-based [C-3-3]/[C-2-2]"
+        },
+        {
+          "kind": "AOSP_COMMIT",
+          "reference": "https://android.googlesource.com/platform/frameworks/av/+/3c4b455145752aa57ee4777ac94e8b4c32fd59f7",
+          "note": "'media: enable Codec 2.0 by default' (2019-05-10), in android10-release"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/frameworks/av/+/refs/heads/android12-release/media/codec2/sfplugin/CCodec.cpp#1151",
+          "note": "video-qp-{i,p,b}-{min,max} become C2StreamPictureQuantizationTuning only on the Codec2 path; media/libstagefright/ACodec.cpp (OMX) has no video-qp mapping"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "CODEC",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "",
+      "evidence": ["none: ordering rule; no A/B against OMX-first"],
+      "confidence": "MEDIUM",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=codec2-encoder-tie-break",
+      "legacy_switches": [],
+      "origin": "VideoCodec.availableEncoders sort: thenBy { encoderName.startsWith(\"c2.\") }"
+    },
+    {
+      "id": "aosp-codec2-opus-decoder-first",
+      "title": "Try AOSP Codec2 Opus decoders first",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone; component prefix [c2.android.]",
+      "component": {
+        "names": [],
+        "prefixes": ["c2.android."]
+      },
+      "effects": ["Opus decoder: matching component tried first"],
+      "behaviour": "Opus decoding tries c2.android.* components before the framework's choice and the rest.",
+      "sources": [
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/frameworks/av/+/refs/heads/android10-release/media/codec2/components/opus/C2SoftOpusDec.cpp#247",
+          "note": "c2.android.opus.decoder accepts a bare OpusHead or the combined AOPUSHDR/AOPUSDLY/AOPUSPRL block"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/frameworks/av/+/refs/heads/android10-release/media/libstagefright/codecs/opus/dec/SoftOpus.cpp#424",
+          "note": "OMX.google.opus.decoder takes the first three input buffers as OpusHead, pre-skip and pre-roll by count"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/media/MediaCodec",
+          "note": "codec-specific data table: Opus csd-0 identification header, csd-1 pre-skip (ns), csd-2 seek pre-roll (ns)"
+        },
+        {
+          "kind": "CDD",
+          "reference": "https://source.android.com/docs/compatibility/16/android-16-cdd",
+          "note": "5.1.9 Media Codec Security (same in Android 10-16): Codec 2.0 STRONGLY RECOMMENDED [C-SR]; c2.android.* and OMX.google.* names MUST be AOSP-based [C-3-3]/[C-2-2]"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "CODEC",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/lane-a-matrix-529f36cc", "benchmarks/runs/a15s-opusfix-5a2d93a7"],
+      "confidence": "HIGH",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=aosp-codec2-opus-decoder-first",
+      "legacy_switches": [],
+      "origin": "OpusAudioDecoder.opusDecoderCandidates"
+    },
+    {
+      "id": "c2-android-vp9-decoder-in-place-recovery",
+      "title": "Recreate a failed AOSP software VP9 call decoder",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone; component [c2.android.vp9.decoder]",
+      "component": {
+        "names": ["c2.android.vp9.decoder"],
+        "prefixes": []
+      },
+      "effects": ["recreate the call video decoder in place up to 2 times"],
+      "behaviour": "When c2.android.vp9.decoder throws a CodecException in a call, it is recreated in place (at most twice) and waits for a keyframe.",
+      "sources": [],
+      "source_status": "EVIDENCE_ONLY",
+      "area": "CODEC",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/three_phone_2026-10-01"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=c2-android-vp9-decoder-in-place-recovery",
+      "legacy_switches": [],
+      "origin": "PrivateCallMedia.canRecoverPrivateCallVideoDecoder"
+    },
+    {
+      "id": "android-10-11-le-coc-security-id-budget",
+      "title": "Android 10/11 LE CoC security-ID budget",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 30,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 30",
+      "component": null,
+      "effects": [],
+      "behaviour": "Turn on the CoC registration count and automatic GATT fallback (test_coc_auto_gatt, Q4 option A) by default on these stacks. Not promoted (source review 2026-10-10): the client security-record leak that f1ffeeb5/f4a911c0 fix came with the Android 12 L2CA_RegisterLECoc(sec_level) refactor; android11-release registers a client record under its JV security ID and frees it on close, so the Android 11 client premise is unsupported. Android 10 servers stay covered by le-coc-server-leak (API <= 29).",
+      "sources": [
+        {
+          "kind": "AOSP_COMMIT",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/d3c9966624530772fbdc469179726bd9191314c5",
+          "note": "'LE-COC: Free LE-COC server resource when BluetoothServerSocket is closed' (2020-01-16, b/144148429): closed LE CoC servers kept FDs, PSMs and security IDs; in android11-release, backported to android10-qpr2/qpr3, absent from android10-release and android10-qpr1"
+        },
+        {
+          "kind": "AOSP_COMMIT",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/f4a911c0de8a29437c4a90eb30caa0081bf382e8",
+          "note": "'Fix L2cap LE COC security record leaks' (2021-07-27, b/193142224): LE CoC clients registered security records that leaked; first in android12-release"
+        },
+        {
+          "kind": "AOSP_COMMIT",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/f1ffeeb52168397588be2846d76a06faea1ed1ed",
+          "note": "the same fix in packages/modules/Bluetooth (2021-07-27, b/193142224): before it, L2CA_RegisterLECoc(psm, p_cb_info, sec_level, cfg) called BTM_SetSecurityLevel(false, \"\", 0, sec_level, psm, 0, 0) for every registration and gap_conn freed records by service ID; after it, outgoing-only registrations add no record and cleanup uses BTM_SecClrServiceByPsm (diff reviewed 2026-10-10)"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android11-release/stack/l2cap/l2c_api.cc#433",
+          "note": "android11-release L2CA_RegisterLECoc(psm, p_cb_info) registers no security record; gap_conn.cc:272 registers the client record under the JV security ID, gap_conn.cc:1156 frees it (BTM_SecClrService) and bta_jv_act.cc:363 frees the JV ID on close, so the f1ffeeb5 leak is absent from Android 11"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android10-release/bta/include/bta_jv_api.h#72",
+          "note": "BTA_JV_NUM_SERVICE_ID = 18 security IDs shared by RFCOMM/L2CAP/LE CoC servers (Android 10 and 11)"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/lane-a-matrix-529f36cc", "benchmarks/runs/bmaraw-ab-call-9c121b30-s24a15s-run2c"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=android-10-11-le-coc-security-id-budget",
+      "legacy_switches": [],
+      "origin": "Proposal (not implemented)"
+    },
+    {
+      "id": "android-11-coc-small-sdu-coalescing",
+      "title": "Android <= 11 LE CoC: coalesce small SDUs",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 30,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 30",
+      "component": null,
+      "effects": [],
+      "behaviour": "Write CoC media in SDUs of up to 8,000 bytes instead of 245-byte single-PDU SDUs, so a 50 KB keyframe is 7 SDUs (about 10 or fewer outstanding) instead of 205, without pacing or drops. On these stacks every app write is one SDU in its own buffer, L2CAP counts congestion in queued SDUs and a write that meets congestion is freed. Candidate for the ASUS (Android 11) Bluetooth crash; no backtrace yet. DEBUG test_coc_coalesce_sdus=true applies it where this matcher holds; it replaces test_coc_single_pdu_sdus there (the 251+4-octet K-frame split returns for MPS-251 peers).",
+      "sources": [
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android11-release/btif/src/btif_sock_l2cap.cc#1032",
+          "note": "btsock_l2cap_signaled reads one SOCK_SEQPACKET message per signal into its own BT_HDR and posts one BTA_JvL2capWrite per message, so each app write is one SDU buffer"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android11-release/bta/jv/bta_jv_act.cc#1182",
+          "note": "bta_jv_l2cap_write frees the message when the channel is congested (status FAILURE); btif on_l2cap_write_done ignores the status and counts the bytes as sent"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android11-release/stack/l2cap/l2c_main.cc#997",
+          "note": "L2CA_DataWrite frees the data and returns L2CAP_DW_FAILED when cong_sent is set"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android11-release/stack/l2cap/l2c_utils.cc#3440",
+          "note": "l2cu_check_channel_congestion: congested when the xmit_hold_q SDU count exceeds buff_quota"
+        },
+        {
+          "kind": "AOSP_COMMIT",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/471249f472d11297915cbcd9e52736219607833b",
+          "note": "'Fix L2CAP hold queue null pointer issue' (2021-08, Xiaomi): l2c_csm.cc enqueued a null buffer"
+        },
+        {
+          "kind": "AOSP_COMMIT",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/46bd51ede06ccda8aefaba46172d75d88f61e510",
+          "note": "'Fix potential data loss when writing to congested L2CAP CoC' (2022-03-24, b/223974328); first in android13-release"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "EXPERIMENTAL",
+      "fallback": "",
+      "evidence": ["none attributed: the ASUS Bluetooth crash has no backtrace; CocSocketOutput's >11.6 KB SDU corruption bounds the size"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=android-11-coc-small-sdu-coalescing",
+      "legacy_switches": [],
+      "origin": "Proposal (not implemented)"
+    },
+    {
+      "id": "pre-android-13-coc-congested-write-loss",
+      "title": "Android <= 12 CoC data loss under congestion",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": 32,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API <= 32",
+      "component": null,
+      "effects": [],
+      "behaviour": "Pace LE CoC writes below the socket's congestion point and report a CoC 'Secure link decrypt failed' on these stacks as a candidate stack data loss (btif_sock_thread read stale poll entries and dropped data on congested channels until Android 13).",
+      "sources": [
+        {
+          "kind": "AOSP_COMMIT",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/46bd51ede06ccda8aefaba46172d75d88f61e510",
+          "note": "'Fix potential data loss when writing to congested L2CAP CoC' (2022-03-24, b/223974328); first in android13-release"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "",
+      "evidence": ["none attributed: the ASUS CoC corruption that CocSocketOutput fixed is a candidate, not proven"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=pre-android-13-coc-congested-write-loss",
+      "legacy_switches": [],
+      "origin": "Proposal (not implemented)"
+    },
+    {
+      "id": "android-14-gatt-mtu-517",
+      "title": "Android 14+: first GATT MTU request fixes 517",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": 34,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 34",
+      "component": null,
+      "effects": [],
+      "behaviour": "Mark the test_gatt_request_mtu experiment as not applicable when either phone runs API 34+ (the stack requests 517 for the first client and ignores later requests) and log the negotiated MTU instead.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/about/versions/14/behavior-changes-all",
+          "note": "'MTU is set to 517 for the first GATT client requesting an MTU' and later requests on that ACL are disregarded"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "",
+      "evidence": ["none: no MTU-experiment run on API 34+ yet"],
+      "confidence": "HIGH",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=android-14-gatt-mtu-517",
+      "legacy_switches": [],
+      "origin": "Proposal (not implemented)"
+    },
+    {
+      "id": "ble-scan-start-quota",
+      "title": "BLE scan-start quota (5 per 30 s)",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": [],
+      "behaviour": "Count scan starts per 30 s, keep mode switches and discovery restarts under 5 per window, and treat onScanFailed(SCAN_FAILED_SCANNING_TOO_FREQUENTLY) as a timed back-off instead of a discovery error.",
+      "sources": [
+        {
+          "kind": "AOSP_COMMIT",
+          "reference": "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/1fdc7c138db776b02bc751fd7a80c519ea3324d1",
+          "note": "'Add protection against LE scanning abuse' (2016-04-13): AppScanStats NUM_SCAN_DURATIONS_KEPT 5, EXCESSIVE_SCANNING_PERIOD_MS 30 s"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/android14-release/android/app/src/com/android/bluetooth/btservice/AdapterService.java",
+          "note": "DeviceConfig defaults scan_quota_count 5, scan_quota_window_millis 30000"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/bluetooth/le/ScanCallback#SCAN_FAILED_SCANNING_TOO_FREQUENTLY",
+          "note": "error 6 (constant published in API 33) when an app starts scans too frequently"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "",
+      "evidence": ["none: no code-6 scan failure recorded yet"],
+      "confidence": "HIGH",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=ble-scan-start-quota",
+      "legacy_switches": [],
+      "origin": "Proposal (not implemented)"
+    },
+    {
+      "id": "background-restriction-visible",
+      "title": "Report OEM/system background restriction",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": 28,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 28",
+      "component": null,
+      "effects": [],
+      "behaviour": "Log ActivityManager.isBackgroundRestricted() in the device_policy line and tell the user before a call, stream or message exchange that the app may be stopped in the background.",
+      "sources": [
+        {
+          "kind": "CDD",
+          "reference": "https://source.android.com/docs/compatibility/14/android-14-cdd",
+          "note": "3.5.1 Application Restriction: OEM restrictions beyond the Restricted bucket MUST be user-visible and reversible and isBackgroundRestricted() MUST return true [C-1-1..C-1-7]"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://source.android.com/docs/core/power/app_mgmt",
+          "note": "OEMs may keep custom restriction methods; a restricted app can be un-restricted by the user"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "",
+      "evidence": ["none: not yet logged"],
+      "confidence": "MEDIUM",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=background-restriction-visible",
+      "legacy_switches": [],
+      "origin": "Proposal (not implemented)"
+    },
+    {
+      "id": "one-ui-never-sleeping-apps",
+      "title": "One UI: offer 'Never sleeping apps'",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": ["ONE_UI"],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "skin [ONE_UI]",
+      "component": null,
+      "effects": [],
+      "behaviour": "When the user turns on background availability (store-and-forward carrying, incoming calls), offer Samsung's Never sleeping apps list (com.samsung.android.lool, ACTION_OPEN_CHECKABLE_LISTACTIVITY, activity_type 2).",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://developer.samsung.com/mobile/app-management.html",
+          "note": "Sleeping apps (unused ~3 days) and Deep sleeping apps are restricted; exemptions under Background usage limits; deep link documented; One UI 6 guarantees Android 14 typed foreground services"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "",
+      "evidence": ["none: Samsung phones have not run background-availability tests"],
+      "confidence": "MEDIUM",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=one-ui-never-sleeping-apps",
+      "legacy_switches": [],
+      "origin": "Proposal (not implemented)"
+    },
+    {
+      "id": "hyperos-autostart-and-no-restrictions",
+      "title": "MIUI/HyperOS: autostart and 'No restrictions'",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": ["MIUI_HYPEROS"],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "skin [MIUI_HYPEROS]",
+      "component": null,
+      "effects": [],
+      "behaviour": "Explain that autostart is off by default and offer the battery 'No restrictions' setting when the user turns on background availability.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1624",
+          "note": "apps cannot autostart by default; the user allows it per app"
+        },
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1628",
+          "note": "Powerkeeper restrictions, Settings > Battery > App smart power saving, 'No restrictions' lifts them, isBackgroundRestricted() returns true"
+        },
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1625",
+          "note": "starting a page from the background is denied by default; VoIP incoming-call allow-list on request"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "",
+      "evidence": ["none: the Xiaomi phone has not run background-availability tests"],
+      "confidence": "MEDIUM",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=hyperos-autostart-and-no-restrictions",
+      "legacy_switches": [],
+      "origin": "Proposal (not implemented)"
+    },
+    {
+      "id": "asus-auto-start-manager",
+      "title": "ASUS: Auto-start Manager",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": ["ASUS"],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "skin [ASUS]",
+      "component": null,
+      "effects": [],
+      "behaviour": "Point users who enable background availability to Settings > Battery > Auto-start Manager and to the battery-draining-app auto-stop option.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://www.asus.com/support/faq/1054036/",
+          "note": "Auto-start Manager allows or denies auto-start per app"
+        },
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://rog.asus.com/support/faq/1041329/",
+          "note": "'Detect battery-draining apps' can stop apps in the background"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "",
+      "evidence": ["none"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=asus-auto-start-manager",
+      "legacy_switches": [],
+      "origin": "Proposal (not implemented)"
+    },
+    {
+      "id": "omx-encoder-qp-bounds-ignored",
+      "title": "OMX encoders ignore QP bounds",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone; component prefix [OMX.]",
+      "component": {
+        "names": [],
+        "prefixes": ["OMX."]
+      },
+      "effects": [],
+      "behaviour": "Gate the DEBUG QP-bound experiment (test_hw_qp_min/max) on FEATURE_QpBounds and log it as unsupported for OMX components instead of configuring keys that never reach them.",
+      "sources": [
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/frameworks/av/+/refs/heads/android12-release/media/codec2/sfplugin/CCodec.cpp#1151",
+          "note": "video-qp-{i,p,b}-{min,max} become C2StreamPictureQuantizationTuning only on the Codec2 path; media/libstagefright/ACodec.cpp (OMX) has no video-qp mapping"
+        },
+        {
+          "kind": "AOSP_COMMIT",
+          "reference": "https://android.googlesource.com/platform/frameworks/av/+/a9a724a0d1b6947c280fd2e3f01b78f3b12bb9a4",
+          "note": "'Rework how QP bounds are passed' (2021-03-10)"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/media/MediaCodecInfo.CodecCapabilities#FEATURE_QpBounds",
+          "note": "FEATURE_QpBounds (API 31): the encoder supports the video-qp bound keys"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "CODEC",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "",
+      "evidence": ["benchmarks/runs/lane-b-burst-r1-529f36cc"],
+      "confidence": "HIGH",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=omx-encoder-qp-bounds-ignored",
+      "legacy_switches": [],
+      "origin": "Proposal (not implemented)"
+    },
+    {
+      "id": "omx-exynos-vp9-framerate-bitrate-adjuster",
+      "title": "OMX.Exynos VP9: WebRTC frame-rate bitrate adjuster",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone; component prefix [OMX.Exynos.]",
+      "component": {
+        "names": [],
+        "prefixes": ["OMX.Exynos."]
+      },
+      "effects": [],
+      "behaviour": "A/B WebRTC's FramerateBitrateAdjuster for OMX.Exynos VP9 (fixed 30 FPS in the encoder format, bitrate scaled by actual FPS / 30) against the current output-rate trim for the M31 overshoot and bursts.",
+      "sources": [
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://webrtc.googlesource.com/src/+/6f79786c977363aafe706c20c25b2037b28ab9ee/sdk/android/src/java/org/webrtc/HardwareVideoEncoderFactory.java#254",
+          "note": "Exynos VP8 uses DynamicBitrateAdjuster; Exynos VP9/H264 (OMX.Exynos. prefix) use FramerateBitrateAdjuster"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "CODEC",
+      "validation": "EXPERIMENTAL",
+      "fallback": "",
+      "evidence": ["docs/DECISIONS.md row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300)", "benchmarks/runs/lane-b-burst-r1-529f36cc"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-09",
+      "off_switch": "test_device_policy_off=omx-exynos-vp9-framerate-bitrate-adjuster",
+      "legacy_switches": [],
+      "origin": "Proposal (not implemented)"
+    },
+    {
+      "id": "decoder-init-fallback",
+      "title": "Decoder initialisation falls back to the next decoder for the format",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["decoder init falls back to the next decoder for the format"],
+      "behaviour": "User sessions without an explicit decoder request: when the chosen video decoder throws while it is created, configured or started (for example hardware instances exhausted), release it and try the next decoder that supports the format (hardware first; at most 3 attempts). A policy-forced software decoder falls back only to other software decoders. DEBUG test_decoder requests and benchmark launches never fall back. Every start logs BENCHMARK decoder requested=/effective=/reason=.",
+      "sources": [
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://github.com/androidx/media/blob/8c6678b657ede1e7883fc164ef73ed483c7796c3/libraries/exoplayer/src/main/java/androidx/media3/exoplayer/mediacodec/MediaCodecRenderer.java#L1295-L1360",
+          "note": "maybeInitCodecWithFallback: a decoder that throws in create/configure/start is released and the next decoder for the format is tried; the first failure stays the reported cause. Media3 makes it opt-in (setEnableDecoderFallback) because a file player can show an error; a live call cannot."
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "CODEC",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Off, or any benchmark launch: the former single choice (requested decoder if it supports the format, else the framework's) and the former failure.",
+      "evidence": ["none: no local decoder initialisation failure recorded; failure path only"],
+      "confidence": "MEDIUM",
+      "confidence_note": "Media3 mechanism; nothing changes when the first decoder starts",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=decoder-init-fallback",
+      "legacy_switches": [],
+      "origin": "Compatibility audit 2026-10-10 (VideoStreamDecoder tried one decoder and failed the stream)"
+    },
+    {
+      "id": "codec-exception-recoverable-reinit",
+      "title": "Recoverable decoder CodecException re-creates the call decoder",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["re-create the call video decoder after a recoverable CodecException (<= 2)"],
+      "behaviour": "A private-call video decoder that fails with a CodecException whose isRecoverable() is true is closed and re-created at the next keyframe (at most twice per call), as c2.android.vp9.decoder already is; audio and the call stay up.",
+      "sources": [
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://github.com/androidx/media/blob/8c6678b657ede1e7883fc164ef73ed483c7796c3/libraries/exoplayer/src/main/java/androidx/media3/exoplayer/mediacodec/MediaCodecRenderer.java#L994-L1003",
+          "note": "a MediaCodec.CodecException with isRecoverable() releases the codec so the next render re-creates it"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/media/MediaCodec.CodecException#isRecoverable()",
+          "note": "isRecoverable(): the codec cannot continue but can be recovered by stop(), configure() and start(); isTransient(): retry later; neither: release and create a new codec"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "CODEC",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Off: only the component rule c2-android-vp9-decoder-in-place-recovery recovers; others end the call.",
+      "evidence": ["none: only c2.android.vp9.decoder failures were recorded (three_phone_2026-10-01)"],
+      "confidence": "MEDIUM",
+      "confidence_note": "documented API contract; stream receivers still end on a decoder failure",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=codec-exception-recoverable-reinit",
+      "legacy_switches": [],
+      "origin": "Compatibility audit 2026-10-10 (generalises c2-android-vp9-decoder-in-place-recovery)"
+    },
+    {
+      "id": "omx-exynos-framerate-adjuster-arm",
+      "title": "OMX.Exynos VP9/H.264: WebRTC FramerateBitrateAdjuster A/B arm",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone; component prefix [OMX.Exynos.]",
+      "component": {
+        "names": [],
+        "prefixes": ["OMX.Exynos."]
+      },
+      "effects": [],
+      "behaviour": "With DEBUG test_encoder_framerate_adjuster=true, an OMX.Exynos. VP9 or H.264 encoder keeps its configured FPS and is asked for target x configured / delivered FPS (WebRTC FramerateBitrateAdjuster; delivered = encoded frames in the last second of output timestamps, re-applied at most once per second) instead of the measured EncoderBitrateAdjuster.",
+      "sources": [
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://webrtc.googlesource.com/src/+/42995c384b59f0da002a6078d4a0320af39a16b8/sdk/android/api/org/webrtc/HardwareVideoEncoderFactory.java#254",
+          "note": "createBitrateAdjuster: names starting OMX.Exynos. get DynamicBitrateAdjuster for VP8 and FramerateBitrateAdjuster for VP9/H.264; every other encoder gets BaseBitrateAdjuster (no correction)"
+        },
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://webrtc.googlesource.com/src/+/42995c384b59f0da002a6078d4a0320af39a16b8/sdk/android/src/java/org/webrtc/FramerateBitrateAdjuster.java#14",
+          "note": "'Used with hardware codecs that assume the framerate never changes': the codec keeps its configured frame rate and the bitrate is scaled by configured / current FPS, so it corrects UNDERshoot after a frame-rate drop"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "CODEC",
+      "validation": "EXPERIMENTAL",
+      "fallback": "Off (default): EncoderBitrateAdjuster (DynamicBitrateAdjuster port) as today.",
+      "evidence": ["docs/DECISIONS.md row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300: overshoot)", "benchmarks/runs/xpair-s24m31-431d40dc (M31 OMX.Exynos.VP9 720 kbps for a 401-515 kbps target)"],
+      "confidence": "LOW",
+      "confidence_note": "WebRTC scope is exact; it targets undershoot after FPS drops, while our measured M31 problem is overshoot at a fixed FPS (KEY_MAX_FPS_TO_ENCODER already caps the cadence), so the measured DynamicBitrateAdjuster port stays the default",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=omx-exynos-framerate-adjuster-arm",
+      "legacy_switches": [],
+      "origin": "Compatibility audit 2026-10-10 (A/B arm for the proposal omx-exynos-vp9-framerate-bitrate-adjuster)"
+    },
+    {
+      "id": "yuv-image-crop-rect",
+      "title": "Camera YUV copies start from Image.getCropRect()",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["YUV copies start from Image.getCropRect()"],
+      "behaviour": "The camera-to-encoder YUV copies (Kotlin and native) take the frame's crop rectangle (left/top rounded down to even) as the source area before the centre crop; with the default full-image crop nothing changes.",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/media/Image#getCropRect()",
+          "note": "only the pixels inside the crop rectangle are valid; it defaults to the whole image"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/media/Image.Plane",
+          "note": "YUV_420_888: plane 0 Y, 1 U (Cb), 2 V (Cr); each plane has its own row and pixel stride; U and V share row and pixel stride, and a pixel stride of 2 means interleaved chroma"
+        },
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://chromium.googlesource.com/libyuv/libyuv/+/eeb06a6451ba2e21f8ff272c7b42fc62b9faecc5/include/libyuv/convert.h#915",
+          "note": "Android420ToI420(..., src_pixel_stride_uv, ...): pixel stride 1 planar, 2 semi-planar (NV12/NV21 detected from the U/V address order), anything else per-sample; chroma (n + 1) >> 1"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "YUV",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Off: the whole image is the source area, as before.",
+      "evidence": ["none: no local camera reported a non-default crop; synthetic YuvPlaneCopyTest"],
+      "confidence": "MEDIUM",
+      "confidence_note": "documented API contract; whether any of our phones' camera HALs set a crop is unmeasured",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=yuv-image-crop-rect",
+      "legacy_switches": [],
+      "origin": "Compatibility audit 2026-10-10 (copies used Image.width/height and ignored getCropRect)"
+    },
+    {
+      "id": "le-scan-start-quota",
+      "title": "LE scan start quota (5 starts per 30 s)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["at most 5 BLE scan starts per 30 s (a further start waits instead of being refused)"],
+      "behaviour": "Every BLE scan start (including the low-latency -> balanced switch) takes a slot from a budget of 5 per rolling 30 s. A start that would be the 6th waits until the oldest slot expires instead of being refused, and the wait is shown to the user and in the background status. A balanced switch without a free slot keeps the low-latency scan (no queued restart), so slots stay free for new discovery such as calls. The stack counts per app UID in the Bluetooth process, so the count survives our process restarts: starts are persisted (elapsedRealtime) and seed the gate at process start, keyed by Settings.Global.BOOT_COUNT so a reboot never seeds stale starts.",
+      "sources": [
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/android14-release/android/app/src/com/android/bluetooth/gatt/GattService.java#3135",
+          "note": "startScan: isScanningTooFrequently() -> SCAN_FAILED_SCANNING_TOO_FREQUENTLY; no scan runs"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/android14-release/android/app/src/com/android/bluetooth/gatt/AppScanStats.java#507",
+          "note": "isScanningTooFrequently: the last getScanQuotaCount() starts all inside getScanQuotaWindowMillis()"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/android14-release/android/app/src/com/android/bluetooth/btservice/AdapterService.java#6777",
+          "note": "DEFAULT_SCAN_QUOTA_COUNT = 5, DEFAULT_SCAN_QUOTA_WINDOW_MILLIS = 30 s (DeviceConfig may change them)"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/refs/heads/android10-release/src/com/android/bluetooth/gatt/AppScanStats.java#82",
+          "note": "Android 10: NUM_SCAN_DURATIONS_KEPT = 5, EXCESSIVE_SCANNING_PERIOD_MS = 30 s"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "Scans start immediately; a 6th start inside 30 s fails with code 6 (silently on Android 10).",
+      "evidence": ["benchmarks/runs/lane-a-matrix-529f36cc/0001-4b5ecaf7784b/physical/a15s-bluetooth-6297.log:147 (\"App 'com.example.bluetoothtest' is scanning too frequently\" while an incoming-stream failure loop restarted discovery every ~1.5 s; 7 such lines in lane-a-matrix-529f36cc on the A15s and the S24)"],
+      "confidence": "HIGH",
+      "confidence_note": "The refusal is reproduced on Android 10 and 14 phones; that the budget removes it is not phone-tested.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=le-scan-start-quota",
+      "legacy_switches": [],
+      "origin": "Audit 2026-10-10: BleL2capDiscovery restarted scans without counting starts."
+    },
+    {
+      "id": "gatt-mtu-fixed-517",
+      "title": "Android 14+ requests ATT MTU 517 on the first exchange",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": 34,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 34",
+      "component": null,
+      "effects": ["stack requests ATT MTU 517 on the first exchange (reported in the LE link line)"],
+      "behaviour": "Diagnostics only: the LE link line reports the requested MTU, the 517 the stack actually sends and the effective MTU; an experimental `test_gatt_request_mtu` below 517 is flagged as ignored by the stack.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/about/versions/14/behavior-changes-all#mtu-set-to-517",
+          "note": "Android 14 requests MTU 517 for the first requestMtu on an ACL and disregards later requests"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/android14-release/system/stack/gatt/gatt_api.cc#722",
+          "note": "GATTC_ConfigureMTU sends GATT_MAX_MTU_SIZE whatever the app asked"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/android14-release/system/bta/gatt/bta_gattc_act.cc#743",
+          "note": "bta_gattc_cfg_mtu: an exchange already done or in progress is reported back with the current MTU"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "The link line reports only the requested and effective MTU.",
+      "evidence": ["none: saved runs never set test_gatt_request_mtu below 517 on an Android 14+ client"],
+      "confidence": "HIGH",
+      "confidence_note": "",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=gatt-mtu-fixed-517",
+      "legacy_switches": [],
+      "origin": "Audit 2026-10-10: the requested-vs-effective MTU was not recorded."
+    },
+    {
+      "id": "gatt-write-busy-retry",
+      "title": "Retry a GATT write the stack reports busy",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": 33,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 33",
+      "component": null,
+      "effects": ["retry a busy GATT write every 2 ms for up to 500 ms"],
+      "behaviour": "When writeCharacteristic returns ERROR_GATT_WRITE_REQUEST_BUSY (201) the same write is retried every 2 ms for at most 500 ms before the link fails as before. Nothing is dropped or reordered.",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/bluetooth/BluetoothStatusCodes#ERROR_GATT_WRITE_REQUEST_BUSY",
+          "note": "API 33+: writeCharacteristic returns ERROR_GATT_WRITE_REQUEST_BUSY when a write is already in flight"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/android14-release/android/app/src/com/android/bluetooth/gatt/GattService.java#3896",
+          "note": "one write permit per remote address, shared by every client and app; released in onWriteCharacteristic"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "A rejected write closes the GATT link (\"GATT video write queue rejected a packet\").",
+      "evidence": ["none: no 'write queue rejected' line in saved runs; upstream-documented, not locally tested"],
+      "confidence": "MEDIUM",
+      "confidence_note": "Mechanism is AOSP source; it only matters when another client or app writes to the same peer.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=gatt-write-busy-retry",
+      "legacy_switches": [],
+      "origin": "Audit 2026-10-10: a busy return failed the whole GATT link at once."
+    },
+    {
+      "id": "le-connect-retry-link-statuses",
+      "title": "Retry LE connect failures beyond status 133",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["retry GATT connection-stage failures with status [8, 34, 62, 133, 147]"],
+      "behaviour": "A GATT video or CoC control attempt that fails at connection with a link-layer status (0x08 supervision timeout, 0x22 LL response timeout, 0x3E failed to establish, 133 GATT_ERROR, 147 GATT_CONNECTION_TIMEOUT) uses the existing bounded retry; the statuses other than 133 retry at most once, and no retry starts unless a whole further attempt fits the caller's setup budget (a private call's 15 s early-loss window, so its 2M -> 1M setup retry and bad-2M memory still happen). Peer or local terminations (0x13, 0x16) and admission refusals are never retried.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/NordicSemiconductor/Android-BLE-Library/blob/4a86e6c6b2631a29d7de6c5789b11326733f1503/ble/src/main/java/no/nordicsemi/android/ble/BleManagerHandler.java#L2264-L2267",
+          "note": "Nordic Android-BLE-Library retries any non-success connect status within 20 s of the request (close, wait, reconnect)"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/android14-release/system/stack/include/gatt_api.h#270",
+          "note": "tGATT_DISCONN_REASON: GATT_CONN_TIMEOUT 0x08, GATT_CONN_LMP_TIMEOUT 0x22, GATT_CONN_FAILED_ESTABLISHMENT 0x3E"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/android14-release/system/bta/gatt/bta_gattc_act.cc#358",
+          "note": "bta_gattc_open_fail reports a failed open as GATT_ERROR (133)"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/bluetooth/BluetoothGatt#GATT_CONNECTION_TIMEOUT",
+          "note": "API 35: GATT_CONNECTION_TIMEOUT (0x93) for a connection attempt that timed out"
+        },
+        {
+          "kind": "BLUETOOTH_SPEC",
+          "reference": "https://www.bluetooth.com/specifications/specs/core-specification-5-4/",
+          "note": "Core v5.4 Vol 1 Part F 2.62: 0x3E Connection Failed to be Established"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Only status 133 (and the MTU/read stall) is retried.",
+      "evidence": ["benchmarks/runs/mesh4-041da09f/0005-ca14685ab021/physical/m31-bluetooth-8990.log:6103-6117 (M31 -> ASUS: HCI 0x3E at LE connection setup surfaces as 133; 16 attempts in 30 s before success)", "benchmarks/runs (all saved app logs, 2026-10-10 scan): 66 of 85 GATT and 80 of 98 CoC-control attempts after a 133 retry succeeded; one 'BLE control connection failed (status 8)' was not retried"],
+      "confidence": "MEDIUM",
+      "confidence_note": "133 retries are measured; the added statuses follow Nordic and AOSP but are not phone-tested here.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=le-connect-retry-link-statuses",
+      "legacy_switches": [],
+      "origin": "Audit 2026-10-10: only the literal status 133 was retryable."
+    },
+    {
+      "id": "android16-bond-loss-dialog",
+      "title": "Android 16 keeps the bond and shows a re-pair dialog on bond loss",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": 36,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 36",
+      "component": null,
+      "effects": [],
+      "behaviour": "Proposal: when a secure (bonded) Classic connect fails authentication, explain that Android shows its own re-pair dialog and offer Classic without pairing.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/about/versions/16/behavior-changes-all",
+          "note": "'Improved bond loss handling': disconnect, keep the local bond, show a system re-pair dialog"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "The Classic connect fails with the stack's message.",
+      "evidence": ["none: no Android 16 phone in the required set"],
+      "confidence": "MEDIUM",
+      "confidence_note": "",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=android16-bond-loss-dialog",
+      "legacy_switches": [],
+      "origin": "Research 2026-10-10 (Qaul/Berty/Knit/MeshChat patterns); the Classic path needs an auth-failure hook first."
+    },
+    {
+      "id": "samsung-gatt-direct-connect-5s",
+      "title": "Samsung direct GATT connect may give up after about 5 s",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["samsung"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [samsung]",
+      "component": null,
+      "effects": [],
+      "behaviour": "Proposal (diagnostic): classify a 133 about 5 s after connectGatt on Samsung as the stack's own direct-connect timeout. Our 6/12 s attempt deadlines and retries already own the timeout.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/A-ElMahmi/BlueMesh/blob/4cfd94a9afc4/blessed/src/main/java/com/welie/blessed/BluetoothPeripheral.kt#L1518-L1519",
+          "note": "blessed library comment (third party, not Samsung): Samsung connectGatt(autoConnect=false) times out after ~5 s"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Every 133 is treated alike.",
+      "evidence": ["none: saved Samsung 133s are 0x3E failures 0.4-1 s after the request, not 5 s timeouts"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=samsung-gatt-direct-connect-5s",
+      "legacy_switches": [],
+      "origin": "Research 2026-10-10 (Qaul/Berty/Knit/MeshChat patterns)."
+    },
+    {
+      "id": "android15-qcom-coc-connect-stall",
+      "title": "Android 15 Qualcomm LE CoC connect can stall 30 s",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": 35,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": ["QUALCOMM"],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 35; SoC [QUALCOMM]",
+      "component": null,
+      "effects": [],
+      "behaviour": "Proposal: bound the blocking LE CoC socket connect (BluetoothSocket.close() aborts it) and fall back to the existing retry/auto-GATT path. Today BleCocClient.connectChannel has no app-side bound.",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/bluetooth/BluetoothSocket#connect()",
+          "note": "connect() blocks until connected or failed; close() from another thread aborts it"
+        },
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://forum.fairphone.com/t/bluetooth-problems-since-android-15-update/",
+          "note": "Fairphone 4 (Qualcomm) on Android 15: LE CoC secure channel times out at 30 s; Google issue 371713238 not readable"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "The CoC connect waits for the stack's own timeout.",
+      "evidence": ["none: no Android 15 Qualcomm phone in the required set; long CoC connects not measured yet"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=android15-qcom-coc-connect-stall",
+      "legacy_switches": [],
+      "origin": "Research 2026-10-10 plus audit finding (unbounded CoC connect)."
+    },
+    {
+      "id": "android12-gatt-disconnect-status-zero",
+      "title": "Android 12 may report GATT disconnect status 0 for every cause",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": 31,
+        "sdk_max": 31,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API 31-31",
+      "component": null,
+      "effects": [],
+      "behaviour": "Proposal: on Android 12 classify a setup disconnect from our own state (stage, elapsed time) instead of the callback status.",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/bluetooth/BluetoothGattCallback#onConnectionStateChange(android.bluetooth.BluetoothGatt,%20int,%20int)",
+          "note": "status is the operation status; Google issues 174678306/207323675/233239417 report 0 for all causes (not readable)"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Setup failures are classified by status.",
+      "evidence": ["none: the M31 (Android 12) reports 133 and 8 in saved logs, so it does not show this"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=android12-gatt-disconnect-status-zero",
+      "legacy_switches": [],
+      "origin": "Research 2026-10-10 (Qaul/Berty/Knit/MeshChat patterns)."
+    },
+    {
+      "id": "bg-battery-optimization",
+      "title": "Battery optimisation is on for this app",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["report background state battery_optimization"],
+      "behaviour": "Reports PowerManager.isIgnoringBatteryOptimizations()==false and links the battery optimisation list.",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/os/PowerManager#isIgnoringBatteryOptimizations(java.lang.String)",
+          "note": "true when the app is on the device-idle allow list"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "No battery-optimisation notice.",
+      "evidence": ["none: diagnostics only; upstream-documented, not locally tested"],
+      "confidence": "HIGH",
+      "confidence_note": "",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-battery-optimization",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10: the app never told the user why it stopped in the background."
+    },
+    {
+      "id": "bg-background-restricted",
+      "title": "The user restricted this app's background activity",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["report background state background_restricted"],
+      "behaviour": "Reports ActivityManager.isBackgroundRestricted() and links the app's settings page.",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/app/ActivityManager#isBackgroundRestricted()",
+          "note": "true when the user restricted background activity; background services and jobs are stopped"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/topic/performance/background-optimization",
+          "note": "Background restrictions"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "No background-restriction notice.",
+      "evidence": ["none: diagnostics only; upstream-documented, not locally tested"],
+      "confidence": "HIGH",
+      "confidence_note": "",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-background-restricted",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10: the app never told the user why it stopped in the background."
+    },
+    {
+      "id": "bg-standby-bucket",
+      "title": "App standby bucket is rare or restricted",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["report background state standby_bucket"],
+      "behaviour": "Reports UsageStatsManager.getAppStandbyBucket() at RARE (40) or RESTRICTED (45, API 30+).",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/app/usage/UsageStatsManager#getAppStandbyBucket()",
+          "note": "STANDBY_BUCKET_RARE = 40, STANDBY_BUCKET_RESTRICTED = 45"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/topic/performance/appstandby",
+          "note": "App Standby Buckets"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "No standby-bucket notice.",
+      "evidence": ["none: diagnostics only; upstream-documented, not locally tested"],
+      "confidence": "HIGH",
+      "confidence_note": "",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-standby-bucket",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10: the app never told the user why it stopped in the background."
+    },
+    {
+      "id": "bg-unused-app-restrictions",
+      "title": "Unused-app restrictions may remove permissions",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": 30,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 30",
+      "component": null,
+      "effects": ["report background state unused_app_restrictions"],
+      "behaviour": "Reports PackageManager.isAutoRevokeWhitelisted()==false: permissions (Nearby devices, camera, microphone) are removed and the app hibernates after months unused. Links the app's settings.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/topic/performance/app-hibernation",
+          "note": "App hibernation / unused app restrictions; IntentCompat.createManageUnusedAppRestrictionsIntent"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/content/pm/PackageManager#isAutoRevokeWhitelisted()",
+          "note": "true when the app is exempt from permission auto-revocation"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "No unused-app notice.",
+      "evidence": ["none: diagnostics only; upstream-documented, not locally tested"],
+      "confidence": "MEDIUM",
+      "confidence_note": "",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-unused-app-restrictions",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10: the app never told the user why it stopped in the background."
+    },
+    {
+      "id": "bg-power-save-mode",
+      "title": "Battery Saver is on",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["report background state power_save_mode"],
+      "behaviour": "Reports PowerManager.isPowerSaveMode() as information and links Battery Saver settings.",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/os/PowerManager#isPowerSaveMode()",
+          "note": "Battery Saver restricts background work and may apply Doze-like limits"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/topic/performance/power/power-details",
+          "note": "Battery Saver"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "No Battery Saver notice.",
+      "evidence": ["none: diagnostics only; upstream-documented, not locally tested"],
+      "confidence": "MEDIUM",
+      "confidence_note": "",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-power-save-mode",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10: the app never told the user why it stopped in the background."
+    },
+    {
+      "id": "bg-fgs-start-fallback",
+      "title": "Foreground service start failures are caught and reported",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": 31,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 31",
+      "component": null,
+      "effects": ["catch a refused foreground-service start; fall back to the connectedDevice type and report it"],
+      "behaviour": "Only Android's two refusals are handled: a background start (ForegroundServiceStartNotAllowedException) or a while-in-use camera/microphone type refusal (SecurityException '... foreground only permission'). A refused type falls back to connectedDevice; a refused fallback stops the service. Every start logs BENCHMARK foreground_service with requested, effective and refused types; any difference fails a benchmark session (score_device_run) and shows the user a notice (e.g. camera and microphone unavailable in the background; open the app). Manifest bugs (Invalid/MissingForegroundServiceType, other SecurityException) still propagate.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start",
+          "note": "Android 12+: startForegroundService from the background throws ForegroundServiceStartNotAllowedException"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/develop/background-work/services/fgs/service-types",
+          "note": "Android 14+: camera/microphone types need their runtime permission and a while-in-use start"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/app/Service#startForeground(int,%20android.app.Notification,%20int)",
+          "note": "startForeground throws SecurityException/ForegroundServiceStartNotAllowedException when the type is not allowed"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "The exception propagates as before (app crash).",
+      "evidence": ["none: no FGS start failure in saved runs (all sessions start from the visible activity)"],
+      "confidence": "MEDIUM",
+      "confidence_note": "Risky paths: an incoming call or re-armed stream while the app is in the background.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-fgs-start-fallback",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10: ActiveVideoSessionService.start/startForeground were unguarded."
+    },
+    {
+      "id": "bg-sony-stamina",
+      "title": "Sony STAMINA mode",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["sony"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [sony]",
+      "component": null,
+      "effects": ["report background state sony_stamina"],
+      "behaviour": "Reads Settings.Secure \"somc.stamina_mode\" where readable (older Xperia builds) and reports it on.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/sony.md",
+          "note": "Don't Kill My App (community-maintained): STAMINA mode detectable via Settings.Secure somc.stamina_mode on older builds"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "No STAMINA notice.",
+      "evidence": ["none: diagnostics only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-sony-stamina",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10: the app never told the user why it stopped in the background."
+    },
+    {
+      "id": "bg-oem-samsung",
+      "title": "Samsung background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["samsung"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [samsung]",
+      "component": null,
+      "effects": ["Samsung background guidance (5 steps, DKMA severity 5)"],
+      "behaviour": "Shows Samsung's settings steps (DKMA severity 5/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/samsung.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): One UI / Android 11-14 (page covers Android 14, 13, 11, Pie/10, Oreo and older)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "MEDIUM",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (One UI / Android 11-14 (page covers Android 14, 13, 11, Pie/10, Oreo and older)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-samsung",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-xiaomi",
+      "title": "Xiaomi background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["poco", "redmi", "xiaomi"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [poco, redmi, xiaomi]",
+      "component": null,
+      "effects": ["Xiaomi background guidance (4 steps, DKMA severity 5)"],
+      "behaviour": "Shows Xiaomi's settings steps (DKMA severity 5/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/xiaomi.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): MIUI 10-14 (no HyperOS section on the page)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "MEDIUM",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (MIUI 10-14 (no HyperOS section on the page)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-xiaomi",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-huawei",
+      "title": "Huawei background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["huawei"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [huawei]",
+      "component": null,
+      "effects": ["Huawei background guidance (5 steps, DKMA severity 5)"],
+      "behaviour": "Shows Huawei's settings steps (DKMA severity 5/5) in the background-reliability status and reports installed killer apps [com.huawei.powergenie, com.huawei.android.hwaps]. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/huawei.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): EMUI 4-10 (no HarmonyOS section)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "MEDIUM",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (EMUI 4-10 (no HarmonyOS section)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-huawei",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-oneplus",
+      "title": "OnePlus background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["oneplus"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [oneplus]",
+      "component": null,
+      "effects": ["OnePlus background guidance (5 steps, DKMA severity 5)"],
+      "behaviour": "Shows OnePlus's settings steps (DKMA severity 5/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/oneplus.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): OxygenOS (version not specified; OnePlus 6+ and older covered)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "MEDIUM",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (OxygenOS (version not specified; OnePlus 6+ and older covered)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-oneplus",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-meizu",
+      "title": "Meizu background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["meizu"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [meizu]",
+      "component": null,
+      "effects": ["Meizu background guidance (4 steps, DKMA severity 4)"],
+      "behaviour": "Shows Meizu's settings steps (DKMA severity 4/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/meizu.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): Flyme (version not specified)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "MEDIUM",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (Flyme (version not specified)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-meizu",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-asus",
+      "title": "Asus background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["asus"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [asus]",
+      "component": null,
+      "effects": ["Asus background guidance (4 steps, DKMA severity 4)"],
+      "behaviour": "Shows Asus's settings steps (DKMA severity 4/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/asus.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): ZenUI Power Master (version not specified)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "MEDIUM",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (ZenUI Power Master (version not specified)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-asus",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-oppo",
+      "title": "Oppo background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["oppo"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [oppo]",
+      "component": null,
+      "effects": ["Oppo background guidance (4 steps, DKMA severity 4)"],
+      "behaviour": "Shows Oppo's settings steps (DKMA severity 4/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/oppo.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): ColorOS 6 / Oppo F1S"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "MEDIUM",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (ColorOS 6 / Oppo F1S).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-oppo",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-vivo",
+      "title": "Vivo background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["vivo"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [vivo]",
+      "component": null,
+      "effects": ["Vivo background guidance (4 steps, DKMA severity 3)"],
+      "behaviour": "Shows Vivo's settings steps (DKMA severity 3/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/vivo.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): Funtouch OS (Android 13 layout mentioned); no OriginOS section"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (Funtouch OS (Android 13 layout mentioned); no OriginOS section).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-vivo",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-realme",
+      "title": "realme background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["realme"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [realme]",
+      "component": null,
+      "effects": ["realme background guidance (4 steps, DKMA severity 3)"],
+      "behaviour": "Shows realme's settings steps (DKMA severity 3/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/realme.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): realme UI (version not specified)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (realme UI (version not specified)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-realme",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-motorola",
+      "title": "Motorola background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["motorola"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [motorola]",
+      "component": null,
+      "effects": ["Motorola background guidance (4 steps, DKMA severity 3)"],
+      "behaviour": "Shows Motorola's settings steps (DKMA severity 3/5) in the background-reliability status and reports installed killer apps [com.motorola.batterycare]. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/motorola.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): Motorola Android 10+ (version not specified)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (Motorola Android 10+ (version not specified)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-motorola",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-lenovo",
+      "title": "Lenovo background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["lenovo"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [lenovo]",
+      "component": null,
+      "effects": ["Lenovo background guidance (3 steps, DKMA severity 3)"],
+      "behaviour": "Shows Lenovo's settings steps (DKMA severity 3/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/lenovo.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): Lenovo P2 (version not specified)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (Lenovo P2 (version not specified)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-lenovo",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-blackview",
+      "title": "Blackview background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["blackview"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [blackview]",
+      "component": null,
+      "effects": ["Blackview background guidance (4 steps, DKMA severity 3)"],
+      "behaviour": "Shows Blackview's settings steps (DKMA severity 3/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/blackview.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): Android 10-12 Blackview ROMs"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (Android 10-12 Blackview ROMs).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-blackview",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-tecno",
+      "title": "Tecno background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["tecno", "tecno mobile limited"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [tecno, tecno mobile limited]",
+      "component": null,
+      "effects": ["Tecno background guidance (4 steps, DKMA severity 3)"],
+      "behaviour": "Shows Tecno's settings steps (DKMA severity 3/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/tecno.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): HiOS (version not specified)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (HiOS (version not specified)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-tecno",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-ulefone",
+      "title": "Ulefone and RugOne background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["ulefone"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [ulefone]",
+      "component": null,
+      "effects": ["Ulefone and RugOne background guidance (4 steps, DKMA severity 4)"],
+      "behaviour": "Shows Ulefone and RugOne's settings steps (DKMA severity 4/5) in the background-reliability status and reports installed killer apps [com.mediatek.duraspeed, com.pri.screenoff.killer]. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/ulefone.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): Ulefone/RugOne Android (version not specified)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "MEDIUM",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (Ulefone/RugOne Android (version not specified)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-ulefone",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-wiko",
+      "title": "Wiko background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["wiko"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [wiko]",
+      "component": null,
+      "effects": ["Wiko background guidance (4 steps, DKMA severity 3)"],
+      "behaviour": "Shows Wiko's settings steps (DKMA severity 3/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/wiko.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): Wiko UI (version not specified)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (Wiko UI (version not specified)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-wiko",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-sony",
+      "title": "Sony background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["sony"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [sony]",
+      "component": null,
+      "effects": ["Sony background guidance (4 steps, DKMA severity 2)"],
+      "behaviour": "Shows Sony's settings steps (DKMA severity 2/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/sony.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): Android 8-11+ Xperia (STAMINA mode)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (Android 8-11+ Xperia (STAMINA mode)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-sony",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-unihertz",
+      "title": "Unihertz background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["unihertz"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [unihertz]",
+      "component": null,
+      "effects": ["Unihertz background guidance (4 steps, DKMA severity 2)"],
+      "behaviour": "Shows Unihertz's settings steps (DKMA severity 2/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/unihertz.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): Unihertz Android (version not specified)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (Unihertz Android (version not specified)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-unihertz",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-nokia",
+      "title": "Nokia (HMD Global) background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["hmd global", "nokia"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [hmd global, nokia]",
+      "component": null,
+      "effects": ["Nokia (HMD Global) background guidance (3 steps, DKMA severity 0)"],
+      "behaviour": "Shows Nokia (HMD Global)'s settings steps (DKMA severity 0/5) in the background-reliability status and reports installed killer apps [com.evenwell.powersaving.g3, com.evenwell.emm, com.mediatek.duraspeed]. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/nokia.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): Android 8-9 era (HMD says disabled Pie+)"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (Android 8-9 era (HMD says disabled Pie+)).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-nokia",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-stock-android",
+      "title": "AOSP background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["google"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [google]",
+      "component": null,
+      "effects": ["AOSP background guidance (3 steps, DKMA severity 0)"],
+      "behaviour": "Shows AOSP's settings steps (DKMA severity 0/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/stock_android.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): Android 6-9+ stock/Pixel"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (Android 6-9+ stock/Pixel).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-stock-android",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "bg-oem-htc",
+      "title": "HTC background restrictions (Don't Kill My App)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": ["htc"],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "manufacturer [htc]",
+      "component": null,
+      "effects": ["HTC background guidance (3 steps, DKMA severity 0)"],
+      "behaviour": "Shows HTC's settings steps (DKMA severity 0/5) in the background-reliability status. Guidance only; nothing is changed on the phone.",
+      "sources": [
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/urbandroid-team/dont-kill-my-app/blob/3616bc8b3b6b3910ac204e107ff0dfd6064f877c/_vendors/htc.md",
+          "note": "Don't Kill My App (community-maintained, not the vendor): HTC Sense, Android 6+"
+        },
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/training/monitoring-device-state/doze-standby",
+          "note": "Doze and App Standby; apps may send users to ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BACKGROUND",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Generic Android guidance (battery optimisation and app settings).",
+      "evidence": ["none: guidance only; upstream-documented, not locally tested"],
+      "confidence": "LOW",
+      "confidence_note": "DKMA reports from users; menu paths change between OS versions (HTC Sense, Android 6+).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bg-oem-htc",
+      "legacy_switches": [],
+      "origin": "Background/OEM audit 2026-10-10 (Don't Kill My App per-vendor data)."
+    },
+    {
+      "id": "thermal-status-ladder",
+      "title": "Thermal status workload ladder",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["limit FPS and bitrate to 90% at MODERATE and 80% at SEVERE while thermal reduction is on"],
+      "behaviour": "With automatic cooling on, limit FPS and bitrate to 90% at MODERATE and 80% at SEVERE; stop streaming at CRITICAL or higher. Applies to every SoC family because the status is the platform's own ADPF signal; the thermal HAL defines when each status is reached.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/games/optimize/adpf/thermal",
+          "note": "Statuses: LIGHT/MODERATE are 'some throttling, no significant performance impact'; SEVERE, CRITICAL, EMERGENCY, SHUTDOWN 'significant throttling that impacts performance'. getThermalHeadroom: 0.0 no throttling to 1.0 THERMAL_STATUS_SEVERE; the forecast is 'less accurate than using the current thermal status'. NaN means the API is unsupported or was called more than once per 10 s"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/android14-release/thermal/aidl/android/hardware/thermal/ThrottlingSeverity.aidl",
+          "note": "The statuses come from the vendor thermal HAL: SEVERE is 'UX is largely impacted. Similar to 1.0 throttlingThreshold', CRITICAL 'Platform has done everything to reduce power'. Thresholds are vendor-defined, so the same status means different temperatures on different SoC families"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/os/PowerManager#getThermalHeadroom(int)",
+          "note": "getThermalHeadroom(int) is API 30+; addThermalStatusListener and getCurrentThermalStatus are API 29+"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "MEMORY_THERMAL",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "No reduction (the selected FPS and bitrate run unchanged); the CRITICAL stop still applies",
+      "evidence": ["none: no benchmark run has exercised this phone-side condition; benchmark profiles set thermal_reduction=false"],
+      "confidence": "MEDIUM",
+      "confidence_note": "Statuses and their meaning are official; the percentages are ours and were never measured on a throttled phone. The CRITICAL stop is not switched by this entry (platform safety).",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=thermal-status-ladder",
+      "legacy_switches": ["Settings automatic-cooling switch; DEBUG test_thermal_reduction=false (benchmark profiles)"],
+      "origin": "ThermalGuardPolicy and MainActivity thermalStatusListener (kept; the 90/80% steps are our values)"
+    },
+    {
+      "id": "low-ram-sender-queue",
+      "title": "Smaller stream sender queue on low-RAM devices",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["cap the stream sender queue at 4 MiB when isLowRamDevice()"],
+      "behaviour": "When ActivityManager.isLowRamDevice() is true (Android Go and similar), a viewer whose queue passes 4 MiB is released to reconnect, instead of 8 MiB. The matcher cannot see RAM class, so the entry is universal and the effect applies only where the runtime flag is true.",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/app/ActivityManager#isLowRamDevice()",
+          "note": "isLowRamDevice(): true on devices configured as low-RAM (Android Go edition builds); API 19+"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "MEMORY_THERMAL",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "The original 8 MiB cap",
+      "evidence": ["none: no owned phone reports isLowRamDevice=true; MemoryThermalPolicyTest covers the selection"],
+      "confidence": "LOW",
+      "confidence_note": "The flag is official; 4 MiB is our choice: at 100-200 kbit/s it is minutes of video, far beyond any useful age. Unproven on a real Go phone.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=low-ram-sender-queue",
+      "legacy_switches": [],
+      "origin": "BluetoothVideoSender MAX_QUEUED_BYTES (8 MiB) memory-safety release"
+    },
+    {
+      "id": "trim-memory-release",
+      "title": "Release rebuildable state on onTrimMemory",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["onTrimMemory drops rebuildable scan/route state; never stops a stream or call"],
+      "behaviour": "At RUNNING_LOW/RUNNING_CRITICAL drop expired route suppressions; at BACKGROUND (40) or worse, while no stream, call or reconnect is active, also clear the scan-result maps (the next scan rebuilds them). UI_HIDDEN (every Home press) does nothing. Route failure counters are kept. Never stops a stream or call.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/topic/performance/memory#release",
+          "note": "onTrimMemory: RUNNING_LOW/RUNNING_CRITICAL mean the app is running and the system is short of memory; UI_HIDDEN and BACKGROUND/MODERATE/COMPLETE mean the UI is hidden or the process is cached; release resources that can be rebuilt"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "MEMORY_THERMAL",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "No release (the maps are pruned by their normal freshness checks)",
+      "evidence": ["none: not exercised under real memory pressure; MemoryThermalPolicyTest covers the level mapping"],
+      "confidence": "MEDIUM",
+      "confidence_note": "The maps are rebuilt by the next scan; their small size makes the saving modest. Android 14+ sends no RUNNING_* levels, so there only the BACKGROUND release applies.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=trim-memory-release",
+      "legacy_switches": [],
+      "origin": "new (the app had no onTrimMemory handler)"
+    },
+    {
+      "id": "bounded-control-queues",
+      "title": "Bounded private-call and group-relay control queues",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["private-call control queue capped at 256, group-relay child control queue at 1024"],
+      "behaviour": "Repeatable controls are bounded: one pending keyframe request per call (per child on a group relay), the newest display rotation replaces an older one, and at most 256 (call) / 1024 (group relay) keyed controls wait; a refused offer is logged. Hang-up, decline, cancel, stream-end ack, receiver-left and headers bypass the bound and are never dropped.",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/java/util/concurrent/LinkedBlockingQueue#LinkedBlockingQueue(int)",
+          "note": "A capacity bounds the queue; offer() returns false when it is full instead of growing without limit"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "MEMORY_THERMAL",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Unbounded queues (the previous behaviour)",
+      "evidence": ["none: legitimate use is one keyframe request or rotation per user action; MemoryThermalPolicyTest covers the bound"],
+      "confidence": "MEDIUM",
+      "confidence_note": "The capacities are ours, far above legitimate use (keyed controls are at most 2 for a call). A refused keyed control equals a lost keyframe request or rotation, which repeat or are superseded.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=bounded-control-queues",
+      "legacy_switches": [],
+      "origin": "AndroidPrivateVideoCall.controls and BluetoothVideoRelay receiverControls were unbounded LinkedBlockingQueues"
+    },
+    {
+      "id": "thermal-headroom-forecast",
+      "title": "Act on the ADPF thermal-headroom forecast",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": 30,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 30",
+      "component": null,
+      "effects": ["raise the workload ladder's status from the ADPF headroom forecast (never CRITICAL)"],
+      "behaviour": "Proposed: treat getThermalHeadroom(10) above 0.85/0.95/1.0 as LIGHT/MODERATE/SEVERE for the workload ladder only (never CRITICAL, never a stream stop), sampled at most every 10 s, so reduction starts before the reported status rises. Documented guide thresholds, not locally tested.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/games/optimize/adpf/thermal",
+          "note": "Statuses: LIGHT/MODERATE are 'some throttling, no significant performance impact'; SEVERE, CRITICAL, EMERGENCY, SHUTDOWN 'significant throttling that impacts performance'. getThermalHeadroom: 0.0 no throttling to 1.0 THERMAL_STATUS_SEVERE; the forecast is 'less accurate than using the current thermal status'. NaN means the API is unsupported or was called more than once per 10 s"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/os/PowerManager#getThermalHeadroom(int)",
+          "note": "getThermalHeadroom(int) is API 30+; addThermalStatusListener and getCurrentThermalStatus are API 29+"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "MEMORY_THERMAL",
+      "validation": "EXPERIMENTAL",
+      "fallback": "The reported status alone drives the ladder",
+      "evidence": ["none: no benchmark run has exercised this phone-side condition; benchmark profiles set thermal_reduction=false"],
+      "confidence": "LOW",
+      "confidence_note": "The guide gives the thresholds for devices whose status lags and warns the forecast is less accurate; SoC families differ in forecast quality (vendor thermal HAL), and NaN is common on budget SoCs.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=thermal-headroom-forecast",
+      "legacy_switches": ["DEBUG test_thermal_forecast=true enables the code path (default off)"],
+      "origin": "new experiment; the app only logged the headroom at debug level"
+    },
+    {
+      "id": "thermal-native-speed-floor",
+      "title": "Faster libaom preset while the phone is hot",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": 29,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 29",
+      "component": null,
+      "effects": ["libaom cpu-used floor 8 at MODERATE and 10 at SEVERE"],
+      "behaviour": "Proposed: while thermal reduction is on and the effective status is MODERATE/SEVERE, the software AV1 encoder's cpu-used floor is 8/10 and slower trial presets are blocked; the raised preset is not remembered.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/games/optimize/adpf/thermal",
+          "note": "Statuses: LIGHT/MODERATE are 'some throttling, no significant performance impact'; SEVERE, CRITICAL, EMERGENCY, SHUTDOWN 'significant throttling that impacts performance'. getThermalHeadroom: 0.0 no throttling to 1.0 THERMAL_STATUS_SEVERE; the forecast is 'less accurate than using the current thermal status'. NaN means the API is unsupported or was called more than once per 10 s"
+        },
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://aomedia.googlesource.com/aom/+/0006e96cdb595ff88950a2c664115335ca5517bf/aom/aomcx.h",
+          "note": "AOME_SET_CPUUSED: real-time speeds 5..10, higher is faster (less CPU per frame); settable on a running encoder"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "MEMORY_THERMAL",
+      "validation": "EXPERIMENTAL",
+      "fallback": "No floor (the governor's own overload stepping is unchanged)",
+      "evidence": ["none: no benchmark run has exercised this phone-side condition; benchmark profiles set thermal_reduction=false"],
+      "confidence": "LOW",
+      "confidence_note": "The knob is documented; its power/thermal benefit and quality cost were not measured on any phone.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=thermal-native-speed-floor",
+      "legacy_switches": ["DEBUG test_thermal_speed_floor=true enables the code path (default off)"],
+      "origin": "new experiment; NativeEncoderSpeedGovernor only reacted to measured encode time"
+    },
+    {
+      "id": "thermal-battery-temperature-fallback",
+      "title": "Battery temperature as the thermal signal on SoCs without a thermal HAL",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": 29,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": ["MEDIATEK", "UNISOC"],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 29; SoC [MEDIATEK, UNISOC]",
+      "component": null,
+      "effects": ["when the thermal HAL reports nothing, drive the ladder from battery temperature"],
+      "behaviour": "Proposed, not implemented: if getCurrentThermalStatus stays NONE and getThermalHeadroom is NaN on a budget Unisoc/MediaTek phone, drive the ladder from ACTION_BATTERY_CHANGED temperature (the app only shows it today). Matches the SoC families where a missing thermal HAL is most likely; reported only.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/games/optimize/adpf/thermal",
+          "note": "'If the initial value of GetThermalHeadroom() is NaN, the API is not available on the device'; the device model may not have the thermal hardware"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/os/BatteryManager#EXTRA_TEMPERATURE",
+          "note": "ACTION_BATTERY_CHANGED carries the battery temperature in tenths of a degree Celsius (API 5+)"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "MEMORY_THERMAL",
+      "validation": "EXPERIMENTAL",
+      "fallback": "Encode-time overload stepping (NativeEncoderSpeedGovernor) and link-rate control remain the only load shedding",
+      "evidence": ["none: no owned phone is Unisoc, and no owned MediaTek phone lacks the thermal HAL"],
+      "confidence": "LOW",
+      "confidence_note": "That these SoC families lack the HAL is an expectation, not a documented fact; the NaN rule is official. A temperature threshold needs per-SoC data before promotion.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=thermal-battery-temperature-fallback",
+      "legacy_switches": [],
+      "origin": "new proposal for devices the project does not own"
+    },
+    {
+      "id": "native-16kb-page-alignment",
+      "title": "16 KB page-size compatible native library",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["libbluetooth_video_native.so linked with -z max-page-size=16384 and -z common-page-size=16384 (build time)"],
+      "behaviour": "libbluetooth_video_native.so is linked with 16 KB max and common page size so every LOAD segment and the RELRO end are 16 KB aligned, and AGP stores it uncompressed and 16 KB zip-aligned. Build time; the flags are harmless on 4 KB devices, so the entry is universal and listed so the fact is in the one register.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/guide/practices/page-sizes",
+          "note": "NDK r28 and higher compile 16 KB-aligned by default; AGP 8.5.1+ with uncompressed libraries gives 16 KB zip alignment; check zipalign -c -P 16 and that each LOAD segment is 2**14 or higher; the RELRO end must satisfy (VirtAddr + MemSiz) % 0x4000 == 0 or the library crashes on a 16 KB device; Play requires 16 KB support for apps targeting API 35+ from 2027-02-01"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "NATIVE",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "NDK r28 defaults (LOAD segments aligned, RELRO end layout-dependent)",
+      "evidence": ["tools/check_apk_16kb.py and zipalign -c -P 16 on the built debug and release APKs (2026-10-10, NDK 28.2.13676358, AGP 8.13.0-rc01): LOAD align 0x4000 and RELRO end remainder 0 after the flag. The pre-fix debug library failed Google's documented RELRO check ((VirtAddr + MemSiz) % 0x4000 == 0, remainder 8192); release passed it. Whether a 16 KB device would have faulted on it was not tested"],
+      "confidence": "HIGH",
+      "confidence_note": "Verified statically on the APKs; not run on a 16 KB device or emulator.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=native-16kb-page-alignment",
+      "legacy_switches": ["build time: remove the target_link_options block in CMakeLists.txt"],
+      "origin": "new: explicit target_link_options in app/src/main/cpp/CMakeLists.txt"
+    },
+    {
+      "id": "native-simd-runtime-detection",
+      "title": "libaom selects SIMD kernels at run time",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["libaom: Armv8 NEON baseline, dotprod/i8mm/SVE only when AT_HWCAP reports them"],
+      "behaviour": "libaom starts from the Armv8 NEON baseline and uses dotprod, i8mm, SVE or SVE2 kernels only when the kernel reports the CPU feature, so an older arm64 core never runs an unsupported instruction. The app's JNI file has no architecture-specific code.",
+      "sources": [
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://aomedia.googlesource.com/aom/+/0006e96cdb595ff88950a2c664115335ca5517bf/aom_ports/aarch64_cpudetect.c",
+          "note": "AArch64 NEON is a baseline (mandatory in Armv8.0-A); CRC32, dotprod, i8mm, SVE and SVE2 are enabled only when getauxval(AT_HWCAP/AT_HWCAP2) reports them (the __linux__ branch)"
+        },
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://aomedia.googlesource.com/aom/+/0006e96cdb595ff88950a2c664115335ca5517bf/aom_ports/arm_cpudetect.h",
+          "note": "the NDK cpu-features library is used only when __ANDROID_API__ < 18; this app has minSdk 29, so getauxval is used"
+        },
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://aomedia.googlesource.com/aom/+/0006e96cdb595ff88950a2c664115335ca5517bf/cmake/aom_config_defaults.cmake",
+          "note": "CONFIG_RUNTIME_CPU_DETECT defaults to 1 (runtime CPU detection)"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "NATIVE",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "AOM_SIMD_CAPS / AOM_SIMD_CAPS_MASK environment variables force a feature set (debugging only)",
+      "evidence": ["generated aom_config.h of the arm64-v8a build (2026-10-10): CONFIG_RUNTIME_CPU_DETECT 1, HAVE_NEON 1, HAVE_NEON_DOTPROD/I8MM/SVE/SVE2 1 (compiled, hwcap-gated)"],
+      "confidence": "HIGH",
+      "confidence_note": "From source and the generated config; no phone without dotprod/SVE ran the encoder.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=native-simd-runtime-detection",
+      "legacy_switches": ["none at app level; AOM_SIMD_CAPS_MASK=0 in the process environment for debugging"],
+      "origin": "audit of the shipped native libraries; no code changed"
+    },
+    {
+      "id": "native-armeabi-v7a-optional-build",
+      "title": "Optional armeabi-v7a native library for 32-bit phones",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": 29,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": ["MEDIATEK", "UNISOC"],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 29; SoC [MEDIATEK, UNISOC]",
+      "component": null,
+      "effects": ["optional armeabi-v7a native library for 32-bit userspace phones (build time)"],
+      "behaviour": "Proposed, build-time only: -PenableArmeabiV7a=true adds armeabi-v7a (libaom with NEON) so phones whose ABI list lacks arm64-v8a (32-bit userspace, for example some Android Go phones on budget Unisoc/MediaTek SoCs) can install. Reported on those SoC families as a prompt to decide; default off, shipped ABIs unchanged. Measured cost: release APK 10.7 -> 17.6 MB (+6.9 MB stored, about +2.6 MB compressed); speed on 32-bit devices unmeasured.",
+      "sources": [
+        {
+          "kind": "PLATFORM_DOC",
+          "reference": "https://developer.android.com/ndk/guides/abis",
+          "note": "armeabi-v7a is the 32-bit ARM ABI, arm64-v8a the 64-bit one; a device installs and loads native code only for an ABI the APK ships, picked in the device's preference order"
+        },
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://aomedia.googlesource.com/aom/+/0006e96cdb595ff88950a2c664115335ca5517bf/aom_ports/aarch32_cpudetect.c",
+          "note": "Armv7 NEON is detected at run time from getauxval(AT_HWCAP) & HWCAP_NEON; without it the C paths run"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "NATIVE",
+      "validation": "EXPERIMENTAL",
+      "fallback": "arm64-v8a only: a device without arm64 cannot install the app",
+      "evidence": ["none: no owned phone is 32-bit; size measured from an armeabi-v7a build on 2026-10-10"],
+      "confidence": "LOW",
+      "confidence_note": "Which budget phones are 32-bit is not derivable from SoC family alone (ABI list is the fact). Software AV1 on 32-bit cores is expected to be much slower; the speed governor then settles at cpu-used 10.",
+      "reviewed": "2026-10-10",
+      "off_switch": "test_device_policy_off=native-armeabi-v7a-optional-build",
+      "legacy_switches": ["Gradle -PenableArmeabiV7a=true (default off)"],
+      "origin": "new proposal for devices the project does not own"
+    }
+  ],
+  "known_devices": [
+    {
+      "alias": "a15s",
+      "model": "CPH2179",
+      "capability_file": "benchmarks/catalog/capabilities/a15s.json",
+      "platform_provenance": "benchmarks/runs/a15s-opusfix-5a2d93a7/0001-4b5ecaf7784b/physical/manifest.json",
+      "traits": {
+        "hardware": "mt6765",
+        "board": "mt6765",
+        "sdk": 29,
+        "manufacturer": "OPPO",
+        "brand": "OPPO",
+        "soc_manufacturer": "",
+        "soc_model": "",
+        "soc_family": "MEDIATEK",
+        "skin": "COLOROS",
+        "stack_lineage": "PLATFORM_SYSTEM_BT",
+        "codec_components": []
+      },
+      "active": ["gatt-context-map-race", "le-coc-server-leak", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-power-save-mode", "bg-oem-oppo", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "component_rules": {},
+      "matching_proposals": ["android-10-11-le-coc-security-id-budget", "android-11-coc-small-sdu-coalescing", "pre-android-13-coc-congested-write-loss", "ble-scan-start-quota", "background-restriction-visible", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "native-armeabi-v7a-optional-build"]
+    },
+    {
+      "alias": "a55",
+      "model": "SM-A556E",
+      "capability_file": "benchmarks/catalog/capabilities/a55.json",
+      "platform_provenance": "benchmarks/runs/20261002-194829-samsung-classic500-parent-loss/manifest.json",
+      "traits": {
+        "hardware": "s5e8845",
+        "board": "erd8845",
+        "sdk": 36,
+        "manufacturer": "samsung",
+        "brand": "samsung",
+        "soc_manufacturer": "Samsung",
+        "soc_model": "s5e8845",
+        "soc_family": "EXYNOS",
+        "skin": "ONE_UI",
+        "stack_lineage": "BLUETOOTH_MODULE",
+        "codec_components": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"]
+      },
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "component_rules": {
+        "codec2-encoder-tie-break": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"],
+        "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder"]
+      },
+      "matching_proposals": ["android-14-gatt-mtu-517", "ble-scan-start-quota", "background-restriction-visible", "one-ui-never-sleeping-apps", "android16-bond-loss-dialog", "samsung-gatt-direct-connect-5s", "thermal-headroom-forecast", "thermal-native-speed-floor"]
+    },
+    {
+      "alias": "asus",
+      "model": "ASUS_I01WD",
+      "capability_file": "benchmarks/catalog/capabilities/asus.json",
+      "platform_provenance": "benchmarks/runs/20261002-204037-asus-m31-gatt900/manifest.json",
+      "traits": {
+        "hardware": "qcom",
+        "board": "msmnile",
+        "sdk": 30,
+        "manufacturer": "asus",
+        "brand": "asus",
+        "soc_manufacturer": "",
+        "soc_model": "",
+        "soc_family": "QUALCOMM",
+        "skin": "ASUS",
+        "stack_lineage": "PLATFORM_SYSTEM_BT",
+        "codec_components": ["c2.android.vp9.encoder"]
+      },
+      "active": ["qcom-legacy-gatt-call", "qcom-legacy-coc-call", "qcom-legacy-classic-call", "qcom-msmnile-call", "qcom-legacy-call-vp9-software-decoder", "qcom-legacy-call-relay-gatt-acknowledged-writes", "qcom-msmnile-classic-source-balanced-scan", "gatt-context-map-race", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-oem-asus", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "component_rules": {
+        "codec2-encoder-tie-break": ["c2.android.vp9.encoder"],
+        "aosp-codec2-opus-decoder-first": ["c2.android.vp9.encoder"]
+      },
+      "matching_proposals": ["android-10-11-le-coc-security-id-budget", "android-11-coc-small-sdu-coalescing", "pre-android-13-coc-congested-write-loss", "ble-scan-start-quota", "background-restriction-visible", "asus-auto-start-manager", "thermal-headroom-forecast", "thermal-native-speed-floor"]
+    },
+    {
+      "alias": "m31",
+      "model": "SM-M315F",
+      "capability_file": "benchmarks/catalog/capabilities/m31-20261005.json",
+      "platform_provenance": "benchmarks/runs/20261002-204037-asus-m31-gatt900/manifest.json",
+      "traits": {
+        "hardware": "exynos9611",
+        "board": "universal9611",
+        "sdk": 31,
+        "manufacturer": "samsung",
+        "brand": "samsung",
+        "soc_manufacturer": "Samsung",
+        "soc_model": "Exynos 9611",
+        "soc_family": "EXYNOS",
+        "skin": "ONE_UI",
+        "stack_lineage": "PLATFORM_SYSTEM_BT",
+        "codec_components": ["OMX.Exynos.VP9.Encoder"]
+      },
+      "active": ["le-coc-eatt-stranded-channels", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "component_rules": {},
+      "matching_proposals": ["pre-android-13-coc-congested-write-loss", "ble-scan-start-quota", "background-restriction-visible", "one-ui-never-sleeping-apps", "omx-encoder-qp-bounds-ignored", "omx-exynos-vp9-framerate-bitrate-adjuster", "omx-exynos-framerate-adjuster-arm", "samsung-gatt-direct-connect-5s", "android12-gatt-disconnect-status-zero", "thermal-headroom-forecast", "thermal-native-speed-floor"]
+    },
+    {
+      "alias": "s22",
+      "model": "SM-S901E",
+      "capability_file": "benchmarks/catalog/capabilities/s22.json",
+      "platform_provenance": "benchmarks/runs/20261002-194829-samsung-classic500-parent-loss/manifest.json",
+      "traits": {
+        "hardware": "qcom",
+        "board": "taro",
+        "sdk": 36,
+        "manufacturer": "samsung",
+        "brand": "samsung",
+        "soc_manufacturer": "QTI",
+        "soc_model": "SM8450",
+        "soc_family": "QUALCOMM",
+        "skin": "ONE_UI",
+        "stack_lineage": "BLUETOOTH_MODULE",
+        "codec_components": ["c2.android.av1.encoder", "c2.android.vp9.encoder"]
+      },
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "component_rules": {
+        "codec2-encoder-tie-break": ["c2.android.av1.encoder", "c2.android.vp9.encoder"],
+        "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder", "c2.android.vp9.encoder"]
+      },
+      "matching_proposals": ["android-14-gatt-mtu-517", "ble-scan-start-quota", "background-restriction-visible", "one-ui-never-sleeping-apps", "android16-bond-loss-dialog", "samsung-gatt-direct-connect-5s", "android15-qcom-coc-connect-stall", "thermal-headroom-forecast", "thermal-native-speed-floor"]
+    },
+    {
+      "alias": "s24",
+      "model": "SM-S921B",
+      "capability_file": "benchmarks/catalog/capabilities/s24.json",
+      "platform_provenance": "benchmarks/runs/20261002-194829-samsung-classic500-parent-loss/manifest.json",
+      "traits": {
+        "hardware": "s5e9945",
+        "board": "erd9945",
+        "sdk": 36,
+        "manufacturer": "samsung",
+        "brand": "samsung",
+        "soc_manufacturer": "Samsung",
+        "soc_model": "s5e9945",
+        "soc_family": "EXYNOS",
+        "skin": "ONE_UI",
+        "stack_lineage": "BLUETOOTH_MODULE",
+        "codec_components": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"]
+      },
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "component_rules": {
+        "codec2-encoder-tie-break": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"],
+        "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder"]
+      },
+      "matching_proposals": ["android-14-gatt-mtu-517", "ble-scan-start-quota", "background-restriction-visible", "one-ui-never-sleeping-apps", "android16-bond-loss-dialog", "samsung-gatt-direct-connect-5s", "thermal-headroom-forecast", "thermal-native-speed-floor"]
+    },
+    {
+      "alias": "xiaomi",
+      "model": "23053RN02I",
+      "capability_file": "benchmarks/catalog/capabilities/xiaomi.json",
+      "platform_provenance": "benchmarks/runs/20261002-205648-asus-xiaomi-gatt500/manifest.json",
+      "traits": {
+        "hardware": "mt6768",
+        "board": "mt6768",
+        "sdk": 35,
+        "manufacturer": "Xiaomi",
+        "brand": "Redmi",
+        "soc_manufacturer": "Mediatek",
+        "soc_model": "MT6769V/CZ",
+        "soc_family": "MEDIATEK",
+        "skin": "MIUI_HYPEROS",
+        "stack_lineage": "BLUETOOTH_MODULE",
+        "codec_components": ["c2.android.av1.encoder"]
+      },
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-xiaomi", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "component_rules": {
+        "codec2-encoder-tie-break": ["c2.android.av1.encoder"],
+        "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder"]
+      },
+      "matching_proposals": ["android-14-gatt-mtu-517", "ble-scan-start-quota", "background-restriction-visible", "hyperos-autostart-and-no-restrictions", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "native-armeabi-v7a-optional-build"]
+    }
+  ]
+}

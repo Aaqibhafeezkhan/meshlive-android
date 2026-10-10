@@ -1,0 +1,270 @@
+{
+  "schema_version": 1,
+  "seed": 20261006,
+  "modes": [
+    "640x480@15"
+  ],
+  "reference_mode": "native",
+  "lossless": false,
+  "audio": {
+    "enabled": true,
+    "events": [
+      {
+        "id": "sustained_audio",
+        "seconds": 2,
+        "role": "workload",
+        "kind": "noise",
+        "duration_samples": 768000,
+        "amplitude": 0.12,
+        "seed": 20261006
+      }
+    ]
+  },
+  "cues": {
+    "interval_seconds": 3,
+    "on_frames": 2,
+    "duration_samples": 4800
+  },
+  "timeline": [
+    {
+      "id": "easy_calibration_timing",
+      "seconds": 5,
+      "grid": [
+        5,
+        2
+      ],
+      "panels": [
+        {
+          "id": "color_bars",
+          "pattern": "color_bars",
+          "seed": 100
+        },
+        {
+          "id": "grayscale_steps",
+          "pattern": "grayscale_steps",
+          "seed": 101
+        },
+        {
+          "id": "grayscale_gradient",
+          "pattern": "grayscale_gradient",
+          "seed": 102
+        },
+        {
+          "id": "color_gradients",
+          "pattern": "color_gradients",
+          "seed": 103
+        },
+        {
+          "id": "low_contrast",
+          "pattern": "low_contrast",
+          "seed": 104
+        },
+        {
+          "id": "color_fades",
+          "pattern": "color_fades",
+          "seed": 105
+        },
+        {
+          "id": "scrolling_text",
+          "pattern": "scrolling_text",
+          "seed": 106
+        },
+        {
+          "id": "frame_counter",
+          "pattern": "frame_counter",
+          "seed": 107
+        },
+        {
+          "id": "visual_audio_sync",
+          "pattern": "visual_audio_sync",
+          "seed": 108
+        },
+        {
+          "id": "machine_sync_track",
+          "pattern": "machine_sync_track",
+          "seed": 109
+        }
+      ]
+    },
+    {
+      "id": "fine_detail_cuts",
+      "seconds": 5,
+      "grid": [
+        5,
+        2
+      ],
+      "panels": [
+        {
+          "id": "rotating_wedges",
+          "pattern": "rotating_wedges",
+          "seed": 110
+        },
+        {
+          "id": "frequency_circles",
+          "pattern": "frequency_circles",
+          "seed": 111
+        },
+        {
+          "id": "zone_plate",
+          "pattern": "zone_plate",
+          "seed": 112
+        },
+        {
+          "id": "line_pairs",
+          "pattern": "line_pairs",
+          "seed": 113
+        },
+        {
+          "id": "finer_checkerboards",
+          "pattern": "finer_checkerboards",
+          "seed": 114
+        },
+        {
+          "id": "diagonals_grids",
+          "pattern": "diagonals_grids",
+          "seed": 115
+        },
+        {
+          "id": "native_checkerboard",
+          "pattern": "native_checkerboard",
+          "seed": 116
+        },
+        {
+          "id": "pulsing_grid",
+          "pattern": "pulsing_grid",
+          "seed": 117
+        },
+        {
+          "id": "blinking_rectangles",
+          "pattern": "blinking_rectangles",
+          "seed": 118
+        },
+        {
+          "id": "hard_cuts",
+          "pattern": "hard_cuts",
+          "seed": 119
+        }
+      ]
+    },
+    {
+      "id": "motion_fades",
+      "seconds": 5,
+      "grid": [
+        5,
+        2
+      ],
+      "panels": [
+        {
+          "id": "moving_gradients",
+          "pattern": "moving_gradients",
+          "seed": 120
+        },
+        {
+          "id": "breathing_circles",
+          "pattern": "breathing_circles",
+          "seed": 121
+        },
+        {
+          "id": "zoom_checkerboard",
+          "pattern": "zoom_checkerboard",
+          "seed": 122
+        },
+        {
+          "id": "rotating_polygons",
+          "pattern": "rotating_polygons",
+          "seed": 123
+        },
+        {
+          "id": "independent_bars",
+          "pattern": "independent_bars",
+          "seed": 124
+        },
+        {
+          "id": "bouncing_balls",
+          "pattern": "bouncing_balls",
+          "seed": 125
+        },
+        {
+          "id": "crossing_objects",
+          "pattern": "crossing_objects",
+          "seed": 126
+        },
+        {
+          "id": "luminance_transitions",
+          "pattern": "luminance_transitions",
+          "seed": 127
+        },
+        {
+          "id": "dissolves_fades",
+          "pattern": "dissolves_fades",
+          "seed": 128
+        },
+        {
+          "id": "swirling_ink",
+          "pattern": "swirling_ink",
+          "seed": 129
+        }
+      ]
+    },
+    {
+      "id": "entropy_complex",
+      "seconds": 5,
+      "grid": [
+        5,
+        2
+      ],
+      "panels": [
+        {
+          "id": "monochrome_noise",
+          "pattern": "monochrome_noise",
+          "seed": 130
+        },
+        {
+          "id": "colored_noise",
+          "pattern": "colored_noise",
+          "seed": 131
+        },
+        {
+          "id": "noise_tracks",
+          "pattern": "noise_tracks",
+          "seed": 132
+        },
+        {
+          "id": "clean_noise_boundary",
+          "pattern": "clean_noise_boundary",
+          "seed": 133
+        },
+        {
+          "id": "grain_edges",
+          "pattern": "grain_edges",
+          "seed": 134
+        },
+        {
+          "id": "turbulent_clouds",
+          "pattern": "turbulent_clouds",
+          "seed": 135
+        },
+        {
+          "id": "precipitation",
+          "pattern": "precipitation",
+          "seed": 136
+        },
+        {
+          "id": "confetti",
+          "pattern": "confetti",
+          "seed": 137
+        },
+        {
+          "id": "dust_explosion",
+          "pattern": "dust_explosion",
+          "seed": 138
+        },
+        {
+          "id": "independent_particles",
+          "pattern": "independent_particles",
+          "seed": 139
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1972 @@
+{
+  "schema": "benchmark-speech-reference-v1",
+  "name": "speech-v1",
+  "state": "NOT RUN",
+  "purpose": "Speech-like reference for raw-input call/stream cases and decoded-PCM quality scoring",
+  "recipe_sha256": "49d280a35f7768a5e49b5e2eb7b5b93e121af19a8567d47a4298eb97db95451e",
+  "recipe": {
+    "schema": "benchmark-speech-reference-v1",
+    "rate": 48000,
+    "seed": 20261009,
+    "fade_ms": 10,
+    "speech_active_dbfs": -26.0,
+    "music_rms_dbfs": -24.0,
+    "room_tone_dbfs": -65.0,
+    "variants": {
+      "speech-v1": {
+        "duration_ms": 60000,
+        "timeline": [
+          [
+            "guard_start",
+            "digital_silence",
+            {
+              "ms": 500
+            }
+          ],
+          [
+            "clean_f_en",
+            "speech_clean",
+            {
+              "clip": {
+                "source": "ls-1995-1836-0001",
+                "start_ms": 195,
+                "end_ms": 5755
+              }
+            }
+          ],
+          [
+            "silence_1s",
+            "room_tone",
+            {
+              "ms": 1000
+            }
+          ],
+          [
+            "clean_m_en",
+            "speech_clean",
+            {
+              "clip": {
+                "source": "ls-2300-131720-0036",
+                "start_ms": 205,
+                "end_ms": 6900
+              }
+            }
+          ],
+          [
+            "silence_0_5s_a",
+            "room_tone",
+            {
+              "ms": 500
+            }
+          ],
+          [
+            "step_1",
+            "level_step",
+            {
+              "clip": {
+                "source": "ls-2961-960-0012",
+                "start_ms": 1220,
+                "end_ms": 2825
+              },
+              "peak_dbfs": -30
+            }
+          ],
+          [
+            "step_gap_1",
+            "room_tone",
+            {
+              "ms": 200
+            }
+          ],
+          [
+            "step_2",
+            "level_step",
+            {
+              "clip": {
+                "source": "ls-7127-75947-0029",
+                "start_ms": 350,
+                "end_ms": 1705
+              },
+              "peak_dbfs": -24
+            }
+          ],
+          [
+            "step_gap_2",
+            "room_tone",
+            {
+              "ms": 200
+            }
+          ],
+          [
+            "step_3",
+            "level_step",
+            {
+              "clip": {
+                "source": "ls-3729-6852-0036",
+                "start_ms": 380,
+                "end_ms": 2000
+              },
+              "peak_dbfs": -18
+            }
+          ],
+          [
+            "step_gap_3",
+            "room_tone",
+            {
+              "ms": 200
+            }
+          ],
+          [
+            "step_4",
+            "level_step",
+            {
+              "clip": {
+                "source": "ls-4077-13754-0004",
+                "start_ms": 15,
+                "end_ms": 1920
+              },
+              "peak_dbfs": -12
+            }
+          ],
+          [
+            "step_gap_4",
+            "room_tone",
+            {
+              "ms": 200
+            }
+          ],
+          [
+            "step_5",
+            "level_step",
+            {
+              "clip": {
+                "source": "ls-8463-287645-0003",
+                "start_ms": 460,
+                "end_ms": 2345
+              },
+              "peak_dbfs": -6
+            }
+          ],
+          [
+            "silence_3s",
+            "room_tone",
+            {
+              "ms": 3000
+            }
+          ],
+          [
+            "clean_m_de",
+            "speech_clean",
+            {
+              "clip": {
+                "source": "lv-de-kleinzaches-03",
+                "start_ms": 0,
+                "end_ms": 4120
+              }
+            }
+          ],
+          [
+            "silence_0_5s_b",
+            "room_tone",
+            {
+              "ms": 500
+            }
+          ],
+          [
+            "clean_f_es",
+            "speech_clean",
+            {
+              "clip": {
+                "source": "lv-es-quijote-03",
+                "start_ms": 0,
+                "end_ms": 5120
+              }
+            }
+          ],
+          [
+            "silence_0_5s_c",
+            "room_tone",
+            {
+              "ms": 500
+            }
+          ],
+          [
+            "double_talk",
+            "double_talk",
+            {
+              "a": {
+                "source": "ls-3570-5694-0001",
+                "start_ms": 415,
+                "end_ms": 5390
+              },
+              "b": {
+                "source": "ls-1188-133604-0001",
+                "start_ms": 420,
+                "end_ms": 4965
+              },
+              "b_offset_ms": 1000
+            }
+          ],
+          [
+            "silence_0_5s_d",
+            "room_tone",
+            {
+              "ms": 500
+            }
+          ],
+          [
+            "babble_snr10",
+            "speech_babble",
+            {
+              "clip": {
+                "source": "ls-4446-2271-0001",
+                "start_ms": 345,
+                "end_ms": 5590
+              },
+              "snr_db": 10,
+              "talkers": [
+                {
+                  "source": "ls-4507-16021-0022",
+                  "start_ms": 100
+                },
+                {
+                  "source": "ls-8555-292519-0005",
+                  "start_ms": 500
+                },
+                {
+                  "source": "ls-61-70968-0011",
+                  "start_ms": 100
+                },
+                {
+                  "source": "ls-7176-92135-0018",
+                  "start_ms": 600
+                }
+              ]
+            }
+          ],
+          [
+            "silence_0_5s_e",
+            "room_tone",
+            {
+              "ms": 500
+            }
+          ],
+          [
+            "noise_snr15",
+            "speech_noise",
+            {
+              "clip": {
+                "source": "ls-5105-28241-0000",
+                "start_ms": 250,
+                "end_ms": 4155
+              },
+              "snr_db": 15,
+              "seed_offset": 101
+            }
+          ],
+          [
+            "silence_0_5s_f",
+            "room_tone",
+            {
+              "ms": 500
+            }
+          ],
+          [
+            "music_piano",
+            "music",
+            {
+              "clip": {
+                "source": "music-goldberg-var1",
+                "start_ms": 0,
+                "end_ms": 6500
+              }
+            }
+          ],
+          [
+            "guard_end",
+            "digital_silence",
+            {
+              "fill": true
+            }
+          ]
+        ]
+      },
+      "speech-v1-20s": {
+        "duration_ms": 20000,
+        "timeline": [
+          [
+            "guard_start",
+            "digital_silence",
+            {
+              "ms": 250
+            }
+          ],
+          [
+            "clean_f_en",
+            "speech_clean",
+            {
+              "clip": {
+                "source": "ls-1995-1836-0001",
+                "start_ms": 195,
+                "end_ms": 3100
+              }
+            }
+          ],
+          [
+            "silence_0_5s_a",
+            "room_tone",
+            {
+              "ms": 500
+            }
+          ],
+          [
+            "step_1",
+            "level_step",
+            {
+              "clip": {
+                "source": "ls-2961-960-0012",
+                "start_ms": 1220,
+                "end_ms": 2475
+              },
+              "peak_dbfs": -30
+            }
+          ],
+          [
+            "step_gap_1",
+            "room_tone",
+            {
+              "ms": 100
+            }
+          ],
+          [
+            "step_2",
+            "level_step",
+            {
+              "clip": {
+                "source": "ls-7127-75947-0029",
+                "start_ms": 350,
+                "end_ms": 1365
+              },
+              "peak_dbfs": -24
+            }
+          ],
+          [
+            "step_gap_2",
+            "room_tone",
+            {
+              "ms": 100
+            }
+          ],
+          [
+            "step_3",
+            "level_step",
+            {
+              "clip": {
+                "source": "ls-3729-6852-0036",
+                "start_ms": 380,
+                "end_ms": 1230
+              },
+              "peak_dbfs": -18
+            }
+          ],
+          [
+            "step_gap_3",
+            "room_tone",
+            {
+              "ms": 100
+            }
+          ],
+          [
+            "step_4",
+            "level_step",
+            {
+              "clip": {
+                "source": "ls-4077-13754-0004",
+                "start_ms": 15,
+                "end_ms": 1150
+              },
+              "peak_dbfs": -12
+            }
+          ],
+          [
+            "step_gap_4",
+            "room_tone",
+            {
+              "ms": 100
+            }
+          ],
+          [
+            "step_5",
+            "level_step",
+            {
+              "clip": {
+                "source": "ls-8463-287645-0003",
+                "start_ms": 460,
+                "end_ms": 1580
+              },
+              "peak_dbfs": -6
+            }
+          ],
+          [
+            "silence_1s",
+            "room_tone",
+            {
+              "ms": 1000
+            }
+          ],
+          [
+            "double_talk",
+            "double_talk",
+            {
+              "a": {
+                "source": "ls-3570-5694-0001",
+                "start_ms": 415,
+                "end_ms": 3400
+              },
+              "b": {
+                "source": "ls-1188-133604-0001",
+                "start_ms": 420,
+                "end_ms": 2900
+              },
+              "b_offset_ms": 500
+            }
+          ],
+          [
+            "silence_0_5s_b",
+            "room_tone",
+            {
+              "ms": 500
+            }
+          ],
+          [
+            "babble_snr10",
+            "speech_babble",
+            {
+              "clip": {
+                "source": "ls-4446-2271-0001",
+                "start_ms": 345,
+                "end_ms": 3000
+              },
+              "snr_db": 10,
+              "talkers": [
+                {
+                  "source": "ls-4507-16021-0022",
+                  "start_ms": 100
+                },
+                {
+                  "source": "ls-8555-292519-0005",
+                  "start_ms": 500
+                },
+                {
+                  "source": "ls-61-70968-0011",
+                  "start_ms": 100
+                },
+                {
+                  "source": "ls-7176-92135-0018",
+                  "start_ms": 600
+                }
+              ]
+            }
+          ],
+          [
+            "silence_0_5s_c",
+            "room_tone",
+            {
+              "ms": 500
+            }
+          ],
+          [
+            "noise_snr15",
+            "speech_noise",
+            {
+              "clip": {
+                "source": "ls-5105-28241-0000",
+                "start_ms": 250,
+                "end_ms": 2900
+              },
+              "snr_db": 15,
+              "seed_offset": 101
+            }
+          ],
+          [
+            "guard_end",
+            "digital_silence",
+            {
+              "fill": true
+            }
+          ]
+        ]
+      }
+    },
+    "sources": {
+      "ls-1188-133604-0001": {
+        "id": "ls-1188-133604-0001",
+        "file": "ls-1188-133604-0001.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "1188",
+        "speaker_sex": "M",
+        "role": "double-talk voice B",
+        "transcript": "THEY UNITE EVERY QUALITY AND SOMETIMES YOU WILL FIND ME REFE",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/1188/133604/1188-133604-0001.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "3022b442af790536b60f18abe88b5376418a208f2774547b8d9700d4ef00bb03"
+      },
+      "ls-1995-1836-0001": {
+        "id": "ls-1995-1836-0001",
+        "file": "ls-1995-1836-0001.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "1995",
+        "speaker_sex": "F",
+        "role": "clean voice, quick-loop clean voice",
+        "transcript": "AT LAST THE COTTON COMBINE WAS TO ALL APPEARANCES AN ASSURED",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/1995/1836/1995-1836-0001.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "d8b59effae19763adf3bdf9448aa8bb91e63ac7f8f07dc5aeea0cc2b39e83785"
+      },
+      "ls-2300-131720-0036": {
+        "id": "ls-2300-131720-0036",
+        "file": "ls-2300-131720-0036.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "2300",
+        "speaker_sex": "M",
+        "role": "clean voice; double-talk is not used",
+        "transcript": "THE METER CONTINUED IN GENERAL SERVICE DURING EIGHTEEN NINET",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/2300/131720/2300-131720-0036.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "b194c182b01d7785f4687ac02e4fbb03f4fc74e16af57534923f11036a72a379"
+      },
+      "ls-2961-960-0012": {
+        "id": "ls-2961-960-0012",
+        "file": "ls-2961-960-0012.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "2961",
+        "speaker_sex": "F",
+        "role": "loudness step",
+        "transcript": "MANY IF NOT ALL THE ELEMENTS OF THE PRE SOCRATIC PHILOSOPHY",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/2961/960/2961-960-0012.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "f826af04b7df4abba8fa174409ac319b5792d787066060042653cf38fa877f4c"
+      },
+      "ls-3570-5694-0001": {
+        "id": "ls-3570-5694-0001",
+        "file": "ls-3570-5694-0001.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "3570",
+        "speaker_sex": "F",
+        "role": "double-talk voice A",
+        "transcript": "THE UTILITY OF CONSUMPTION AS AN EVIDENCE OF WEALTH IS TO BE",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/3570/5694/3570-5694-0001.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "83d42febda01d467c35c0b90dc7bb5d5d80b18ed95d65748a831afca53f2e3cd"
+      },
+      "ls-3729-6852-0036": {
+        "id": "ls-3729-6852-0036",
+        "file": "ls-3729-6852-0036.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "3729",
+        "speaker_sex": "F",
+        "role": "loudness step",
+        "transcript": "WHEN THE KING COMES TO PARIS EVERYBODY CALLS OUT VIVE LE ROI",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/3729/6852/3729-6852-0036.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "3a90450a2b4bf0b20a380212655a2b15f63d2ce07837d53d91f32f1ba7c77229"
+      },
+      "ls-4077-13754-0004": {
+        "id": "ls-4077-13754-0004",
+        "file": "ls-4077-13754-0004.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "4077",
+        "speaker_sex": "M",
+        "role": "loudness step",
+        "transcript": "ALREADY A NORTH AND A SOUTH WERE TALKED OF WHY NOT SET UP AL",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/4077/13754/4077-13754-0004.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "ed453fc3dc0b7188a1eac2c97ac977180685baf2766626bc4d381545c29ca99d"
+      },
+      "ls-4446-2271-0001": {
+        "id": "ls-4446-2271-0001",
+        "file": "ls-4446-2271-0001.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "4446",
+        "speaker_sex": "F",
+        "role": "speech over babble",
+        "transcript": "HE HAD PRECONCEIVED IDEAS ABOUT EVERYTHING AND HIS IDEA ABOU",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/4446/2271/4446-2271-0001.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "0469768ab489b6855389d9ac8532b7dde006891820d8137913d7789965b07c89"
+      },
+      "ls-4507-16021-0022": {
+        "id": "ls-4507-16021-0022",
+        "file": "ls-4507-16021-0022.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "4507",
+        "speaker_sex": "F",
+        "role": "babble talker",
+        "transcript": "THERE IS THE SLANG OF THE AFFECTED LADY AS WELL AS OF THE PR",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/4507/16021/4507-16021-0022.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "584a65245392a2f94850a9973a2f17b62c40970d0cb749ebfe23ac0a9001d610"
+      },
+      "ls-5105-28241-0000": {
+        "id": "ls-5105-28241-0000",
+        "file": "ls-5105-28241-0000.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "5105",
+        "speaker_sex": "M",
+        "role": "speech over noise",
+        "transcript": "HER SEA GOING QUALITIES WERE EXCELLENT AND WOULD HAVE AMPLY",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/5105/28241/5105-28241-0000.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "f706e407dd4c7716e6e7b8cb9c359e37201122a802f47684e9bbd083f2d29297"
+      },
+      "ls-61-70968-0011": {
+        "id": "ls-61-70968-0011",
+        "file": "ls-61-70968-0011.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "61",
+        "speaker_sex": "M",
+        "role": "babble talker",
+        "transcript": "HE GAVE WAY TO THE OTHERS VERY READILY AND RETREATED UNPERCE",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/61/70968/61-70968-0011.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "670ebf7f5252665a373e35486d5604c916f4d4ca68441009e458a23f91f60a22"
+      },
+      "ls-7127-75947-0029": {
+        "id": "ls-7127-75947-0029",
+        "file": "ls-7127-75947-0029.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "7127",
+        "speaker_sex": "M",
+        "role": "loudness step",
+        "transcript": "THE YOUNG GIRLS HAD INDEED MADE THEMSELVES SMALL INDEED INVI",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/7127/75947/7127-75947-0029.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "771b8d91ed3b60e853b370b2e2633dbb418832fcb1c27be13037031d8c132918"
+      },
+      "ls-7176-92135-0018": {
+        "id": "ls-7176-92135-0018",
+        "file": "ls-7176-92135-0018.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "7176",
+        "speaker_sex": "M",
+        "role": "babble talker",
+        "transcript": "IN THE MODERN WELL CONSTRUCTED PLAY HE SIMPLY RINGS UP AN IM",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/7176/92135/7176-92135-0018.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "383cfcbb7e5e785ba590aa3acfe038ad2bc57886abd5c15d43b1732b7735f6a6"
+      },
+      "ls-8463-287645-0003": {
+        "id": "ls-8463-287645-0003",
+        "file": "ls-8463-287645-0003.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "8463",
+        "speaker_sex": "F",
+        "role": "loudness step",
+        "transcript": "OF THIS PARTY EDWARD A BOY OF SEVENTEEN CALLED FORTH MUCH SY",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/8463/287645/8463-287645-0003.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "224879b9c8804034671dc7f765e8a301d03be9a407727a82458dc3349a0de6c4"
+      },
+      "ls-8555-292519-0005": {
+        "id": "ls-8555-292519-0005",
+        "file": "ls-8555-292519-0005.flac",
+        "kind": "librispeech",
+        "language": "en",
+        "speaker_id": "8555",
+        "speaker_sex": "F",
+        "role": "babble talker",
+        "transcript": "WHILE THE OLD GOLD AND THE MARBLE STAYS FOREVER GLEAMING ITS",
+        "fetch": {
+          "type": "tar_member",
+          "member": "LibriSpeech/test-clean/8555/292519/8555-292519-0005.flac"
+        },
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+        "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sha256": "449adbd1a60f05b3841f3b76c8544c7fcd5a91f2746498523173b341894b57a4"
+      },
+      "lv-de-kleinzaches-03": {
+        "file": "lv-de-kleinzaches-03.flac",
+        "kind": "librivox",
+        "language": "de",
+        "speaker_sex": "M",
+        "speaker_sex_basis": "median f0 about 95 Hz (librosa pyin); LibriVox does not publish reader sex in the item",
+        "role": "German clean voice",
+        "origin_url": "https://archive.org/download/kleinzaches_1309_librivox/kleinzaches_03_hoffmann.mp3",
+        "item_url": "https://archive.org/details/kleinzaches_1309_librivox",
+        "archive_licenseurl": "http://creativecommons.org/publicdomain/mark/1.0/",
+        "fetch": {
+          "type": "http_range_mp3",
+          "range": [
+            0,
+            500000
+          ],
+          "range_sha256": "3e7d6e80f9f41905381861a227adeb140c022afeca16c5558a2fae3336ff556e",
+          "window_s": [
+            2.25,
+            6.37
+          ]
+        },
+        "licence": "Public domain (LibriVox recordings are dedicated to the public domain; Internet Archive licenseurl creativecommons.org/licenses/publicdomain/ or /publicdomain/mark/1.0/)",
+        "licence_url": "https://librivox.org/pages/public-domain/",
+        "title": "Klein Zaches, genannt Zinnober (E.T.A. Hoffmann), chapter 3, LibriVox",
+        "id": "lv-de-kleinzaches-03",
+        "sha256": "5ab6166a9ccdeed525c62933e3f8535fa3b87119d152c8f250cf2488bfb1919a"
+      },
+      "lv-es-quijote-03": {
+        "file": "lv-es-quijote-03.flac",
+        "kind": "librivox",
+        "language": "es",
+        "speaker_sex": "F",
+        "speaker_sex_basis": "median f0 about 210 Hz (librosa pyin); LibriVox does not publish reader sex in the item",
+        "role": "Spanish clean voice",
+        "origin_url": "https://archive.org/download/don_quijote_vol1_0706_librivox/quijote_vol1_03_cervantes.mp3",
+        "item_url": "https://archive.org/details/don_quijote_vol1_0706_librivox",
+        "archive_licenseurl": "http://creativecommons.org/licenses/publicdomain/",
+        "fetch": {
+          "type": "http_range_mp3",
+          "range": [
+            0,
+            500000
+          ],
+          "range_sha256": "6b6ab576d9f239c0d5fd6a719325106ec27ad46a5c65a3fc0ab196d0bdd6efa3",
+          "window_s": [
+            14.5,
+            19.62
+          ]
+        },
+        "licence": "Public domain (LibriVox recordings are dedicated to the public domain; Internet Archive licenseurl creativecommons.org/licenses/publicdomain/ or /publicdomain/mark/1.0/)",
+        "licence_url": "https://librivox.org/pages/public-domain/",
+        "title": "Don Quijote, Volume 1 (Cervantes), chapter 3, LibriVox",
+        "id": "lv-es-quijote-03",
+        "sha256": "66df34771be2a2612c5f45c0458517f021bebbf581c79e21a431107bdd400e5b"
+      },
+      "music-goldberg-var1": {
+        "file": "music-goldberg-var1.flac",
+        "kind": "music",
+        "language": "-",
+        "speaker_sex": "-",
+        "speaker_sex_basis": "n/a (instrumental)",
+        "role": "solo piano music",
+        "origin_url": "https://archive.org/download/OpenGoldbergVariations/Kimiko%20Ishizaka%20-%20J.S.%20Bach-%20-Open-%20Goldberg%20Variations%2C%20BWV%20988%20%28Piano%29%20-%2002%20Variatio%201%20a%201%20Clav..mp3",
+        "item_url": "https://archive.org/details/OpenGoldbergVariations",
+        "archive_licenseurl": "http://creativecommons.org/publicdomain/zero/1.0/",
+        "fetch": {
+          "type": "http_range_mp3",
+          "range": [
+            0,
+            799999
+          ],
+          "range_sha256": "1f7221105a54dca6b252e3f7e18b1d68da8645ed2ffd2bc8830b519fce7e4793",
+          "window_s": [
+            4.0,
+            11.0
+          ]
+        },
+        "licence": "CC0 1.0 Universal (public domain dedication)",
+        "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "title": "J.S. Bach, Goldberg Variations BWV 988, Variatio 1, performed by Kimiko Ishizaka (The Open Goldberg Variations)",
+        "id": "music-goldberg-var1",
+        "sha256": "ce9ae6e51899154cf35175c3791849ded42e2106ea082bd3b313306945c1cc0e"
+      }
+    }
+  },
+  "tool": "tools/build_speech_reference.py",
+  "environment": {
+    "python": "3.13.3",
+    "numpy": "2.2.6",
+    "scipy": "1.16.3",
+    "soundfile": "0.13.1"
+  },
+  "determinism": "No randomness beyond fixed-seed PCG64 bits; sources are hash-checked cached lossless FLAC; resampling is scipy.signal.resample_poly; `verify` rebuilds and compares every output hash.",
+  "loop_rule": "The app plays the reference WAV as an endless loop and the runner demands WAV samples == raw-video loop samples (frames * 48000 / fps, whole samples). Pair the 60 s variant with 60 s native fixtures and speech-v1-20s with 20 s fixtures; no padding, trimming or tiling is done, and other lengths have no speech reference.",
+  "level_definitions": {
+    "active-RMS-v1": "mean power of non-overlapping 20 ms frames within 30 dB of the loudest frame (dBFS, 48 kHz)",
+    "step peak": "sample peak of the faded excerpt in dBFS",
+    "silence": "digital zero (guards) or -65 dBFS RMS pink room tone"
+  },
+  "variants": {
+    "speech-v1": {
+      "file": "speech-v1.wav",
+      "sha256": "68bbf29b91e05a94e2974ec9347ebd1b5e45f88ef7791a3f726ad856f9390402",
+      "bytes": 5760044,
+      "sample_rate": 48000,
+      "channels": 1,
+      "format": "PCM16",
+      "sample_count": 2880000,
+      "duration_s": 60.0,
+      "sample_peak_dbfs": -3.41,
+      "rms_dbfs": -26.78,
+      "active_rms_dbfs": -25.14,
+      "fixed_samples_before_fill": 2849280,
+      "final_digital_silence_samples": 30720,
+      "segments": [
+        {
+          "id": "guard_start",
+          "kind": "digital_silence",
+          "scoring": "silence",
+          "start_sample": 0,
+          "end_sample": 24000,
+          "peak_dbfs": -240.0,
+          "rms_dbfs": -240.0,
+          "active_rms_dbfs": -240.0
+        },
+        {
+          "id": "clean_f_en",
+          "kind": "speech_clean",
+          "scoring": "speech",
+          "start_sample": 24000,
+          "end_sample": 290880,
+          "peak_dbfs": -12.39,
+          "rms_dbfs": -26.5,
+          "active_rms_dbfs": -25.98,
+          "sources": [
+            "ls-1995-1836-0001"
+          ],
+          "language": "en"
+        },
+        {
+          "id": "silence_1s",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 290880,
+          "end_sample": 338880,
+          "peak_dbfs": -52.71,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "clean_m_en",
+          "kind": "speech_clean",
+          "scoring": "speech",
+          "start_sample": 338880,
+          "end_sample": 660240,
+          "peak_dbfs": -9.19,
+          "rms_dbfs": -26.96,
+          "active_rms_dbfs": -26.05,
+          "sources": [
+            "ls-2300-131720-0036"
+          ],
+          "language": "en"
+        },
+        {
+          "id": "silence_0_5s_a",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 660240,
+          "end_sample": 684240,
+          "peak_dbfs": -52.37,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "step_1",
+          "kind": "level_step",
+          "scoring": "speech",
+          "start_sample": 684240,
+          "end_sample": 761280,
+          "peak_dbfs": -30.0,
+          "rms_dbfs": -46.54,
+          "active_rms_dbfs": -45.49,
+          "sources": [
+            "ls-2961-960-0012"
+          ],
+          "target_peak_dbfs": -30,
+          "language": "en",
+          "group": "loudness_steps"
+        },
+        {
+          "id": "step_gap_1",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 761280,
+          "end_sample": 770880,
+          "peak_dbfs": -53.22,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "step_2",
+          "kind": "level_step",
+          "scoring": "speech",
+          "start_sample": 770880,
+          "end_sample": 835920,
+          "peak_dbfs": -24.0,
+          "rms_dbfs": -36.51,
+          "active_rms_dbfs": -36.27,
+          "sources": [
+            "ls-7127-75947-0029"
+          ],
+          "target_peak_dbfs": -24,
+          "language": "en",
+          "group": "loudness_steps"
+        },
+        {
+          "id": "step_gap_2",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 835920,
+          "end_sample": 845520,
+          "peak_dbfs": -52.15,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "step_3",
+          "kind": "level_step",
+          "scoring": "speech",
+          "start_sample": 845520,
+          "end_sample": 923280,
+          "peak_dbfs": -18.0,
+          "rms_dbfs": -35.34,
+          "active_rms_dbfs": -35.12,
+          "sources": [
+            "ls-3729-6852-0036"
+          ],
+          "target_peak_dbfs": -18,
+          "language": "en",
+          "group": "loudness_steps"
+        },
+        {
+          "id": "step_gap_3",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 923280,
+          "end_sample": 932880,
+          "peak_dbfs": -54.18,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "step_4",
+          "kind": "level_step",
+          "scoring": "speech",
+          "start_sample": 932880,
+          "end_sample": 1024320,
+          "peak_dbfs": -12.0,
+          "rms_dbfs": -33.75,
+          "active_rms_dbfs": -32.6,
+          "sources": [
+            "ls-4077-13754-0004"
+          ],
+          "target_peak_dbfs": -12,
+          "language": "en",
+          "group": "loudness_steps"
+        },
+        {
+          "id": "step_gap_4",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 1024320,
+          "end_sample": 1033920,
+          "peak_dbfs": -53.31,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "step_5",
+          "kind": "level_step",
+          "scoring": "speech",
+          "start_sample": 1033920,
+          "end_sample": 1124400,
+          "peak_dbfs": -6.0,
+          "rms_dbfs": -22.68,
+          "active_rms_dbfs": -21.51,
+          "sources": [
+            "ls-8463-287645-0003"
+          ],
+          "target_peak_dbfs": -6,
+          "language": "en",
+          "group": "loudness_steps"
+        },
+        {
+          "id": "silence_3s",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 1124400,
+          "end_sample": 1268400,
+          "peak_dbfs": -51.82,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "clean_m_de",
+          "kind": "speech_clean",
+          "scoring": "speech",
+          "start_sample": 1268400,
+          "end_sample": 1466160,
+          "peak_dbfs": -9.98,
+          "rms_dbfs": -26.66,
+          "active_rms_dbfs": -26.0,
+          "sources": [
+            "lv-de-kleinzaches-03"
+          ],
+          "language": "de"
+        },
+        {
+          "id": "silence_0_5s_b",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 1466160,
+          "end_sample": 1490160,
+          "peak_dbfs": -53.31,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "clean_f_es",
+          "kind": "speech_clean",
+          "scoring": "speech",
+          "start_sample": 1490160,
+          "end_sample": 1735920,
+          "peak_dbfs": -11.15,
+          "rms_dbfs": -27.14,
+          "active_rms_dbfs": -26.0,
+          "sources": [
+            "lv-es-quijote-03"
+          ],
+          "language": "es"
+        },
+        {
+          "id": "silence_0_5s_c",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 1735920,
+          "end_sample": 1759920,
+          "peak_dbfs": -52.0,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "double_talk",
+          "kind": "double_talk",
+          "scoring": "speech",
+          "start_sample": 1759920,
+          "end_sample": 2026080,
+          "peak_dbfs": -7.52,
+          "rms_dbfs": -24.16,
+          "active_rms_dbfs": -23.78,
+          "sources": [
+            "ls-3570-5694-0001",
+            "ls-1188-133604-0001"
+          ],
+          "b_offset_ms": 1000,
+          "language": "en"
+        },
+        {
+          "id": "silence_0_5s_d",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 2026080,
+          "end_sample": 2050080,
+          "peak_dbfs": -53.49,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "babble_snr10",
+          "kind": "speech_babble",
+          "scoring": "speech",
+          "start_sample": 2050080,
+          "end_sample": 2301840,
+          "peak_dbfs": -9.45,
+          "rms_dbfs": -26.28,
+          "active_rms_dbfs": -26.22,
+          "babble_talkers": [
+            "ls-4507-16021-0022",
+            "ls-8555-292519-0005",
+            "ls-61-70968-0011",
+            "ls-7176-92135-0018"
+          ],
+          "sources": [
+            "ls-4446-2271-0001"
+          ],
+          "snr_db": 10,
+          "snr_definition": "foreground active-RMS-v1 level minus whole-segment RMS of the added noise/babble",
+          "language": "en"
+        },
+        {
+          "id": "silence_0_5s_e",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 2301840,
+          "end_sample": 2325840,
+          "peak_dbfs": -52.42,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "noise_snr15",
+          "kind": "speech_noise",
+          "scoring": "speech",
+          "start_sample": 2325840,
+          "end_sample": 2513280,
+          "peak_dbfs": -3.41,
+          "rms_dbfs": -26.0,
+          "active_rms_dbfs": -26.0,
+          "noise": "pink (1/f power), fixed-seed PCG64",
+          "sources": [
+            "ls-5105-28241-0000"
+          ],
+          "snr_db": 15,
+          "snr_definition": "foreground active-RMS-v1 level minus whole-segment RMS of the added noise/babble",
+          "language": "en"
+        },
+        {
+          "id": "silence_0_5s_f",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 2513280,
+          "end_sample": 2537280,
+          "peak_dbfs": -52.72,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "music_piano",
+          "kind": "music",
+          "scoring": "music",
+          "start_sample": 2537280,
+          "end_sample": 2849280,
+          "peak_dbfs": -8.97,
+          "rms_dbfs": -23.99,
+          "active_rms_dbfs": -23.99,
+          "sources": [
+            "music-goldberg-var1"
+          ]
+        },
+        {
+          "id": "guard_end",
+          "kind": "digital_silence",
+          "scoring": "silence",
+          "start_sample": 2849280,
+          "end_sample": 2880000,
+          "peak_dbfs": -240.0,
+          "rms_dbfs": -240.0,
+          "active_rms_dbfs": -240.0
+        }
+      ]
+    },
+    "speech-v1-20s": {
+      "file": "speech-v1-20s.wav",
+      "sha256": "0e633eaf5e6768089afa3aa228ef0f38bbf5e080f5d33012c91608ffd7702dc9",
+      "bytes": 1920044,
+      "sample_rate": 48000,
+      "channels": 1,
+      "format": "PCM16",
+      "sample_count": 960000,
+      "duration_s": 20.0,
+      "sample_peak_dbfs": -4.27,
+      "rms_dbfs": -27.05,
+      "active_rms_dbfs": -24.91,
+      "fixed_samples_before_fill": 946560,
+      "final_digital_silence_samples": 13440,
+      "segments": [
+        {
+          "id": "guard_start",
+          "kind": "digital_silence",
+          "scoring": "silence",
+          "start_sample": 0,
+          "end_sample": 12000,
+          "peak_dbfs": -240.0,
+          "rms_dbfs": -240.0,
+          "active_rms_dbfs": -240.0
+        },
+        {
+          "id": "clean_f_en",
+          "kind": "speech_clean",
+          "scoring": "speech",
+          "start_sample": 12000,
+          "end_sample": 151440,
+          "peak_dbfs": -12.39,
+          "rms_dbfs": -25.96,
+          "active_rms_dbfs": -25.54,
+          "sources": [
+            "ls-1995-1836-0001"
+          ],
+          "language": "en"
+        },
+        {
+          "id": "silence_0_5s_a",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 151440,
+          "end_sample": 175440,
+          "peak_dbfs": -53.08,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "step_1",
+          "kind": "level_step",
+          "scoring": "speech",
+          "start_sample": 175440,
+          "end_sample": 235680,
+          "peak_dbfs": -30.0,
+          "rms_dbfs": -45.51,
+          "active_rms_dbfs": -44.78,
+          "sources": [
+            "ls-2961-960-0012"
+          ],
+          "target_peak_dbfs": -30,
+          "language": "en",
+          "group": "loudness_steps"
+        },
+        {
+          "id": "step_gap_1",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 235680,
+          "end_sample": 240480,
+          "peak_dbfs": -54.1,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "step_2",
+          "kind": "level_step",
+          "scoring": "speech",
+          "start_sample": 240480,
+          "end_sample": 289200,
+          "peak_dbfs": -24.0,
+          "rms_dbfs": -35.69,
+          "active_rms_dbfs": -35.54,
+          "sources": [
+            "ls-7127-75947-0029"
+          ],
+          "target_peak_dbfs": -24,
+          "language": "en",
+          "group": "loudness_steps"
+        },
+        {
+          "id": "step_gap_2",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 289200,
+          "end_sample": 294000,
+          "peak_dbfs": -53.69,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "step_3",
+          "kind": "level_step",
+          "scoring": "speech",
+          "start_sample": 294000,
+          "end_sample": 334800,
+          "peak_dbfs": -18.0,
+          "rms_dbfs": -34.38,
+          "active_rms_dbfs": -34.33,
+          "sources": [
+            "ls-3729-6852-0036"
+          ],
+          "target_peak_dbfs": -18,
+          "language": "en",
+          "group": "loudness_steps"
+        },
+        {
+          "id": "step_gap_3",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 334800,
+          "end_sample": 339600,
+          "peak_dbfs": -52.68,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "step_4",
+          "kind": "level_step",
+          "scoring": "speech",
+          "start_sample": 339600,
+          "end_sample": 394080,
+          "peak_dbfs": -12.0,
+          "rms_dbfs": -32.64,
+          "active_rms_dbfs": -30.9,
+          "sources": [
+            "ls-4077-13754-0004"
+          ],
+          "target_peak_dbfs": -12,
+          "language": "en",
+          "group": "loudness_steps"
+        },
+        {
+          "id": "step_gap_4",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 394080,
+          "end_sample": 398880,
+          "peak_dbfs": -54.26,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "step_5",
+          "kind": "level_step",
+          "scoring": "speech",
+          "start_sample": 398880,
+          "end_sample": 452640,
+          "peak_dbfs": -6.0,
+          "rms_dbfs": -21.73,
+          "active_rms_dbfs": -20.37,
+          "sources": [
+            "ls-8463-287645-0003"
+          ],
+          "target_peak_dbfs": -6,
+          "language": "en",
+          "group": "loudness_steps"
+        },
+        {
+          "id": "silence_1s",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 452640,
+          "end_sample": 500640,
+          "peak_dbfs": -52.33,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "double_talk",
+          "kind": "double_talk",
+          "scoring": "speech",
+          "start_sample": 500640,
+          "end_sample": 643920,
+          "peak_dbfs": -8.93,
+          "rms_dbfs": -23.97,
+          "active_rms_dbfs": -23.33,
+          "sources": [
+            "ls-3570-5694-0001",
+            "ls-1188-133604-0001"
+          ],
+          "b_offset_ms": 500,
+          "language": "en"
+        },
+        {
+          "id": "silence_0_5s_b",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 643920,
+          "end_sample": 667920,
+          "peak_dbfs": -52.79,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "babble_snr10",
+          "kind": "speech_babble",
+          "scoring": "speech",
+          "start_sample": 667920,
+          "end_sample": 795360,
+          "peak_dbfs": -9.34,
+          "rms_dbfs": -25.59,
+          "active_rms_dbfs": -25.5,
+          "babble_talkers": [
+            "ls-4507-16021-0022",
+            "ls-8555-292519-0005",
+            "ls-61-70968-0011",
+            "ls-7176-92135-0018"
+          ],
+          "sources": [
+            "ls-4446-2271-0001"
+          ],
+          "snr_db": 10,
+          "snr_definition": "foreground active-RMS-v1 level minus whole-segment RMS of the added noise/babble",
+          "language": "en"
+        },
+        {
+          "id": "silence_0_5s_c",
+          "kind": "room_tone",
+          "scoring": "silence",
+          "start_sample": 795360,
+          "end_sample": 819360,
+          "peak_dbfs": -53.31,
+          "rms_dbfs": -65.0,
+          "active_rms_dbfs": -65.0,
+          "room_tone_rms_dbfs": -65.0
+        },
+        {
+          "id": "noise_snr15",
+          "kind": "speech_noise",
+          "scoring": "speech",
+          "start_sample": 819360,
+          "end_sample": 946560,
+          "peak_dbfs": -4.27,
+          "rms_dbfs": -28.2,
+          "active_rms_dbfs": -28.21,
+          "noise": "pink (1/f power), fixed-seed PCG64",
+          "sources": [
+            "ls-5105-28241-0000"
+          ],
+          "snr_db": 15,
+          "snr_definition": "foreground active-RMS-v1 level minus whole-segment RMS of the added noise/babble",
+          "language": "en"
+        },
+        {
+          "id": "guard_end",
+          "kind": "digital_silence",
+          "scoring": "silence",
+          "start_sample": 946560,
+          "end_sample": 960000,
+          "peak_dbfs": -240.0,
+          "rms_dbfs": -240.0,
+          "active_rms_dbfs": -240.0
+        }
+      ]
+    }
+  },
+  "sources": {
+    "ls-1188-133604-0001": {
+      "id": "ls-1188-133604-0001",
+      "file": "ls-1188-133604-0001.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "1188",
+      "speaker_sex": "M",
+      "role": "double-talk voice B",
+      "transcript": "THEY UNITE EVERY QUALITY AND SOMETIMES YOU WILL FIND ME REFE",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/1188/133604/1188-133604-0001.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "3022b442af790536b60f18abe88b5376418a208f2774547b8d9700d4ef00bb03",
+      "bytes": 145808,
+      "native_rate": 16000,
+      "native_samples": 144640
+    },
+    "ls-1995-1836-0001": {
+      "id": "ls-1995-1836-0001",
+      "file": "ls-1995-1836-0001.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "1995",
+      "speaker_sex": "F",
+      "role": "clean voice, quick-loop clean voice",
+      "transcript": "AT LAST THE COTTON COMBINE WAS TO ALL APPEARANCES AN ASSURED",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/1995/1836/1995-1836-0001.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "d8b59effae19763adf3bdf9448aa8bb91e63ac7f8f07dc5aeea0cc2b39e83785",
+      "bytes": 115913,
+      "native_rate": 16000,
+      "native_samples": 96000
+    },
+    "ls-2300-131720-0036": {
+      "id": "ls-2300-131720-0036",
+      "file": "ls-2300-131720-0036.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "2300",
+      "speaker_sex": "M",
+      "role": "clean voice; double-talk is not used",
+      "transcript": "THE METER CONTINUED IN GENERAL SERVICE DURING EIGHTEEN NINET",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/2300/131720/2300-131720-0036.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "b194c182b01d7785f4687ac02e4fbb03f4fc74e16af57534923f11036a72a379",
+      "bytes": 120234,
+      "native_rate": 16000,
+      "native_samples": 113360
+    },
+    "ls-2961-960-0012": {
+      "id": "ls-2961-960-0012",
+      "file": "ls-2961-960-0012.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "2961",
+      "speaker_sex": "F",
+      "role": "loudness step",
+      "transcript": "MANY IF NOT ALL THE ELEMENTS OF THE PRE SOCRATIC PHILOSOPHY",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/2961/960/2961-960-0012.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "f826af04b7df4abba8fa174409ac319b5792d787066060042653cf38fa877f4c",
+      "bytes": 132837,
+      "native_rate": 16000,
+      "native_samples": 110240
+    },
+    "ls-3570-5694-0001": {
+      "id": "ls-3570-5694-0001",
+      "file": "ls-3570-5694-0001.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "3570",
+      "speaker_sex": "F",
+      "role": "double-talk voice A",
+      "transcript": "THE UTILITY OF CONSUMPTION AS AN EVIDENCE OF WEALTH IS TO BE",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/3570/5694/3570-5694-0001.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "83d42febda01d467c35c0b90dc7bb5d5d80b18ed95d65748a831afca53f2e3cd",
+      "bytes": 107263,
+      "native_rate": 16000,
+      "native_samples": 90800
+    },
+    "ls-3729-6852-0036": {
+      "id": "ls-3729-6852-0036",
+      "file": "ls-3729-6852-0036.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "3729",
+      "speaker_sex": "F",
+      "role": "loudness step",
+      "transcript": "WHEN THE KING COMES TO PARIS EVERYBODY CALLS OUT VIVE LE ROI",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/3729/6852/3729-6852-0036.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "3a90450a2b4bf0b20a380212655a2b15f63d2ce07837d53d91f32f1ba7c77229",
+      "bytes": 107447,
+      "native_rate": 16000,
+      "native_samples": 83840
+    },
+    "ls-4077-13754-0004": {
+      "id": "ls-4077-13754-0004",
+      "file": "ls-4077-13754-0004.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "4077",
+      "speaker_sex": "M",
+      "role": "loudness step",
+      "transcript": "ALREADY A NORTH AND A SOUTH WERE TALKED OF WHY NOT SET UP AL",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/4077/13754/4077-13754-0004.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "ed453fc3dc0b7188a1eac2c97ac977180685baf2766626bc4d381545c29ca99d",
+      "bytes": 99531,
+      "native_rate": 16000,
+      "native_samples": 79760
+    },
+    "ls-4446-2271-0001": {
+      "id": "ls-4446-2271-0001",
+      "file": "ls-4446-2271-0001.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "4446",
+      "speaker_sex": "F",
+      "role": "speech over babble",
+      "transcript": "HE HAD PRECONCEIVED IDEAS ABOUT EVERYTHING AND HIS IDEA ABOU",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/4446/2271/4446-2271-0001.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "0469768ab489b6855389d9ac8532b7dde006891820d8137913d7789965b07c89",
+      "bytes": 108405,
+      "native_rate": 16000,
+      "native_samples": 101600
+    },
+    "ls-4507-16021-0022": {
+      "id": "ls-4507-16021-0022",
+      "file": "ls-4507-16021-0022.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "4507",
+      "speaker_sex": "F",
+      "role": "babble talker",
+      "transcript": "THERE IS THE SLANG OF THE AFFECTED LADY AS WELL AS OF THE PR",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/4507/16021/4507-16021-0022.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "584a65245392a2f94850a9973a2f17b62c40970d0cb749ebfe23ac0a9001d610",
+      "bytes": 119838,
+      "native_rate": 16000,
+      "native_samples": 99200
+    },
+    "ls-5105-28241-0000": {
+      "id": "ls-5105-28241-0000",
+      "file": "ls-5105-28241-0000.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "5105",
+      "speaker_sex": "M",
+      "role": "speech over noise",
+      "transcript": "HER SEA GOING QUALITIES WERE EXCELLENT AND WOULD HAVE AMPLY",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/5105/28241/5105-28241-0000.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "f706e407dd4c7716e6e7b8cb9c359e37201122a802f47684e9bbd083f2d29297",
+      "bytes": 122722,
+      "native_rate": 16000,
+      "native_samples": 103280
+    },
+    "ls-61-70968-0011": {
+      "id": "ls-61-70968-0011",
+      "file": "ls-61-70968-0011.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "61",
+      "speaker_sex": "M",
+      "role": "babble talker",
+      "transcript": "HE GAVE WAY TO THE OTHERS VERY READILY AND RETREATED UNPERCE",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/61/70968/61-70968-0011.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "670ebf7f5252665a373e35486d5604c916f4d4ca68441009e458a23f91f60a22",
+      "bytes": 127646,
+      "native_rate": 16000,
+      "native_samples": 102000
+    },
+    "ls-7127-75947-0029": {
+      "id": "ls-7127-75947-0029",
+      "file": "ls-7127-75947-0029.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "7127",
+      "speaker_sex": "M",
+      "role": "loudness step",
+      "transcript": "THE YOUNG GIRLS HAD INDEED MADE THEMSELVES SMALL INDEED INVI",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/7127/75947/7127-75947-0029.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "771b8d91ed3b60e853b370b2e2633dbb418832fcb1c27be13037031d8c132918",
+      "bytes": 98829,
+      "native_rate": 16000,
+      "native_samples": 84560
+    },
+    "ls-7176-92135-0018": {
+      "id": "ls-7176-92135-0018",
+      "file": "ls-7176-92135-0018.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "7176",
+      "speaker_sex": "M",
+      "role": "babble talker",
+      "transcript": "IN THE MODERN WELL CONSTRUCTED PLAY HE SIMPLY RINGS UP AN IM",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/7176/92135/7176-92135-0018.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "383cfcbb7e5e785ba590aa3acfe038ad2bc57886abd5c15d43b1732b7735f6a6",
+      "bytes": 165851,
+      "native_rate": 16000,
+      "native_samples": 143040
+    },
+    "ls-8463-287645-0003": {
+      "id": "ls-8463-287645-0003",
+      "file": "ls-8463-287645-0003.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "8463",
+      "speaker_sex": "F",
+      "role": "loudness step",
+      "transcript": "OF THIS PARTY EDWARD A BOY OF SEVENTEEN CALLED FORTH MUCH SY",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/8463/287645/8463-287645-0003.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "224879b9c8804034671dc7f765e8a301d03be9a407727a82458dc3349a0de6c4",
+      "bytes": 150218,
+      "native_rate": 16000,
+      "native_samples": 126480
+    },
+    "ls-8555-292519-0005": {
+      "id": "ls-8555-292519-0005",
+      "file": "ls-8555-292519-0005.flac",
+      "kind": "librispeech",
+      "language": "en",
+      "speaker_id": "8555",
+      "speaker_sex": "F",
+      "role": "babble talker",
+      "transcript": "WHILE THE OLD GOLD AND THE MARBLE STAYS FOREVER GLEAMING ITS",
+      "fetch": {
+        "type": "tar_member",
+        "member": "LibriSpeech/test-clean/8555/292519/8555-292519-0005.flac"
+      },
+      "licence": "CC BY 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+      "origin_url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+      "sha256": "449adbd1a60f05b3841f3b76c8544c7fcd5a91f2746498523173b341894b57a4",
+      "bytes": 158513,
+      "native_rate": 16000,
+      "native_samples": 153200
+    },
+    "lv-de-kleinzaches-03": {
+      "file": "lv-de-kleinzaches-03.flac",
+      "kind": "librivox",
+      "language": "de",
+      "speaker_sex": "M",
+      "speaker_sex_basis": "median f0 about 95 Hz (librosa pyin); LibriVox does not publish reader sex in the item",
+      "role": "German clean voice",
+      "origin_url": "https://archive.org/download/kleinzaches_1309_librivox/kleinzaches_03_hoffmann.mp3",
+      "item_url": "https://archive.org/details/kleinzaches_1309_librivox",
+      "archive_licenseurl": "http://creativecommons.org/publicdomain/mark/1.0/",
+      "fetch": {
+        "type": "http_range_mp3",
+        "range": [
+          0,
+          500000
+        ],
+        "range_sha256": "3e7d6e80f9f41905381861a227adeb140c022afeca16c5558a2fae3336ff556e",
+        "window_s": [
+          2.25,
+          6.37
+        ]
+      },
+      "licence": "Public domain (LibriVox recordings are dedicated to the public domain; Internet Archive licenseurl creativecommons.org/licenses/publicdomain/ or /publicdomain/mark/1.0/)",
+      "licence_url": "https://librivox.org/pages/public-domain/",
+      "title": "Klein Zaches, genannt Zinnober (E.T.A. Hoffmann), chapter 3, LibriVox",
+      "id": "lv-de-kleinzaches-03",
+      "sha256": "5ab6166a9ccdeed525c62933e3f8535fa3b87119d152c8f250cf2488bfb1919a",
+      "bytes": 149541,
+      "native_rate": 44100,
+      "native_samples": 181692
+    },
+    "lv-es-quijote-03": {
+      "file": "lv-es-quijote-03.flac",
+      "kind": "librivox",
+      "language": "es",
+      "speaker_sex": "F",
+      "speaker_sex_basis": "median f0 about 210 Hz (librosa pyin); LibriVox does not publish reader sex in the item",
+      "role": "Spanish clean voice",
+      "origin_url": "https://archive.org/download/don_quijote_vol1_0706_librivox/quijote_vol1_03_cervantes.mp3",
+      "item_url": "https://archive.org/details/don_quijote_vol1_0706_librivox",
+      "archive_licenseurl": "http://creativecommons.org/licenses/publicdomain/",
+      "fetch": {
+        "type": "http_range_mp3",
+        "range": [
+          0,
+          500000
+        ],
+        "range_sha256": "6b6ab576d9f239c0d5fd6a719325106ec27ad46a5c65a3fc0ab196d0bdd6efa3",
+        "window_s": [
+          14.5,
+          19.62
+        ]
+      },
+      "licence": "Public domain (LibriVox recordings are dedicated to the public domain; Internet Archive licenseurl creativecommons.org/licenses/publicdomain/ or /publicdomain/mark/1.0/)",
+      "licence_url": "https://librivox.org/pages/public-domain/",
+      "title": "Don Quijote, Volume 1 (Cervantes), chapter 3, LibriVox",
+      "id": "lv-es-quijote-03",
+      "sha256": "66df34771be2a2612c5f45c0458517f021bebbf581c79e21a431107bdd400e5b",
+      "bytes": 200413,
+      "native_rate": 44100,
+      "native_samples": 225792
+    },
+    "music-goldberg-var1": {
+      "file": "music-goldberg-var1.flac",
+      "kind": "music",
+      "language": "-",
+      "speaker_sex": "-",
+      "speaker_sex_basis": "n/a (instrumental)",
+      "role": "solo piano music",
+      "origin_url": "https://archive.org/download/OpenGoldbergVariations/Kimiko%20Ishizaka%20-%20J.S.%20Bach-%20-Open-%20Goldberg%20Variations%2C%20BWV%20988%20%28Piano%29%20-%2002%20Variatio%201%20a%201%20Clav..mp3",
+      "item_url": "https://archive.org/details/OpenGoldbergVariations",
+      "archive_licenseurl": "http://creativecommons.org/publicdomain/zero/1.0/",
+      "fetch": {
+        "type": "http_range_mp3",
+        "range": [
+          0,
+          799999
+        ],
+        "range_sha256": "1f7221105a54dca6b252e3f7e18b1d68da8645ed2ffd2bc8830b519fce7e4793",
+        "window_s": [
+          4.0,
+          11.0
+        ]
+      },
+      "licence": "CC0 1.0 Universal (public domain dedication)",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "title": "J.S. Bach, Goldberg Variations BWV 988, Variatio 1, performed by Kimiko Ishizaka (The Open Goldberg Variations)",
+      "id": "music-goldberg-var1",
+      "sha256": "ce9ae6e51899154cf35175c3791849ded42e2106ea082bd3b313306945c1cc0e",
+      "bytes": 181100,
+      "native_rate": 48000,
+      "native_samples": 336000
+    }
+  },
+  "librispeech_archive": {
+    "url": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+    "bytes": 346663984,
+    "sha256": "39fde525e59672dc6d1551919b1478f724438a95aa55f874b576be21967e6c23",
+    "openslr_md5": "32fa31d27d2e1cad72775fee3f4849a9",
+    "licence": "CC BY 4.0",
+    "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+    "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; V. Panayotov, G. Chen, D. Povey, S. Khudanpur, 'LibriSpeech: an ASR corpus based on public domain audio books', ICASSP 2015. Readers are LibriVox volunteers.",
+    "metadata": "LibriSpeech/SPEAKERS.TXT (sex field) from https://www.openslr.org/resources/12/raw-metadata.tar.gz"
+  },
+  "scope": "Generated reference input only. It supplies the actual Opus input; microphone, speaker, acoustic and A/V-cue timing are not exercised, and this file is not a pass."
+}

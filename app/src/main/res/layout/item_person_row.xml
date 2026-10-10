@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One person in "People nearby": avatar, name, reachability, and call buttons (like a call list). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/selectableItemBackground"
+    android:descendantFocusability="blocksDescendants"
+    android:gravity="center_vertical"
+    android:minHeight="72dp"
+    android:orientation="horizontal"
+    android:paddingStart="4dp"
+    android:paddingTop="8dp"
+    android:paddingEnd="0dp"
+    android:paddingBottom="8dp">
+
+    <TextView
+        android:id="@+id/personAvatar"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@drawable/icon_circle_background"
+        android:gravity="center"
+        android:importantForAccessibility="no"
+        android:textColor="@color/white"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        tools:text="A" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/personName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textAppearance="@style/TextAppearance.App.BodyLarge"
+            android:textStyle="bold"
+            tools:text="Asha" />
+
+        <TextView
+            android:id="@+id/personReach"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:drawablePadding="4dp"
+            android:ellipsize="end"
+            android:gravity="center_vertical"
+            android:maxLines="1"
+            android:textAppearance="@style/TextAppearance.App.Body"
+            tools:text="Nearby" />
+    </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/personVoiceButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:focusable="false"
+        android:padding="12dp"
+        android:src="@drawable/ic_call"
+        app:tint="@color/text_primary" />
+
+    <ImageButton
+        android:id="@+id/personVideoButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:focusable="false"
+        android:padding="12dp"
+        android:src="@drawable/ic_videocam"
+        app:tint="@color/text_primary" />
+</LinearLayout>

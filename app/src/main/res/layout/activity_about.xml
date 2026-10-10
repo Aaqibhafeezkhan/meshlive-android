@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/aboutRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/app_background"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/screen_gutter"
+        android:paddingTop="8dp"
+        android:paddingEnd="@dimen/screen_gutter"
+        android:paddingBottom="32dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/aboutBackButton"
+                style="@style/Widget.App.TopIconButton"
+                android:contentDescription="@string/action_back"
+                android:src="@drawable/ic_arrow_back" />
+
+            <TextView
+                style="@style/Widget.App.TopBarTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:accessibilityHeading="true"
+                android:text="@string/about_title"
+                android:textAppearance="@style/TextAppearance.App.Headline" />
+        </LinearLayout>
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.App.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="@dimen/card_padding">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/app_name"
+                    android:textAppearance="@style/TextAppearance.App.Headline" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/about_version"
+                    android:textAppearance="@style/TextAppearance.App.Body" />
+
+                <TextView
+                    android:id="@+id/aboutVersionText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textAppearance="@style/TextAppearance.App.BodyLarge"
+                    android:textIsSelectable="true"
+                    tools:text="1.0 (build 1, debug)" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/about_signing"
+                    android:textAppearance="@style/TextAppearance.App.Body" />
+
+                <TextView
+                    android:id="@+id/aboutSigningText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textAppearance="@style/TextAppearance.App.Mono"
+                    android:textIsSelectable="true"
+                    android:textSize="14sp"
+                    tools:text="AB:CD:EF:…" />
+
+                <TextView
+                    style="@style/Widget.App.Description"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/about_signing_explanation" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/aboutCopyButton"
+                    style="@style/Widget.App.Button.Secondary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:minHeight="48dp"
+                    android:text="@string/action_copy" />
+
+                <TextView
+                    style="@style/Widget.App.Description"
+                    android:layout_marginTop="16dp"
+                    android:drawablePadding="8dp"
+                    android:gravity="center_vertical"
+                    android:text="@string/about_offline"
+                    app:drawableStartCompat="@drawable/ic_cloud_off"
+                    app:drawableTint="@color/text_secondary" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
+</ScrollView>
