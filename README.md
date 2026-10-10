@@ -429,6 +429,10 @@ your friend can compare them with the release page.
 
 ## Contributing
 
+Measured results on our reference phones, with the recipes to regenerate the exact test inputs, are published in
+[MeshLive/meshlive-benchmarks](https://github.com/MeshLive/meshlive-benchmarks): run the same cases on your build and
+compare per case.
+
 Bug reports, device compatibility results, documentation and code are all welcome.
 
 - [CONTRIBUTING.md](CONTRIBUTING.md): setup, workflow and what makes a good change.
