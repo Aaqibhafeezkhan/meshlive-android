@@ -1,0 +1,120 @@
+name: Device test report
+description: Tell us how MeshLive worked on your phone (reports where everything worked are just as useful).
+title: "[Device] <phone model>, Android <version>"
+labels: ["device-compat", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. Reports like this fill in the **Device compatibility** table in the README.
+
+        Please answer for **your own phone**, tested with at least one other phone running MeshLive. For each item,
+        choose **Pass** only if it worked for a few minutes without restarting the app or Bluetooth. Choose **Partial**
+        if it worked but badly (very slow, frequent freezes, only in some conditions), **Fail** if it did not work,
+        and **Not tested** if you did not try it.
+
+        Do not post photos, recordings or names of other people. The in-app diagnostics block (About > Export
+        diagnostics) contains no media, messages, contact names or full identity keys. Security problems: do not post
+        details here; open an issue that says only "security report" and the maintainer will arrange a private channel.
+  - type: input
+    id: phone
+    attributes:
+      label: Phone model
+      description: Manufacturer and exact model (Settings > About phone > Model number).
+      placeholder: "Samsung SM-A556E (Galaxy A55)"
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android version and security patch level
+      placeholder: "14, patch 2025-09-01"
+    validations:
+      required: true
+  - type: input
+    id: bluetooth
+    attributes:
+      label: Bluetooth version and chipset (if you know them)
+      description: >-
+        Optional. Many phones do not show this in Settings; leave it blank if unsure. Do not guess: a wrong
+        value is worse than none.
+      placeholder: "Bluetooth 5.3, Qualcomm WCN7851"
+  - type: input
+    id: app
+    attributes:
+      label: App version and signing fingerprint
+      description: From the app's About screen. If the fingerprint does not match the release notes, say so.
+      placeholder: "0.1.0-beta (1), 2E:EF:C0:5A:..."
+    validations:
+      required: true
+  - type: input
+    id: other_phone
+    attributes:
+      label: Other phone(s) you tested with
+      description: Model and Android version. For the relay test, say which phone was in the middle.
+      placeholder: "Pixel 8, Android 15"
+  - type: checkboxes
+    id: transport
+    attributes:
+      label: Bluetooth transport used (tick all that you used, if you know)
+      description: Settings > transport. GATT is the default and needs no pairing; Classic needs a one-time pairing; LE CoC is experimental.
+      options:
+        - label: GATT (default)
+        - label: LE L2CAP CoC
+        - label: Classic RFCOMM
+        - label: Not sure
+  - type: dropdown
+    id: voice
+    attributes:
+      label: Private voice call (audio both ways)
+      options: ["Pass", "Partial", "Fail", "Not tested"]
+      default: 3
+    validations:
+      required: true
+  - type: dropdown
+    id: video
+    attributes:
+      label: Private video call (video both ways)
+      options: ["Pass", "Partial", "Fail", "Not tested"]
+      default: 3
+    validations:
+      required: true
+  - type: dropdown
+    id: livestream
+    attributes:
+      label: Livestream (this phone broadcasting, and/or watching another phone's broadcast)
+      options: ["Pass", "Partial", "Fail", "Not tested"]
+      default: 3
+    validations:
+      required: true
+  - type: dropdown
+    id: relay
+    attributes:
+      label: Relay through one extra phone (a stream reaching a viewer through a middle phone)
+      description: Tell us in the notes which role this phone had (source, middle phone or viewer).
+      options: ["Pass", "Partial", "Fail", "Not tested"]
+      default: 3
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: >-
+        What you saw and roughly when (for example "video froze every 20 s", "second phone never appeared",
+        "worked with the screen locked"). Mention distance and anything unusual such as a busy 2.4 GHz Wi-Fi.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics block (optional but very helpful)
+      description: Paste the text from About > Export diagnostics, one block per phone if you can.
+      render: text
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Before you submit
+      options:
+        - label: I did not include recordings, photos, other people's names or anything I do not want public.
+          required: true

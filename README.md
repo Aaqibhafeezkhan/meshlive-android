@@ -2,6 +2,8 @@
 
 **Live video, voice calls and messages between nearby phones, over Bluetooth, with no internet.**
 
+> **Privacy warning:** MeshLive's Bluetooth announcements currently carry a stable node-ID prefix that lets anyone listening link a phone's rotating Bluetooth addresses over time. Rotating IDs are only an untested experiment so far; see [What nearby phones can see](#what-nearby-phones-can-see).
+
 <p align="center">
   <a href="https://github.com/MeshLive/meshlive-android/releases/latest/download/MeshLive.apk"><img alt="Download MeshLive for Android" src="https://img.shields.io/badge/Download-MeshLive%20for%20Android-000000?style=for-the-badge&logo=android&logoColor=white" height="56"></a>
   &nbsp;
@@ -20,9 +22,10 @@ disasters, censorship, remote areas, crowded events.
 MeshLive is free software under the GNU GPL, version 3 or later. It is built by volunteers and has not had an
 independent security review. See [Status](#status) before you rely on it.
 
-- [Status](#status) | [Features](#features) | [Screenshots](#screenshots) | [Install](#install) |
+- [Status](#status) | [Device compatibility](#device-compatibility) | [Features](#features) | [Screenshots](#screenshots) | [Install](#install) |
   [Use the app](#use-the-app) | [Verifying a release](#verifying-a-release) | [Distribution](#distribution)
 - [Build from source](#build-from-source) | [How it works](#how-it-works) |
+  [What nearby phones can see](#what-nearby-phones-can-see) |
   [Security model and limitations](#security-model-and-limitations) | [FAQ](#faq) |
   [Contributing](#contributing) | [License](#license)
 
@@ -53,6 +56,36 @@ Reference phones used for testing, by alias:
 | A15s | OPPO CPH2179 | 10 |
 
 An iPhone client is being developed in a sibling repository, `MeshLive/meshlive-ios`.
+
+## Device compatibility
+
+**Please add your phone.** Fill in the [device test report](https://github.com/MeshLive/meshlive-android/issues/new?template=device-report.yml)
+(about two minutes) and we will add it to this table. Reports where everything worked are as useful as failures.
+
+How to read it: **pass** = met all of our quality and reliability checks; **partial** = it ran and carried audio or
+video in our tests, but missed at least one of our own checks or worked only with some phone combinations; **fail** =
+did not work in our tests; **not tested** = we have no recorded test.
+
+So far **no phone has met all of our checks, so there is no "pass" yet.** The results below come from the maintainers'
+tests on development builds shortly before 0.1.0-beta (2 to 10 October 2026). Fixes made since then, for example to
+stream relaying, have not yet been re-measured on phones. We have not recorded the Bluetooth version or chipset of
+these phones; reports from users will fill that in.
+
+| Phone | Android | Voice call | Video call | Livestream | Relay through one phone | What we saw |
+| --- | --- | --- | --- | --- | --- | --- |
+| Samsung SM-S921B (Galaxy S24) | 16 | partial | partial | partial | partial | Voice connected with the M31 and ASUS; some voice calls to the A15s failed to set up reliably |
+| Samsung SM-S901E (Galaxy S22) | 16 | not tested | not tested | partial | partial | Middle phone in the S24, S22, A55 relay tests |
+| Samsung SM-A556E (Galaxy A55) | 16 | not tested | not tested | partial | partial | Relay chain with S24 and S22 formed, but timing and overload checks failed |
+| Xiaomi Redmi 23053RN02I | 15 | not tested | not tested | partial | fail | Relay runs failed after the parent phone had been identified |
+| Samsung SM-M315F (Galaxy M31) | 12 | partial | partial | partial | partial | Video call with the ASUS at 500 kbps worked both ways but missed picture and timing checks; its hardware VP9 encoder sends large bursts that can freeze GATT video |
+| ASUS ROG Phone 2 (ASUS_I01WD) | 11 | partial | partial | partial | partial | Some calls started from this phone did not finish setting up |
+| OPPO CPH2179 (A15s) | 10 | partial | partial | partial | partial | Slow when sending video (0.4 to 6 frames per second in call tests); LE L2CAP CoC stops working after roughly 15 uses in one Bluetooth session (an Android stack limit) |
+
+"Relay through one phone" means a livestream passed on by a viewer phone to a second viewer. In our multi-phone relay
+test on 8 October, viewers reached through a relay or a fan-out played at 0.9 to 7.6 frames per second. Relaying a
+private call is still a debug feature and is not available in normal use. All three transports (GATT, LE CoC and
+Classic) were exercised between these phones; a pass or fail for one phone pair does not carry over to other pairs.
+Detailed measurements are in [docs/DECISIONS.md](docs/DECISIONS.md) and the benchmark data linked from this repository.
 
 ## Features
 
@@ -341,6 +374,53 @@ registry with official sources and off-switches.
   the harness.
 - [docs/DECISIONS.md](docs/DECISIONS.md): measured reasons for the policies, with the comparisons.
 
+## What nearby phones can see
+
+Anyone with a Bluetooth scanner in range can read what MeshLive broadcasts. They do not need to connect or pair. The
+**content** of calls, streams and messages is encrypted, but the fact that a MeshLive phone is there is not hidden.
+
+**What a phone broadcasts.** When a phone offers a call or a stream it sends a 22-byte Bluetooth LE announcement (or an
+equivalent service UUID when the experimental "find iPhones" switch is on) containing:
+
+- a **stable node-ID prefix** (48 bits, the first 6 bytes of the SHA-256 of the phone's identity key). It does not
+  change until the identity is wiped or reset;
+- the Bluetooth transport it offers, which video codecs it supports, and flags such as "accepting connections",
+  "can relay", "call available", "stream available" and "paused";
+- the route cost (how many relay hops away the source is);
+- for a stream: a 4-byte broadcast token, a sequence number, and the resolution, frame rate and bitrate. A phone
+  searching for a lost stream can advertise a request that names the lost parent's prefix.
+
+**Why this lets people be tracked.** Android changes a phone's own Bluetooth LE address from time to time so that
+scanners cannot follow it. The prefix is in the payload and stays the same, so a scanner that records prefixes can link
+all of those changing addresses to the same phone, across places and days. In normal use the setting **Reachable for
+calls** is on, which means the phone advertises that it can take a call while the app is open and, through its session
+service, in the background. Turning the setting off stops that, at the cost that others cannot call you unless your
+Call screen is open.
+
+**Relays repeat it.** A phone relaying a call advertises the callee's prefix, so that identity can be seen beyond
+the first phone. Viewers that pass a stream on advertise the stream too.
+
+**Anyone who connects learns who you are.** The signed handshake message that starts every Bluetooth connection
+contains the phone's public key and is not encrypted, so a connection attempt, or a sniffer watching one, reveals the
+identity. LE connections need no pairing, so any nearby scanner can try. An identity-hiding handshake is planned, not
+built. Also exposed outside the announcement:
+
+- Classic Bluetooth uses the phone's permanent hardware address. A first Classic contact with an unpaired phone shows
+  its name and address while it is discoverable.
+- A phone that is paired with yours through Android can work out your rotating LE addresses.
+- The phone's Bluetooth device name can be read by any phone that connects, before the handshake. MeshLive does not
+  change it unless the rotating-IDs experiment is on.
+- Optional names and stream titles (experimental) are public while they are enabled.
+- The size and timing of the encrypted data shows that a call or stream is happening, and roughly of what kind.
+
+**Rotating discovery IDs (experimental, off by default, not yet tested on phones).** The first phase replaces the
+prefix with an ID that changes every 15 minutes, and restarts advertising at each change. It covers only the "ready
+for calls" announcement of phones using LE CoC or GATT, and only for people who are not your contacts. Streams, relays,
+viewers and Classic still use the stable prefix, and recognising your own contacts through the changing IDs is not
+built. Until that is finished and measured on phones, assume the stable prefix can be used to track a phone. To reduce
+your exposure now: switch Bluetooth off when you do not need it, switch **Reachable for calls** off when you are not
+expecting calls, leave names and titles off, and give the phone a neutral Bluetooth name.
+
 ## Security model and limitations
 
 What MeshLive protects, and what it does not. The full rules are in [docs/PROTOCOL.md](docs/PROTOCOL.md); to report a
@@ -417,7 +497,7 @@ Saver. We have not yet run matched unplugged endurance tests, so there is no bat
 
 **Which phones were tested?** The seven reference phones in [Status](#status): Samsung S24, S22, A55 and M31, a
 Redmi (Xiaomi), an ASUS and an OPPO A15s, running Android 10 to 16. Other phones may work or may hit Bluetooth-stack
-bugs. Please send results with the "device compatibility" issue form and, if you can, an Export diagnostics block.
+bugs. Please send results with the [device test report](https://github.com/MeshLive/meshlive-android/issues/new?template=device-report.yml) form and, if you can, an Export diagnostics block.
 
 **Why is GATT the default? Why does Classic ask me to pair?** LE GATT works on the most phones without pairing, but it
 is the slowest. Classic has the highest throughput but needs a one-time mutual pairing (an experimental option removes
