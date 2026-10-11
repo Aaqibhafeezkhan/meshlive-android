@@ -1,0 +1,54 @@
+# CodeQL code scanning.
+#
+# Java/Kotlin runs with `build-mode: none`: CodeQL reads the sources without compiling them. A full build
+# of this project needs the Android SDK, NDK 28.2.13676358, CMake, Perl and two downloaded native source
+# trees (libaom, libopus), which is too heavy and fragile for a free CI runner, and the scan only needs the
+# Kotlin/Java app code. Consequence: the C/C++ native code (libaom/libopus bridge) is NOT analysed, and
+# `none` mode has less precise data flow than a built analysis. Python (host tools) is scanned too.
+# If a repository-level "default setup" for code scanning is ever enabled, disable it first: the two
+# configurations conflict.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "41 5 * * 3"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # upload results
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: java-kotlin
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: "/language:${{ matrix.language }}"

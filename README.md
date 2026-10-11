@@ -12,6 +12,11 @@
 
 <p align="center">Android 10 or newer · free · no account · <a href="#install">How to install</a></p>
 
+<p align="center">
+  <a href="https://scorecard.dev/viewer/?uri=github.com/MeshLive/meshlive-android"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/MeshLive/meshlive-android/badge"></a>
+  <a href="https://github.com/MeshLive/meshlive-android/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/MeshLive/meshlive-android/actions/workflows/codeql.yml/badge.svg?branch=main"></a>
+</p>
+
 MeshLive is an Android app that sends encrypted live camera video and microphone audio directly from one phone to
 another over Bluetooth. A viewer can pass the stream on to one more phone, so a broadcast can reach people who are
 out of range of the source. Two people can also make a private voice or video call, and (experimentally) leave
@@ -204,6 +209,16 @@ A release is a set of per-ABI APKs signed with the project's release key, publis
 `SOURCE-MANIFEST.txt`. The signature is what proves who built the APK; the manifest and its attestation prove which
 source it was built from. Signing happens only on the maintainer's machine: CI
 (`.github/workflows/release-attest.yml`) holds no signing key and builds no APK.
+
+Quick check with the [GitHub CLI](https://cli.github.com/) (replace the file name with the one you downloaded):
+
+```bash
+gh attestation verify MeshLive-0.1.0-beta-universal.apk --repo MeshLive/meshlive-android
+gh attestation verify SOURCE-MANIFEST.txt --repo MeshLive/meshlive-android
+```
+
+A passing result says this repository's `Release attestation` workflow recorded that exact file digest for a tagged
+commit. It does not replace the signing-certificate check below. The full procedure follows.
 
 Signing certificate SHA-256 (also in each release's notes and `signing-cert.sha256`):
 

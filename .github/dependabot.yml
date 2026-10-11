@@ -1,0 +1,24 @@
+# Weekly update checks for Gradle dependencies and for the pinned GitHub Actions.
+#
+# Gradle note: this project locks and checksum-verifies every dependency
+# (buildscript-gradle.lockfile, app/gradle.lockfile, gradle/verification-metadata.xml). A Dependabot
+# pull request therefore only bumps the version; a maintainer must regenerate the lockfiles and
+# verification metadata with the command in README.md ("Pinned toolchain") and test on phones before
+# merging. Open-PR limits are kept low for that reason.
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels: ["dependencies"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels: ["dependencies"]
