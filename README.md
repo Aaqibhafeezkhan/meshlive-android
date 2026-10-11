@@ -76,6 +76,14 @@ tests on development builds shortly before 0.1.0-beta (2 to 10 October 2026). Fi
 stream relaying, have not yet been re-measured on phones. We have not recorded the Bluetooth version or chipset of
 these phones; reports from users will fill that in.
 
+**What "partial" and the benchmark FAIL verdicts mean.** In the public
+[benchmark data](https://github.com/MeshLive/meshlive-benchmarks), about three in four failed executions (930 of 1,261)
+delivered media to every phone that was meant to receive it and then missed at least one deliberately strict gate, for
+example first picture within 3 seconds, at least 95% of the requested frame rate in every report interval, zero
+freezes, or VMAF 90 against the reference. About 9% reached only some of the receiving phones (mostly relayed
+streams) and about 15% never connected, mostly in calls and three quarters of them in runs that include the A15s.
+So "partial" means "works, with measurable shortfalls" for most rows; it does not mean the feature is broken.
+
 | Phone | Android | Voice call | Video call | Livestream | Relay through one phone | What we saw |
 | --- | --- | --- | --- | --- | --- | --- |
 | Samsung SM-S921B (Galaxy S24) | 16 | partial | partial | partial | partial | Voice connected with the M31 and ASUS; some voice calls to the A15s failed to set up reliably |
