@@ -5,7 +5,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Assert.fail
+import org.junit.Before
 import org.junit.Test
 import java.util.UUID
 
@@ -17,6 +19,17 @@ class RotatingDiscoveryTest {
     private val presenceKey = ByteArray(32) { it.toByte() }
     private val nodeId = hex("a1b2c3d4e5f60718293a4b5c6d7e8f90")
     private val epoch = 1_990_656L
+
+    @Before
+    fun fixTheClockOfTheEpochWindow() {
+        // 100 s into the reviewed vector epoch (RD4: openings must be within two epochs of the verifier's clock).
+        DiscoverySelectionCheck.unixSeconds = { 1_791_590_400L + 100L }
+    }
+
+    @After
+    fun restoreTheClock() {
+        DiscoverySelectionCheck.unixSeconds = { System.currentTimeMillis() / 1000L }
+    }
 
     @Test
     fun domainsAndEpochMatchTheReviewedVectors() {
@@ -203,6 +216,28 @@ class RotatingDiscoveryTest {
     }
 
     @Test
+    fun anOpeningOutsideTheEpochWindowIsStaleEvenWhenItRecomputes() {
+        // RD4: a forger may choose any epoch and salt, so one precomputed table would invert any victim ID of
+        // any epoch. The verifier bounds the entry's epoch by its own clock.
+        listOf(-2L, -1L, 0L, 1L, 2L).forEach { offset ->
+            val entry = RotatingDiscoveryIds.entry(presenceKey, nodeId, epoch + offset, 0)
+            assertEquals(
+                "offset $offset",
+                DiscoverySelectionCheck.Result.PASS,
+                DiscoverySelectionCheck.check(selectedCall(entry.rdi), 0, nodeId, listOf(entry)),
+            )
+        }
+        listOf(-3L, 3L, 96L, -96L, 1_000_000L).forEach { offset ->
+            val entry = RotatingDiscoveryIds.entry(presenceKey, nodeId, epoch + offset, 0)
+            assertEquals(
+                "offset $offset",
+                DiscoverySelectionCheck.Result.OPENING_STALE,
+                DiscoverySelectionCheck.check(selectedCall(entry.rdi), 0, nodeId, listOf(entry)),
+            )
+        }
+    }
+
+    @Test
     fun checkFollowsTheSelectedAdvertNotTheHello() {
         val entry = RotatingDiscoveryIds.entry(presenceKey, nodeId, epoch, 0)
         // RV15: a selected version 5 advert from a peer without bit 3 (no opening) fails.
@@ -374,12 +409,22 @@ class RotatingDiscoveryTest {
     }
 
     @Test
-    fun recoveryHintKeepsTheReviewedVectorAndAddsTheKeySeparatedOne() {
+    fun recoveryHintIsKeySeparatedAndBoundToTheRequestsOwnIdAndToken() {
         val mediaKey = ByteArray(32) { (0x40 + it).toByte() }
-        assertEquals("efaddd28c492", RecoveryHint.hint(mediaKey, nodeId, 0x12345678).toHex())
         val hintKey = RecoveryHint.hintKey(mediaKey)
-        assertEquals("d6647a8038299355d93197c3c126b4a29281e5a7bb1fa8eef90a903479c9c322", hintKey.toHex())
-        assertEquals("52d1d45e4f85", RecoveryHint.hint(hintKey, nodeId, 0x12345678).toHex())
+        assertEquals("07eb05087658fd20da5cd7f88afd09a1e4cbd2c92e03066ced3cf16084305c28", hintKey.toHex())
+        val rdi = hex("974ae410ea91")
+        assertEquals("4d832e9d4dc7", RecoveryHint.hint(hintKey, nodeId, 0x12345678, rdi, 0x92529fc4.toInt()).toHex())
+        // RD3: another epoch's request ID gives another hint, so nothing constant crosses a boundary and a hint
+        // copied into a different advert matches nothing.
+        assertEquals(
+            "f9fa5ad0b780",
+            RecoveryHint.hint(hintKey, nodeId, 0x12345678, hex("67aba670e65a"), 0x92529fc4.toInt()).toHex(),
+        )
+        assertTrue(
+            !RecoveryHint.hint(hintKey, nodeId, 0x12345678, rdi, 0x92529fc5.toInt())
+                .contentEquals(RecoveryHint.hint(hintKey, nodeId, 0x12345678, rdi, 0x92529fc4.toInt())),
+        )
     }
 
     @Test
@@ -400,10 +445,17 @@ class RotatingDiscoveryTest {
 
     @Test
     fun featureFollowsTheUsualLaunchRule() {
-        assertTrue(RotatingDiscoveryFeature.resolve(true, { it == "test_rotating_ids" }, false) { false })
-        assertFalse(RotatingDiscoveryFeature.resolve(true, { false }, true) { true })
-        assertTrue(RotatingDiscoveryFeature.resolve(false, { false }, true) { it == RotatingDiscoveryFeature.PREF })
-        assertFalse(RotatingDiscoveryFeature.resolve(false, { true }, false) { true })
+        // A DEBUG benchmark launch reads only its extra: not the default, not a stored choice.
+        assertTrue(RotatingDiscoveryFeature.resolve(true, { it == "test_rotating_ids" }) { false })
+        assertFalse(RotatingDiscoveryFeature.resolve(true, { false }) { true })
+        assertFalse(RotatingDiscoveryFeature.resolve(true, { false }) { null })
+        // A user launch: the stored choice, else the shipped default (on since 0.2.0-beta); extras are ignored.
+        assertTrue(RotatingDiscoveryFeature.DEFAULT_ENABLED)
+        assertTrue(RotatingDiscoveryFeature.resolve(false, { false }) { null })
+        assertFalse(RotatingDiscoveryFeature.resolve(false, { false }) { if (it == RotatingDiscoveryFeature.PREF) false else null })
+        assertTrue(RotatingDiscoveryFeature.resolve(false, { false }) { if (it == RotatingDiscoveryFeature.PREF) true else null })
+        assertTrue(RotatingDiscoveryFeature.resolve(false, { false }) { null })
+        assertTrue(RotatingDiscoveryFeature.resolve(false, { false }, { null }))
     }
 
     @Test

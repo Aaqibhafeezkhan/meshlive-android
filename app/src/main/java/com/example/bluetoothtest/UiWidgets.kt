@@ -15,33 +15,50 @@ import androidx.core.content.ContextCompat
 
 /**
  * Press and hold to talk while muted: after [holdMs] the press becomes "talking" until release,
- * and the click that would toggle Mute is swallowed. A short tap stays a normal click.
+ * and the click that would toggle Mute is swallowed. A short tap stays a normal click. The rules live
+ * in [HoldToTalkCore] (unit-tested); this maps touch events and a Handler onto them.
  */
 internal class HoldToTalkGesture(
-    private val canStart: () -> Boolean,
-    private val onTalk: (Boolean) -> Unit,
-    private val holdMs: Long = 350L,
+    canStart: () -> Boolean,
+    onTalk: (Boolean) -> Unit,
+    holdMs: Long = HoldToTalkCore.DEFAULT_HOLD_MS,
 ) : View.OnTouchListener {
     private val handler = Handler(Looper.getMainLooper())
-    private var talking = false
-    private val start = Runnable {
-        if (canStart()) {
-            talking = true
-            onTalk(true)
-        }
-    }
+    private var pending: Runnable? = null
+    private val core = HoldToTalkCore(
+        object : HoldToTalkCore.Scheduler {
+            override fun schedule(delayMs: Long, action: () -> Unit) {
+                val task = Runnable { pending = null; action() }
+                pending = task
+                handler.postDelayed(task, delayMs)
+            }
+
+            override fun cancel() {
+                pending?.let(handler::removeCallbacks)
+                pending = null
+            }
+        },
+        canStart,
+        onTalk,
+        holdMs,
+    )
+
+    val talking: Boolean get() = core.talking
+
+    /** Screen-reader activation: starts talking, or stops it when already talking. */
+    fun toggleLatched(): Boolean = core.toggleLatched()
+
+    /** Ends talking from outside the touch stream (activity paused); the call hears the mute. */
+    fun release() = core.release()
+
+    /** The call this hold belonged to is gone: forget it silently. */
+    fun reset() = core.reset()
 
     override fun onTouch(view: View, event: android.view.MotionEvent): Boolean {
         when (event.actionMasked) {
-            android.view.MotionEvent.ACTION_DOWN -> {
-                talking = false
-                if (canStart()) handler.postDelayed(start, holdMs)
-            }
+            android.view.MotionEvent.ACTION_DOWN -> core.down()
             android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
-                handler.removeCallbacks(start)
-                if (talking) {
-                    talking = false
-                    onTalk(false)
+                if (core.up()) {
                     view.isPressed = false
                     return true // the hold was the action; no Mute toggle
                 }

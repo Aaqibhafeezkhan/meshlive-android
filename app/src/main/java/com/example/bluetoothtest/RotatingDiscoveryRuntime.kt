@@ -15,9 +15,10 @@ import java.util.concurrent.CopyOnWriteArraySet
 
 /**
  * Android side of the experimental rotating discovery IDs (RotatingDiscovery.kt). Holds this
- * identity's presence key (32 random bytes in no-backup storage; Phase 1 never sends it), the RV4
- * epoch clock, the per-role opening pins and the stranger tarpit, and tells registered advertisers
- * when an epoch boundary passed so they restart on a new set (break-before-make, RV6/RV12).
+ * identity's presence vault (generation, key `P` and the contacts' leases, sealed in no-backup
+ * storage; Phase 2), the RV4 epoch clock, the per-role opening pins, the recognition table and the
+ * stranger tarpit, and tells registered advertisers when an epoch boundary passed so they restart on
+ * a new set (break-before-make, RV6/RV12).
  *
  * The boundary check runs on the main-thread handler at the UTC boundary and at least every
  * [MAX_CHECK_MS]; when Doze delays it the stale ID stays on air a little longer, which costs privacy
@@ -29,7 +30,8 @@ object RotatingDiscovery {
     private const val MAX_CHECK_MS = 60_000L
     private const val TAG = "BluetoothVideo"
 
-    private val handler = Handler(Looper.getMainLooper())
+    // Lazy: the off paths call offAir and removeBoundaryListener, and touching this object must not need a Looper.
+    private val handler by lazy { Handler(Looper.getMainLooper()) }
     private val random = SecureRandom()
     private val listeners = CopyOnWriteArraySet<(Long) -> Unit>()
     private val pins = HashMap<Int, OpeningPins>()
@@ -38,8 +40,15 @@ object RotatingDiscovery {
     private var appContext: Context? = null
     private var nodeId: ByteArray? = null
     private var clock: DiscoveryEpochClock? = null
-    private var presenceKey: ByteArray? = null
+    private var vault: PresenceVault? = null
     @Volatile private var checkedEpoch = -1L
+    @Volatile private var windowLogged = false
+
+    /** Phase 2 recognition table: rebuilt at each tick and whenever leases or contacts change. */
+    val recognition = RecognitionTable()
+    private val tableThread = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "RotatingDiscoveryTable").apply { isDaemon = true }
+    }
 
     @Synchronized
     fun init(context: Context, identity: NodeId) {
@@ -54,20 +63,64 @@ object RotatingDiscovery {
         }.getOrDefault("unknown")
         val activeClock = DiscoveryEpochClock(loadState(prefs), bootId) { saveState(prefs, it) }
         clock = activeClock
-        presenceKey = loadOrCreateKey(File(app.noBackupFilesDir, KEY_FILE), activeClock.state.generation)
+        val legacyFile = File(app.noBackupFilesDir, KEY_FILE)
+        vault = PresenceVault(
+            store = PresenceStore(
+                File(File(app.noBackupFilesDir, IdentityVerification.DIRECTORY), PRESENCE_FILE),
+                IdentityVerification.atRestCipher(),
+            ),
+            floor = object : GenerationFloor {
+                override fun get(): Long = activeClock.state.generation
+                override fun raiseTo(value: Long) = activeClock.raiseGeneration(value)
+            },
+            legacyKey = { readLegacyKey(legacyFile) },
+            onLegacyImported = { runCatching { legacyFile.delete() } },
+            // New windows start at the epoch this phone advertises (the monotonic E, or the wall epoch when it is ahead).
+            epochSource = {
+                maxOf(activeClock.state.lastEpoch, RotatingDiscoveryIds.wallEpoch(Math.floorDiv(DiscoveryWallClock.nowMs(), 1000L)))
+            },
+        )
+        runCatching { vault?.ensureLoaded() }
         pins.clear()
+        requestRecognitionRebuild()
+        // A contact forgotten while the experiment was off is no longer a lease holder (PresenceVault.reconcile);
+        // off the caller's thread, because the verified-contact store and the vault use the Keystore.
+        val activeVault = vault
+        tableThread.execute {
+            runCatching {
+                val verification = IdentityVerification.get(app)
+                if (verification.storeUnreadableCause() == null) {
+                    val verified = verification.verifiedContacts()
+                    // An empty list from a store whose file exists is a failed read, not "everyone was forgotten".
+                    val consistent = verified.isNotEmpty() || PeerIdentityGate.store?.hasAny() != true
+                    if (consistent) activeVault?.reconcile(verified.map { it.fingerprint.nodeId }.toSet())
+                }
+            }
+            requestRecognitionRebuild()
+        }
     }
+
+    /** True once [init] ran in this process; the DEBUG epoch length can no longer change (DiscoveryEpochLength). */
+    @Synchronized
+    fun isStarted(): Boolean = clock != null
+
+    /** The presence vault (null before [init]); Phase 2 session and UI code read and change it through this. */
+    @Synchronized
+    fun presenceVault(): PresenceVault? = vault
 
     /** Emergency wipe: the wipe deletes the files and preferences; this drops the in-memory copies. */
     @Synchronized
     fun clearForWipe() {
-        presenceKey?.fill(0)
-        presenceKey = null
+        vault?.wipe()
+        vault = null
+        recognition.rebuild(emptyList(), 0L, 0L)
+        ownIdsCache = null
         clock = null
         nodeId = null
         appContext = null
         pins.clear()
         checkedEpoch = -1L
+        windowLogged = false
         visibleUntilEpoch = -1L
         visibleNotified = false
         listeners.clear()
@@ -77,13 +130,12 @@ object RotatingDiscovery {
     @Synchronized
     fun currentEpoch(): Long {
         val activeClock = checkNotNull(clock) { "Rotating discovery is not initialised" }
-        val reading = activeClock.read(System.currentTimeMillis(), SystemClock.elapsedRealtime())
+        val reading = activeClock.read(DiscoveryWallClock.nowMs(), SystemClock.elapsedRealtime())
         if (reading.newGeneration) {
-            val app = checkNotNull(appContext)
-            presenceKey?.fill(0)
-            presenceKey = newKey(File(app.noBackupFilesDir, KEY_FILE), activeClock.state.generation)
+            vault?.adoptGeneration(activeClock.state.generation)
             pins.clear()
             Log.i(TAG, debugPrefix() + "rotid_clock: event=forward_jump_recovery | generation=${activeClock.state.generation}")
+            requestRecognitionRebuild()
         }
         return reading.epoch
     }
@@ -95,9 +147,50 @@ object RotatingDiscovery {
     @Synchronized
     fun advertise(role: Int): OpeningEntry {
         val epoch = currentEpoch()
-        val entry = RotatingDiscoveryIds.ownEntry(checkNotNull(presenceKey), checkNotNull(nodeId), epoch, role)
+        val entry = ownEntryFor(epoch, epoch, role) ?: error("No day key for epoch $epoch")
         pins.getOrPut(role) { OpeningPins() }.onAdvertised(entry, SystemClock.elapsedRealtime())
         return entry
+    }
+
+    /** The entry of [idEpoch] under the day key of its day (independent random keys, PROTOCOL "Keys and epochs"). */
+    private fun ownEntryFor(idEpoch: Long, currentEpoch: Long, role: Int): OpeningEntry? {
+        val key = checkNotNull(vault).dayKey(idEpoch, currentEpoch) ?: return null
+        return try {
+            RotatingDiscoveryIds.ownEntry(key, checkNotNull(nodeId), idEpoch, role)
+        } finally {
+            key.fill(0)
+        }
+    }
+
+    /**
+     * This phone's role ID for the current epoch, without touching the opening pins (a reach-page advertiser asks
+     * once a second; only a real advertiser may move the pins).
+     */
+    @Synchronized
+    fun currentId(role: Int): ByteArray {
+        val epoch = currentEpoch()
+        return (ownEntryFor(epoch, epoch, role) ?: error("No day key for epoch $epoch")).rdi
+    }
+
+    private var ownIdsCache: Triple<Long, Long, List<ByteArray>>? = null
+
+    /**
+     * This phone's role ID of the current and the previous epoch (poison reverse in the reach table compares
+     * with both, because a boundary may have passed). Cached per epoch and generation.
+     */
+    @Synchronized
+    fun ownRdis(role: Int): List<ByteArray> {
+        val activeVault = vault ?: return emptyList()
+        val node = nodeId ?: return emptyList()
+        val epoch = runCatching { currentEpoch() }.getOrNull() ?: return emptyList()
+        val generation = activeVault.generation()
+        val key = (epoch shl 8) xor role.toLong()
+        ownIdsCache?.takeIf { it.first == key && it.second == generation }?.let { return it.third }
+        // The previous epoch's key exists only while the window still holds yesterday (first epoch of a day); a
+        // phone that just started has no previous ID to compare with.
+        val ids = listOf(epoch, epoch - 1).filter { it >= 0 }.mapNotNull { ownEntryFor(it, epoch, role)?.rdi }
+        ownIdsCache = Triple(key, generation, ids)
+        return ids
     }
 
     /** The role's advertising stopped; its ID stays openable for 60 s only (OpeningPins). */
@@ -125,9 +218,7 @@ object RotatingDiscovery {
     private fun schedule() {
         handler.removeCallbacks(check)
         if (listeners.isEmpty()) return
-        val nowMs = System.currentTimeMillis()
-        val epochMs = RotatingDiscoveryIds.EPOCH_SECONDS * 1000L
-        val toBoundary = epochMs - Math.floorMod(nowMs, epochMs) + 50L
+        val toBoundary = RotatingDiscoveryIds.msUntilBoundary(DiscoveryWallClock.nowMs()) + 50L
         handler.postDelayed(check, minOf(toBoundary, MAX_CHECK_MS))
     }
 
@@ -143,9 +234,10 @@ object RotatingDiscovery {
         if (epoch != null && epoch != checkedEpoch) {
             val previous = checkedEpoch
             checkedEpoch = epoch
+            requestRecognitionRebuild()
             if (previous >= 0) {
                 if (BuildConfig.DEBUG) {
-                    val offsetMs = Math.floorMod(System.currentTimeMillis(), RotatingDiscoveryIds.EPOCH_SECONDS * 1000L)
+                    val offsetMs = Math.floorMod(DiscoveryWallClock.nowMs(), RotatingDiscoveryIds.epochSeconds * 1000L)
                     Log.i(TAG, "BENCHMARK rotid_boundary: epoch=$epoch | previous=$previous | wallOffsetMs=$offsetMs | listeners=${listeners.size}")
                 }
                 listeners.forEach { listener -> runCatching { listener(epoch) } }
@@ -168,7 +260,7 @@ object RotatingDiscovery {
     fun visibleByHandle(): Boolean {
         val end = visibleUntilEpoch
         if (end < 0) return false
-        val active = VisibleByHandleWindow.isActive(end, Math.floorDiv(System.currentTimeMillis(), 1000L)) &&
+        val active = VisibleByHandleWindow.isActive(end, Math.floorDiv(DiscoveryWallClock.nowMs(), 1000L)) &&
             SystemClock.elapsedRealtime() - visibleStartedElapsedMs < VisibleByHandleWindow.MAX_MS
         if (!active) visibleUntilEpoch = -1L
         return active
@@ -180,7 +272,7 @@ object RotatingDiscovery {
      * wall time (ms) at which it ends.
      */
     fun startVisibleByHandle(): Long {
-        val nowSeconds = Math.floorDiv(System.currentTimeMillis(), 1000L)
+        val nowSeconds = Math.floorDiv(DiscoveryWallClock.nowMs(), 1000L)
         synchronized(this) {
             visibleUntilEpoch = VisibleByHandleWindow.endEpoch(nowSeconds)
             visibleStartedElapsedMs = SystemClock.elapsedRealtime()
@@ -189,7 +281,7 @@ object RotatingDiscovery {
         val epoch = runCatching { currentEpoch() }.getOrDefault(-1L)
         Log.i(TAG, debugPrefix() + "rotid_visible_window: event=start | endEpoch=$visibleUntilEpoch")
         handler.post { listeners.forEach { listener -> runCatching { listener(epoch) } } }
-        return visibleUntilEpoch * RotatingDiscoveryIds.EPOCH_SECONDS * 1000L
+        return visibleUntilEpoch * RotatingDiscoveryIds.epochSeconds * 1000L
     }
 
     /** Random silence between stopping the old set and starting the new one (RV12: 1-8 s). */
@@ -203,6 +295,8 @@ object RotatingDiscovery {
         tickElapsedMs = prefs.getLong("tickElapsedMs", 0L),
         bootId = prefs.getString("bootId", "") ?: "",
         generation = prefs.getLong("generation", 1L),
+        // Absent in a store written before the DEBUG short epoch existed: that was always the default length.
+        epochSeconds = prefs.getLong("epochSeconds", RotatingDiscoveryIds.EPOCH_SECONDS),
     )
 
     private fun saveState(prefs: SharedPreferences, state: EpochClockState) {
@@ -212,32 +306,71 @@ object RotatingDiscovery {
             .putLong("tickElapsedMs", state.tickElapsedMs)
             .putString("bootId", state.bootId)
             .putLong("generation", state.generation)
-            .apply()
+            .putLong("epochSeconds", state.epochSeconds)
+            // commit(): a revocation moves the generation counter and must survive a crash (RD1).
+            .commit()
     }
 
-    /** File = generation (8, big-endian) | key (32). A missing, short or older file gets a new key. */
-    private fun loadOrCreateKey(file: File, generation: Long): ByteArray {
-        val bytes = runCatching { file.readBytes() }.getOrNull()
-        if (bytes != null && bytes.size == 8 + RotatingDiscoveryIds.PRESENCE_KEY_BYTES) {
-            val stored = java.nio.ByteBuffer.wrap(bytes, 0, 8).long
-            if (stored == generation) return bytes.copyOfRange(8, bytes.size)
-        }
-        return newKey(file, generation)
+    /** The Phase 1 plain key file: generation (8, big-endian) | key (32). Imported into the vault once, then deleted. */
+    private fun readLegacyKey(file: File): Pair<Long, ByteArray>? {
+        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
+        if (bytes.size != 8 + RotatingDiscoveryIds.PRESENCE_KEY_BYTES) return null
+        val generation = java.nio.ByteBuffer.wrap(bytes, 0, 8).long
+        return generation to bytes.copyOfRange(8, bytes.size)
     }
 
-    private fun newKey(file: File, generation: Long): ByteArray {
-        val key = ByteArray(RotatingDiscoveryIds.PRESENCE_KEY_BYTES).also(random::nextBytes)
-        val out = java.nio.ByteBuffer.allocate(8 + key.size).putLong(generation).put(key).array()
-        runCatching {
-            val temp = File(file.parentFile, file.name + ".tmp")
-            temp.writeBytes(out)
-            if (!temp.renameTo(file)) {
-                file.writeBytes(out)
-                temp.delete()
+    // ----- Phase 2: recognition -----
+
+    /**
+     * Rebuilds the recognition table off the calling thread (RV10): contacts that gave this phone leases,
+     * roles 0 and 1, the epochs around the learned skew. A no-op until a vault exists.
+     */
+    fun requestRecognitionRebuild() {
+        tableThread.execute {
+            runCatching {
+                // Once per day this deletes the day key that left the window, creates the next one and prunes
+                // contacts' days that are over, off the advertisers' path (PROTOCOL "Keys and epochs").
+                val (activeVault, tickEpoch) = synchronized(this) { vault to (clock?.state?.lastEpoch ?: -1L) }
+                if (activeVault != null && tickEpoch >= 0) {
+                    val changed = activeVault.maintain(tickEpoch)
+                    activeVault.windowInfo()?.let { (first, last, count) ->
+                        if (changed || !windowLogged) {
+                            windowLogged = true
+                            Log.i(
+                                TAG,
+                                debugPrefix() + "rotid_presence: event=window | generation=${activeVault.generation()} | " +
+                                    "firstDay=$first | lastDay=$last | count=$count | changed=$changed",
+                            )
+                        }
+                    }
+                }
+                val (holders, epoch) = synchronized(this) {
+                    val current = vault?.takeIf { it.persistent }?.leaseHolders().orEmpty()
+                    current to (clock?.state?.lastEpoch ?: -1L)
+                }
+                recognition.rebuild(holders, epoch, DiscoveryWallClock.nowMs())
+                if (BuildConfig.DEBUG && holders.isNotEmpty()) {
+                    Log.i(TAG, "BENCHMARK rotid_presence: event=table | contacts=${holders.size} | entries=${recognition.size} | epoch=$epoch")
+                }
             }
-        }.onFailure { Log.w(TAG, "Rotating discovery: presence key not saved (${it.javaClass.simpleName})") }
-        return key
+        }
     }
+
+    /**
+     * Contacts whose lease-derived ID equals the announcement (a version 5 call offer matches role 0, a
+     * stream offer role 1). A hit is only a hint: the UI shows it unconfirmed and nothing connects from it.
+     */
+    fun recognize(announcement: DiscoveryAnnouncement): List<RecognitionTable.Hit> {
+        if (!announcement.rotating) return emptyList()
+        val role = when {
+            announcement.isStreamOffer() -> RotatingDiscoveryIds.ROLE_STREAM_OFFER
+            announcement.isPrivateCallOffer() -> RotatingDiscoveryIds.ROLE_CALL_OFFER
+            else -> return emptyList()
+        }
+        return recognition.lookup(announcement.nodeIdPrefix).filter { it.role == role }
+    }
+
+    private const val PRESENCE_FILE = "presence-leases.bin"
 }
 
 /** Link opening exchange (hop type 13) right after the link handshake, before any other record. */
@@ -262,31 +395,58 @@ object LinkOpeningExchange {
     }
 }
 
-/** RV1: neutral adapter name while the experiment is on; the user's name comes back when it is off. */
+/**
+ * Applies the explicit option "Use a neutral Bluetooth name ("Phone")" (NeutralBluetoothName has the pure rules;
+ * PROTOCOL "Pre-handshake exposure"). Called when the option changes and when the app starts or resumes, never
+ * per call, advertising session or epoch. The saved original name lives in this app's preferences (it is lost
+ * with the app's data; the adapter name itself survives uninstall), and is shown in Settings whenever it exists.
+ */
 object NeutralBluetoothNameController {
     private const val PREFS = "rotating_discovery_name"
     private const val KEY_ORIGINAL = "originalName"
+    private const val KEY_APPLIED = "applied"
 
+    /** [paused]: the user renamed the phone after the option was applied; the option must be switched off. */
+    class Outcome(val changed: Boolean, val restored: Boolean, val paused: Boolean = false)
+
+    /** The name saved when the option was turned on (null: none), for the Settings text. */
+    fun savedOriginal(context: Context): String? =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_ORIGINAL, null)
+
+    /** The adapter's name now, or null when it cannot be read. */
     @SuppressLint("MissingPermission")
-    fun apply(context: Context, adapter: BluetoothAdapter?, enabled: Boolean) {
-        adapter ?: return
+    fun currentName(adapter: BluetoothAdapter?): String? = runCatching { adapter?.name }.getOrNull()
+
+    /**
+     * Makes the adapter name match [optionOn]. [everChosen] is false while the preference was never written: a
+     * restore then undoes the automatic rename of builds before 2026-10-11 and is logged as a migration.
+     */
+    @SuppressLint("MissingPermission")
+    fun apply(context: Context, adapter: BluetoothAdapter?, optionOn: Boolean, everChosen: Boolean = true): Outcome {
+        adapter ?: return Outcome(changed = false, restored = false)
         val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val current = runCatching { adapter.name }.getOrNull()
+        val current = currentName(adapter)
         val saved = prefs.getString(KEY_ORIGINAL, null)
-        val action = if (enabled) {
-            NeutralBluetoothName.onEnabled(current, saved)
+        val applied = prefs.getBoolean(KEY_APPLIED, false)
+        val action = if (optionOn) {
+            NeutralBluetoothName.onEnabled(current, saved, applied)
         } else {
             NeutralBluetoothName.onDisabled(current, saved)
         }
         action.saveOriginal?.let { prefs.edit().putString(KEY_ORIGINAL, it).apply() }
         val changed = action.setName?.let { name -> runCatching { adapter.setName(name) }.getOrDefault(false) } ?: false
         if (action.clearSaved && (action.setName == null || changed)) prefs.edit().remove(KEY_ORIGINAL).apply()
-        if (action.setName != null) {
+        // "Applied" means a write of Phone succeeded, or the adapter already read Phone with the option on.
+        if (optionOn && (changed || current == NeutralBluetoothName.NEUTRAL)) prefs.edit().putBoolean(KEY_APPLIED, true).apply()
+        if (!optionOn || action.pause) prefs.edit().remove(KEY_APPLIED).apply()
+        val restored = !optionOn && changed
+        if (action.setName != null || action.pause || (!optionOn && action.clearSaved)) {
             Log.i(
                 "BluetoothVideo",
                 (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
-                    "rotid_name: enabled=$enabled | neutral=${action.setName == NeutralBluetoothName.NEUTRAL} | changed=$changed",
+                    "rotid_name: option=$optionOn | changed=$changed | paused=${action.pause} | migrated=${restored && !everChosen}",
             )
         }
+        return Outcome(changed, restored, action.pause)
     }
 }

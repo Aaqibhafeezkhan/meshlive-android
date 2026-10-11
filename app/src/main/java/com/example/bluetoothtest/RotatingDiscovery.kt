@@ -8,9 +8,9 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Experimental rotating discovery IDs (off by default; DEBUG `test_rotating_ids`, Advanced setting
- * "Experimental: rotating discovery IDs" otherwise). PROTOCOL "Experimental rotating discovery IDs"
- * owns the wire rules; this file holds the pure, JVM-tested parts (reviewed design RV1-RV19).
+ * Rotating discovery IDs (on by default since 0.2.0-beta for user launches; a DEBUG benchmark launch reads only
+ * `test_rotating_ids`; Advanced setting "Rotating discovery IDs" is the off-switch). PROTOCOL "Experimental rotating
+ * discovery IDs" owns the wire rules; this file holds the pure, JVM-tested parts (reviewed design RV1-RV19).
  *
  * Phase 1 (strangers only): call-ready presence (role 0) advertises announcement version 5 whose
  * 6 prefix bytes are a 15-minute rotating ID (RDI) instead of the fixed node prefix. A caller that
@@ -23,25 +23,44 @@ object RotatingDiscoveryFeature {
     const val EXTRA = "test_rotating_ids"
     const val PREF = "experimental_rotating_ids"
 
+    /**
+     * The one default constant (README register "Rotating discovery IDs"): what a user launch without a stored choice
+     * uses. A DEBUG benchmark launch (any `test_` extra) never reads it and uses [EXTRA] only, as every promoted feature
+     * does ([FeatureCatalog.resolve]). The neutral Bluetooth name is a separate option and stays off by default.
+     */
+    const val DEFAULT_ENABLED = true
+
     @Volatile var enabled = false
 
+    /**
+     * [stored] is the user's explicit choice (null: never decided). It is honoured with or without the Advanced settings
+     * view, so leaving Advanced after turning the feature off does not turn it back on.
+     */
     fun resolve(
         benchmarkLaunch: Boolean,
         extra: (String) -> Boolean,
-        advancedSettings: Boolean,
-        stored: (String) -> Boolean,
-    ): Boolean = when {
-        benchmarkLaunch -> extra(EXTRA)
-        advancedSettings -> stored(PREF)
-        else -> false
-    }
+        stored: (String) -> Boolean?,
+    ): Boolean = if (benchmarkLaunch) extra(EXTRA) else stored(PREF) ?: DEFAULT_ENABLED
 }
 
 /** The reviewed RDI construction (design section 3). All integers big-endian. */
 object RotatingDiscoveryIds {
+    /** The epoch length of every release and every non-benchmark launch (PROTOCOL "Keys and epochs"). */
     const val EPOCH_SECONDS = 900L
+
+    /**
+     * The epoch length in force in this process: [EPOCH_SECONDS] unless a DEBUG launch of a debuggable package gave
+     * `test_rotid_epoch_s=<60..900>` at cold start ([DiscoveryEpochLength], harness only). It is set once before rotating
+     * discovery starts and never changes afterwards; the wire format does not carry it, so two phones must use the same value.
+     */
+    @Volatile var epochSeconds: Long = EPOCH_SECONDS
+        internal set
+
+    /** Epochs in one real-time day (96 at the default); presence-lease days stay real days at any epoch length. */
+    val epochsPerDay: Long get() = 86_400L / epochSeconds
     const val ID_BYTES = DiscoveryAnnouncement.NODE_PREFIX_BYTES
     const val SALT_BYTES = 32
+    /** The size of a day key `L_d` (and of the Phase 1 presence key `P` that is only read for migration). */
     const val PRESENCE_KEY_BYTES = 32
 
     const val ROLE_CALL_OFFER = 0
@@ -54,7 +73,13 @@ object RotatingDiscoveryIds {
     val SALT_DOMAIN: ByteArray = "BluetoothVideoMesh/Discovery/Salt/1".toByteArray(Charsets.US_ASCII) + 0
     val ID_DOMAIN: ByteArray = "BluetoothVideoMesh/Discovery/Id/1".toByteArray(Charsets.US_ASCII) + 0
 
-    fun wallEpoch(unixSeconds: Long): Long = Math.floorDiv(unixSeconds, EPOCH_SECONDS)
+    fun wallEpoch(unixSeconds: Long): Long = Math.floorDiv(unixSeconds, epochSeconds)
+
+    /** Milliseconds from [nowMs] (discovery wall clock) to the next epoch boundary, in 1..epoch length. */
+    fun msUntilBoundary(nowMs: Long): Long {
+        val epochMs = epochSeconds * 1000L
+        return epochMs - Math.floorMod(nowMs, epochMs)
+    }
 
     fun salt(presenceKey: ByteArray, epoch: Long, role: Int): ByteArray {
         require(presenceKey.size == PRESENCE_KEY_BYTES) { "Presence key must be 32 bytes" }
@@ -89,11 +114,11 @@ object RotatingDiscoveryIds {
     }
 
     /**
-     * The entry this phone publishes: salts are keyed by the week's lease `L_w(e)` derived from the
-     * presence key (RV11), so contacts holding leases compute the same IDs (phase 2).
+     * The entry this phone publishes: salts are keyed by the day key `L_d` of the epoch's day ([PresenceVault.dayKey]:
+     * an independent random key, RV11, RD5), so contacts holding leases compute the same IDs (phase 2).
      */
-    fun ownEntry(presenceKey: ByteArray, nodeId: ByteArray, epoch: Long, role: Int): OpeningEntry =
-        entry(PresenceLeases.leaseKey(presenceKey, PresenceLeases.weekOf(epoch)), nodeId, epoch, role)
+    fun ownEntry(dayKey: ByteArray, nodeId: ByteArray, epoch: Long, role: Int): OpeningEntry =
+        entry(dayKey, nodeId, epoch, role)
 
     internal fun u32(value: Long): ByteArray = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN)
         .putInt(value.toInt()).array()
@@ -174,7 +199,20 @@ object DiscoveryOpeningCodec {
  * 2 advert uses the prefix check, whatever the hello says.
  */
 object DiscoverySelectionCheck {
-    enum class Result { PASS, PREFIX_MISMATCH, OPENING_MISSING, OPENING_MISMATCH }
+    enum class Result { PASS, PREFIX_MISMATCH, OPENING_MISSING, OPENING_MISMATCH, OPENING_STALE }
+
+    /**
+     * RD4: an entry's epoch must lie within this many epochs of the verifier's own wall-clock epoch. The
+     * salt is free for a forger, so without a bound one 2^48 table built for a fixed epoch would invert any
+     * victim ID of any epoch; with it the cost is per target and epoch again (RV9).
+     */
+    const val EPOCH_TOLERANCE = 2L
+
+    /** Seconds since the Unix epoch; tests replace it. */
+    @Volatile internal var unixSeconds: () -> Long = ::systemUnixSeconds
+
+    /** The discovery wall clock in seconds (real time unless a DEBUG launch shifted it, see [DiscoveryWallClock]). */
+    internal fun systemUnixSeconds(): Long = DiscoveryWallClock.nowMs() / 1000L
 
     fun check(
         selected: DiscoveryAnnouncement,
@@ -188,10 +226,13 @@ object DiscoverySelectionCheck {
             Result.PREFIX_MISMATCH
         }
     } else {
+        val now = RotatingDiscoveryIds.wallEpoch(unixSeconds())
+        val opening = openingEntries?.filter { it.opens(selected.nodeIdPrefix, peerNodeId, expectedRole) }
         when {
             openingEntries == null -> Result.OPENING_MISSING
-            openingEntries.any { it.opens(selected.nodeIdPrefix, peerNodeId, expectedRole) } -> Result.PASS
-            else -> Result.OPENING_MISMATCH
+            opening.isNullOrEmpty() -> Result.OPENING_MISMATCH
+            opening.any { Math.abs(it.epoch - now) <= EPOCH_TOLERANCE } -> Result.PASS
+            else -> Result.OPENING_STALE
         }
     }
 }
@@ -211,6 +252,11 @@ data class EpochClockState(
     val tickElapsedMs: Long = 0L,
     val bootId: String = "",
     val generation: Long = 1L,
+    /**
+     * The epoch length [lastEpoch] was counted in. A different length makes the stored counter meaningless (a 60 s
+     * counter is 15 times ahead of a 900 s wall epoch), so the clock restarts it; the generation is kept.
+     */
+    val epochSeconds: Long = RotatingDiscoveryIds.EPOCH_SECONDS,
 )
 
 class DiscoveryEpochClock(
@@ -218,13 +264,26 @@ class DiscoveryEpochClock(
     private val bootId: String,
     private val persist: (EpochClockState) -> Unit,
 ) {
-    var state: EpochClockState = initial
+    var state: EpochClockState = if (initial.epochSeconds == RotatingDiscoveryIds.epochSeconds) {
+        initial
+    } else {
+        // DEBUG short epochs (test_rotid_epoch_s) and later normal launches share one store: never carry E across lengths.
+        EpochClockState(generation = initial.generation, epochSeconds = RotatingDiscoveryIds.epochSeconds).also(persist)
+    }
         private set
     private var aheadSinceElapsedMs: Long? = null
     private var aheadWallOffsetMs = 0L
 
     /** Epoch to advertise now. Returns true in [Reading.newGeneration] once per recovery. */
     data class Reading(val epoch: Long, val ticked: Boolean, val newGeneration: Boolean)
+
+    /** Another store (the presence vault) already used generation [value]: never start at or below it. */
+    @Synchronized
+    fun raiseGeneration(value: Long) {
+        if (value <= state.generation) return
+        state = state.copy(generation = value)
+        persist(state)
+    }
 
     @Synchronized
     fun read(wallMs: Long, elapsedMs: Long): Reading {
@@ -238,7 +297,7 @@ class DiscoveryEpochClock(
                 aheadSinceElapsedMs = elapsedMs
                 aheadWallOffsetMs = offset
             } else if (elapsedMs - since >= AHEAD_RECOVERY_MS) {
-                current = EpochClockState(wall, wall, elapsedMs, bootId, current.generation + 1)
+                current = EpochClockState(wall, wall, elapsedMs, bootId, current.generation + 1, RotatingDiscoveryIds.epochSeconds)
                 state = current
                 persist(current)
                 aheadSinceElapsedMs = null
@@ -270,9 +329,11 @@ class DiscoveryEpochClock(
     }
 
     companion object {
-        /** 900 s plus a minute, so a normal wall boundary always ticks first (no early double tick). */
-        const val ELAPSED_TICK_MS = (RotatingDiscoveryIds.EPOCH_SECONDS + 60L) * 1000L
-        const val MAX_AHEAD_EPOCHS = 96L
+        /** One epoch plus a minute, so a normal wall boundary always ticks first (no early double tick). */
+        val ELAPSED_TICK_MS: Long get() = (RotatingDiscoveryIds.epochSeconds + 60L) * 1000L
+
+        /** A day of epochs (96 at 900 s; the same real time at a DEBUG short epoch). */
+        val MAX_AHEAD_EPOCHS: Long get() = RotatingDiscoveryIds.epochsPerDay
         const val AHEAD_RECOVERY_MS = 3_600_000L
         const val CONSISTENT_WALL_TOLERANCE_MS = 120_000L
     }
@@ -332,11 +393,11 @@ object VisibleByHandleWindow {
     const val MIN_SECONDS = 600L
 
     /** Upper bound by elapsed time (10 min + one epoch), whatever the wall clock does. */
-    const val MAX_MS = (MIN_SECONDS + RotatingDiscoveryIds.EPOCH_SECONDS) * 1000L
+    val MAX_MS: Long get() = (MIN_SECONDS + RotatingDiscoveryIds.epochSeconds) * 1000L
 
     /** The epoch whose start ends a window that began at [startUnixSeconds]. */
     fun endEpoch(startUnixSeconds: Long): Long =
-        Math.floorDiv(startUnixSeconds + MIN_SECONDS + RotatingDiscoveryIds.EPOCH_SECONDS - 1, RotatingDiscoveryIds.EPOCH_SECONDS)
+        Math.floorDiv(startUnixSeconds + MIN_SECONDS + RotatingDiscoveryIds.epochSeconds - 1, RotatingDiscoveryIds.epochSeconds)
 
     fun isActive(endEpoch: Long, nowUnixSeconds: Long): Boolean =
         endEpoch >= 0 && RotatingDiscoveryIds.wallEpoch(nowUnixSeconds) < endEpoch
@@ -382,22 +443,33 @@ class StrangerTarpit {
 }
 
 /**
- * Section 4.3 recovery hint with RV18 key separation: `Khint = HKDF-SHA256(Kmedia, salt = 32 zero
- * bytes, info = domain)`, hint = HMAC-SHA256(Khint, domain || 0 || failedNodeId || u32 token)[0:6].
- * Defined for Phase 1b (viewer requests); not sent by this phase.
+ * Section 4.3 recovery hint with RV18 key separation and RD3 binding: `Khint = HKDF-SHA256(Kmedia, salt =
+ * 32 zero bytes, info = "…/Recovery/2")`, hint = HMAC-SHA256(Khint, domain || 0 || failedNodeId (16) ||
+ * u32 logicalToken || viewer RDI (6) || u32 routeToken)[0:6]. Binding the request's own RDI and token makes
+ * the hint change every epoch (nothing constant crosses a boundary) and useless when copied into another
+ * advert. Phase 1b viewer requests.
  */
 object RecoveryHint {
-    val DOMAIN: ByteArray = "BluetoothVideoMesh/Discovery/Recovery/1".toByteArray(Charsets.US_ASCII)
+    val DOMAIN: ByteArray = "BluetoothVideoMesh/Discovery/Recovery/2".toByteArray(Charsets.US_ASCII)
 
     fun hintKey(mediaKey: ByteArray): ByteArray = hkdfSha256(mediaKey, ByteArray(32), DOMAIN, 32)
 
-    fun hint(key: ByteArray, failedNodeId: ByteArray, logicalToken: Int): ByteArray {
+    fun hint(
+        key: ByteArray,
+        failedNodeId: ByteArray,
+        logicalToken: Int,
+        viewerRdi: ByteArray,
+        routeToken: Int,
+    ): ByteArray {
         require(failedNodeId.size == NodeId.BYTE_COUNT)
+        require(viewerRdi.size == RotatingDiscoveryIds.ID_BYTES)
         return Mac.getInstance("HmacSHA256").run {
             init(SecretKeySpec(key, "HmacSHA256"))
             update(DOMAIN + 0)
             update(failedNodeId)
             update(RotatingDiscoveryIds.u32(logicalToken.toLong() and 0xffffffffL))
+            update(viewerRdi)
+            update(RotatingDiscoveryIds.u32(routeToken.toLong() and 0xffffffffL))
             doFinal()
         }.copyOf(RotatingDiscoveryIds.ID_BYTES)
     }
@@ -425,21 +497,49 @@ object RecoveryHint {
     }
 }
 
+/** The resolution of the explicit option "Use a neutral Bluetooth name" (default off; PROTOCOL "Pre-handshake exposure"). */
+object NeutralNameOption {
+    /** Advanced setting, default off, independent of the rotating switch. */
+    const val PREF = "neutral_bluetooth_name"
+
+    /** DEBUG launch extra; [EXTRA_ALIAS] is the earlier name (it renamed with the rotating switch) kept so launch lines keep working. */
+    const val EXTRA = "test_neutral_bluetooth_name"
+    const val EXTRA_ALIAS = "test_rotating_neutral_name"
+
+    /** A DEBUG benchmark launch changes the name only with its extra; otherwise the stored choice (default off). */
+    fun resolve(benchmarkLaunch: Boolean, extra: (String) -> Boolean, stored: (String) -> Boolean): Boolean =
+        if (benchmarkLaunch) extra(EXTRA) || extra(EXTRA_ALIAS) else stored(PREF)
+}
+
 /**
- * RV1: while the experiment is on, the adapter name (served as the GAP Device Name to any central
- * that connects, before any app handshake) is set to [NEUTRAL]; the user's own name is restored
- * when the experiment is turned off. Pure decisions; the Android side applies them.
+ * The explicit option "Use a neutral Bluetooth name ("Phone")" (PROTOCOL "Pre-handshake exposure", revised
+ * 2026-10-11; the earlier automatic rename with the rotating switch is withdrawn). While the option is on the
+ * adapter name (served as the GAP Device Name to any central that connects, before any app handshake, and to
+ * Classic name requests) is [NEUTRAL]; the user's own name is saved and restored when it is turned off.
+ * Pure decisions; the Android side applies them, only when the option changes and at app start or resume,
+ * never per call, advertising session or epoch.
  */
 object NeutralBluetoothName {
-    /** The same for every phone running the experiment, so it identifies nobody. */
+    /** The same for every phone using the option, so it identifies nobody. */
     const val NEUTRAL = "Phone"
 
-    data class Action(val setName: String?, val saveOriginal: String?, val clearSaved: Boolean)
+    /**
+     * [setName]: write this name; [saveOriginal]: remember this as the user's own name; [clearSaved]: forget the saved
+     * name; [pause]: the user chose another name after the option had been applied, so the option is switched off and
+     * their name is left alone.
+     */
+    data class Action(val setName: String?, val saveOriginal: String?, val clearSaved: Boolean, val pause: Boolean = false)
 
-    fun onEnabled(currentName: String?, savedOriginal: String?): Action = when {
+    /**
+     * [currentName] is the adapter's name now (null: unreadable or Bluetooth off), [savedOriginal] the saved copy and
+     * [applied] whether the app has already written [NEUTRAL] under this option. Before the first successful write a
+     * name other than [NEUTRAL] is the user's own (also after a failed attempt); after it, any other name is the user's
+     * later choice and wins: the option pauses instead of fighting a deliberate rename.
+     */
+    fun onEnabled(currentName: String?, savedOriginal: String?, applied: Boolean = false): Action = when {
         currentName == null -> Action(null, null, false)
         currentName == NEUTRAL -> Action(null, null, false)
-        // The user renamed the phone while the experiment was on: remember the newer name.
+        applied -> Action(null, null, clearSaved = true, pause = true)
         else -> Action(NEUTRAL, currentName, false)
     }
 

@@ -165,6 +165,14 @@ internal class LinkPacer(
     private var seedBytesPerSecond = 0L
     private var seededAtNs = 0L
     private var virtualDrainNs = 0L
+    /**
+     * When a link that drains exactly at the un-gained rate would be empty. [virtualDrainNs] runs at
+     * [PACE_GAIN] times that rate, so against a link that drains at the measured rate it understates
+     * what is still in the stack by up to 20% of everything written while a backlog stands.
+     */
+    private var modelDrainNs = 0L
+    /** Experimental in-flight cap, see [setLeadCapNs]; 0 = off. */
+    private var leadCapNs = 0L
 
     /** 0 = unpaced (nothing measured or seeded). The current pace, including seed decay. */
     val bytesPerSecond: Long
@@ -182,9 +190,34 @@ internal class LinkPacer(
             // The first report replaces the seed: the bytes already charged drain at the measured rate.
             val now = nanoTime()
             if (virtualDrainNs > now) virtualDrainNs = now + (virtualDrainNs - now) * seededRate / rate
+            if (modelDrainNs > now) modelDrainNs = now + (modelDrainNs - now) * seededRate / rate
         }
         measuredBytesPerSecond = rate
     }
+
+    /**
+     * Experimental relay in-flight cap (DebugTunables.relayPaceLeadCap, set by the relay only while
+     * its child reports late media): writes may run at most [capNs] of un-gained link time ahead of a
+     * link draining at the measured rate, whatever the pace gain allows. The 20% gain lets a link
+     * be probed upward, but while a backlog stands every gained second hides another 0.2 s in the
+     * Android socket buffer where no queue policy can see it (diagM1: 57-80 KB, 3.2-4.4 s on a
+     * 144 kbps link). 0 turns the cap off. Audio is still never held (the caller exempts it).
+     */
+    @Synchronized
+    fun setLeadCapNs(capNs: Long) {
+        leadCapNs = capNs.coerceAtLeast(0L)
+    }
+
+    /** Un-gained link time still ahead of the writes, for logs: what the stack is assumed to hold. */
+    @Synchronized
+    fun modelLeadMs(): Long = ((modelDrainNs - nanoTime()).coerceAtLeast(0L)) / 1_000_000L
+
+    /** The same at the gained pace, for logs. */
+    @Synchronized
+    fun paceLeadMs(): Long = ((virtualDrainNs - nanoTime()).coerceAtLeast(0L)) / 1_000_000L
+
+    @Synchronized
+    fun leadCapMs(): Long = leadCapNs / 1_000_000L
 
     /**
      * Paces this link at [kbps] until the first measurement; ignored once measured or already seeded.
@@ -208,7 +241,10 @@ internal class LinkPacer(
     @Synchronized
     fun waitNs(): Long {
         if (currentRate() <= 0L) return 0L
-        return (virtualDrainNs - burstNs - nanoTime()).coerceAtLeast(0L)
+        val nowNs = nanoTime()
+        var holdNs = virtualDrainNs - burstNs - nowNs
+        if (leadCapNs > 0L) holdNs = maxOf(holdNs, modelDrainNs - leadCapNs - nowNs)
+        return holdNs.coerceAtLeast(0L)
     }
 
     /**
@@ -222,6 +258,8 @@ internal class LinkPacer(
         val rate = currentRate()
         if (rate <= 0L) return
         virtualDrainNs = maxOf(virtualDrainNs, writeStartedNs) + bytes * 1_000_000_000L / rate
+        val baseRate = (rate / PACE_GAIN).toLong().coerceAtLeast(1L)
+        modelDrainNs = maxOf(modelDrainNs, writeStartedNs) + bytes * 1_000_000_000L / baseRate
     }
 
     companion object {

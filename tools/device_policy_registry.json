@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": "2026-10-10.6",
+  "revision": "2026-10-11.2",
   "generated_by": "app/src/test/java/com/example/bluetoothtest/DeviceFamilyPolicyTest.kt (run :app:testDebugUnitTest with DEVICE_POLICY_UPDATE=1 to rewrite); source of truth: app/src/main/java/com/example/bluetoothtest/DevicePolicyRegistry.kt",
   "off_switch": "DEBUG launch extra test_device_policy_off=<id>[,<id>...] or all",
   "entries": [
@@ -1765,6 +1765,67 @@
       "origin": "Research 2026-10-10 (Qaul/Berty/Knit/MeshChat patterns)."
     },
     {
+      "id": "exynos9611-dual-role-equal-interval-child-starvation",
+      "title": "Exynos 9611 relay: a central child link at the parent's interval can get no events at all",
+      "status": "proposed",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": ["exynos9611"],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "Build.HARDWARE in [exynos9611]",
+      "component": null,
+      "effects": [],
+      "behaviour": "Proposal (diagnostic): a relay on this controller (peripheral to its parent, central to its child, both HIGH = 15 ms) loses its child link in about half of the attempts: 22 of 55 never established (HCI 0x3E), 9 went silent for 5.0-5.1 s after the update to 15 ms (0x08; in the four diag cases the last completed packet came 77-92 ms after the update), the rest ran starved or healthy. Every M31 15 ms stage with the child anchor 11.3-13.7 ms after the parent anchor was dead or starved (8 of 8); every one at 3.7-10.3 ms was healthy except two CoC stages without a data-length update (6.1/6.6 ms, 17-29 kbps). The generic mitigations (relay_child_stall_guard, relay_child_reanchor, relay_establish_fallback) apply to every phone; this entry only records the family so a later A/B (test_relay_upstream_dck, test_gatt_request_mtu) can promote a family-specific rule, for example a 30 ms parent link or a smaller data length for a relay child on this controller.",
+      "sources": [
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/745ee92b87ed/system/stack/l2cap/l2c_ble_conn_params.cc",
+          "note": "the stack locks 7.5 ms connection parameters while GATT service discovery runs and applies the app's pending request when it ends; every central here shows 45 -> 7.5 -> 15 ms (the HIGH range 11.25-15 ms resolves to 15 ms on the Exynos, Qualcomm and S24 controllers seen)"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/745ee92b87ed/android/app/res/values/config.xml",
+          "note": "gatt_high_priority_min/max_interval 9/12 (11.25-15 ms), gatt_balanced 24/40 (30-50 ms), gatt_dck_priority 24/24 (30 ms); the app cannot ask for another interval (hidden BluetoothGatt.requestLeConnectionUpdate throws NoSuchMethodException, relaylink-arms2r1)"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/bluetooth/BluetoothGatt#requestConnectionPriority(int)",
+          "note": "the public API offers BALANCED, HIGH, LOW_POWER and (API 34) DCK only"
+        },
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrfxlib/softdevice_controller/doc/scheduling.html",
+          "note": "Nordic's controller (a different vendor): peripheral link timing is dictated by the peer central and may collide with any running event; central link events are placed relative to other central links only; a lower-priority event is blocked and rescheduled, and a peripheral connection about to time out gets the highest priority. The Exynos 9611 controller shows no such rescue (0x08 after 5.0 s of silence)"
+        },
+        {
+          "kind": "BLUETOOTH_SPEC",
+          "reference": "https://www.bluetooth.com/specifications/specs/core-specification-5-4/",
+          "note": "Core Vol 6 Part B 4.5 (connection state: events, supervision timer) and 5.1.1 (connection update: transmit window): two connections' overlapping events are left to the controller; no Samsung or Exynos document describes its scheduler"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "Relay child links use HIGH like every other pair; the generic guards recover (0.3 s for 0x3E, about 3 s for a stall).",
+      "evidence": ["benchmarks/runs/relayfix-0725a213-diagM1 (0001: 2 deaths at 11.35/11.51 ms phase; 0002 CoC healthy at 10.28)", "benchmarks/runs/relayfix-0725a213-diagP1 (healthy 10.21 and 3.71), diagP2 (0001: four 0x3E; 0003: 2 deaths at 11.38/11.63)", "benchmarks/runs/mesh4ab-52681dbf-loop14b-1 (0002/0011/0012 deaths and starved stages at 11.98-13.73; 0001 healthy at 9.4)", "the ASUS (Qualcomm SM8150) as the dual-role relay: 29 child attempts, 5 x 0x3E, no 0x08"],
+      "confidence": "LOW",
+      "confidence_note": "",
+      "reviewed": "2026-10-11",
+      "off_switch": "test_device_policy_off=exynos9611-dual-role-equal-interval-child-starvation",
+      "legacy_switches": [],
+      "origin": "Root-cause analysis 2026-10-11 of the M31 relay child link (HCI snoops, M31 + ASUS); one Exynos phone."
+    },
+    {
       "id": "bg-battery-optimization",
       "title": "Battery optimisation is on for this app",
       "status": "implemented",
@@ -3455,6 +3516,57 @@
       "off_switch": "test_device_policy_off=native-armeabi-v7a-optional-build",
       "legacy_switches": ["Gradle -PenableArmeabiV7a=true (default off)"],
       "origin": "new proposal for devices the project does not own"
+    },
+    {
+      "id": "peer-label-title-advertising-set",
+      "title": "Stream titles are advertised in a second legacy advertising set",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "every phone",
+      "component": null,
+      "effects": ["advertise the stream title in a second legacy advertising set (title pages)"],
+      "behaviour": "A phone broadcasting a titled stream (and a forwarder passing a title on) runs a second non-connectable legacy advertising set whose scan response carries title pages, so viewers see the title in the nearby list before joining. It starts only when the free-set probe found at least two free sets, and a failed start changes nothing else. Off: no title pages; the signed title still reaches viewers who join.",
+      "sources": [
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/bluetooth/le/AdvertisingSetCallback#ADVERTISE_FAILED_TOO_MANY_ADVERTISERS",
+          "note": "A start can fail because the controller has no free advertising set; other apps and the OS share them"
+        },
+        {
+          "kind": "API_REFERENCE",
+          "reference": "https://developer.android.com/reference/android/bluetooth/BluetoothAdapter#isMultipleAdvertisementSupported()",
+          "note": "Whether the chipset supports more than one concurrent advertisement"
+        },
+        {
+          "kind": "BLUETOOTH_SPEC",
+          "reference": "Bluetooth Core Specification 5.4, Vol 4, Part E, section 7.8.58 (LE Read Number of Supported Advertising Sets)",
+          "note": "The controller reports its own limit on advertising sets"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "EXPERIMENTAL",
+      "fallback": "No title pages; viewers see the title after joining, from the signed copy.",
+      "evidence": ["none: no title-page run on a phone yet; the probe line BENCHMARK adv_set_probe records each phone's free sets"],
+      "confidence": "LOW",
+      "confidence_note": "The mechanism is documented; which stacks mishandle two concurrent legacy sets is unmeasured.",
+      "reviewed": "2026-10-11",
+      "off_switch": "test_device_policy_off=peer-label-title-advertising-set",
+      "legacy_switches": [],
+      "origin": "Review R13/R15 of the naming design: a title advertised publicly needs its own advertising set; the README listed 'no DeviceFamilyPolicy off-switch for extra advertising sets' as open."
     }
   ],
   "known_devices": [
@@ -3476,7 +3588,7 @@
         "stack_lineage": "PLATFORM_SYSTEM_BT",
         "codec_components": []
       },
-      "active": ["gatt-context-map-race", "le-coc-server-leak", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-power-save-mode", "bg-oem-oppo", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "active": ["gatt-context-map-race", "le-coc-server-leak", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-power-save-mode", "bg-oem-oppo", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set"],
       "component_rules": {},
       "matching_proposals": ["android-10-11-le-coc-security-id-budget", "android-11-coc-small-sdu-coalescing", "pre-android-13-coc-congested-write-loss", "ble-scan-start-quota", "background-restriction-visible", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "native-armeabi-v7a-optional-build"]
     },
@@ -3498,7 +3610,7 @@
         "stack_lineage": "BLUETOOTH_MODULE",
         "codec_components": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"]
       },
-      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set"],
       "component_rules": {
         "codec2-encoder-tie-break": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"],
         "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder"]
@@ -3523,7 +3635,7 @@
         "stack_lineage": "PLATFORM_SYSTEM_BT",
         "codec_components": ["c2.android.vp9.encoder"]
       },
-      "active": ["qcom-legacy-gatt-call", "qcom-legacy-coc-call", "qcom-legacy-classic-call", "qcom-msmnile-call", "qcom-legacy-call-vp9-software-decoder", "qcom-legacy-call-relay-gatt-acknowledged-writes", "qcom-msmnile-classic-source-balanced-scan", "gatt-context-map-race", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-oem-asus", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "active": ["qcom-legacy-gatt-call", "qcom-legacy-coc-call", "qcom-legacy-classic-call", "qcom-msmnile-call", "qcom-legacy-call-vp9-software-decoder", "qcom-legacy-call-relay-gatt-acknowledged-writes", "qcom-msmnile-classic-source-balanced-scan", "gatt-context-map-race", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-oem-asus", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set"],
       "component_rules": {
         "codec2-encoder-tie-break": ["c2.android.vp9.encoder"],
         "aosp-codec2-opus-decoder-first": ["c2.android.vp9.encoder"]
@@ -3548,9 +3660,9 @@
         "stack_lineage": "PLATFORM_SYSTEM_BT",
         "codec_components": ["OMX.Exynos.VP9.Encoder"]
       },
-      "active": ["le-coc-eatt-stranded-channels", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "active": ["le-coc-eatt-stranded-channels", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set"],
       "component_rules": {},
-      "matching_proposals": ["pre-android-13-coc-congested-write-loss", "ble-scan-start-quota", "background-restriction-visible", "one-ui-never-sleeping-apps", "omx-encoder-qp-bounds-ignored", "omx-exynos-vp9-framerate-bitrate-adjuster", "omx-exynos-framerate-adjuster-arm", "samsung-gatt-direct-connect-5s", "android12-gatt-disconnect-status-zero", "thermal-headroom-forecast", "thermal-native-speed-floor"]
+      "matching_proposals": ["pre-android-13-coc-congested-write-loss", "ble-scan-start-quota", "background-restriction-visible", "one-ui-never-sleeping-apps", "omx-encoder-qp-bounds-ignored", "omx-exynos-vp9-framerate-bitrate-adjuster", "omx-exynos-framerate-adjuster-arm", "samsung-gatt-direct-connect-5s", "android12-gatt-disconnect-status-zero", "exynos9611-dual-role-equal-interval-child-starvation", "thermal-headroom-forecast", "thermal-native-speed-floor"]
     },
     {
       "alias": "s22",
@@ -3570,7 +3682,7 @@
         "stack_lineage": "BLUETOOTH_MODULE",
         "codec_components": ["c2.android.av1.encoder", "c2.android.vp9.encoder"]
       },
-      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set"],
       "component_rules": {
         "codec2-encoder-tie-break": ["c2.android.av1.encoder", "c2.android.vp9.encoder"],
         "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder", "c2.android.vp9.encoder"]
@@ -3595,7 +3707,7 @@
         "stack_lineage": "BLUETOOTH_MODULE",
         "codec_components": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"]
       },
-      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set"],
       "component_rules": {
         "codec2-encoder-tie-break": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"],
         "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder"]
@@ -3620,7 +3732,7 @@
         "stack_lineage": "BLUETOOTH_MODULE",
         "codec_components": ["c2.android.av1.encoder"]
       },
-      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-xiaomi", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection"],
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-xiaomi", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set"],
       "component_rules": {
         "codec2-encoder-tie-break": ["c2.android.av1.encoder"],
         "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder"]

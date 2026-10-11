@@ -21,6 +21,7 @@ from bind_benchmark_inputs import COLOR_FIELDS, validate_fixture
 from score_reference_regions import _frames
 from score_visual_markers import file_record, integer
 from benchmark_layout import original, output_path, resolve as resolve_input
+from evidence_relocation import logical
 
 
 SCHEMA = "benchmark-input-complexity-v1"
@@ -193,7 +194,7 @@ def main(argv=None):
             writer = csv.DictWriter(destination, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
-        result[role]["samples"] = file_record({"path": str(path.resolve()),
+        result[role]["samples"] = file_record({"path": str(logical(path)),
                                               "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}, args.output)
     (args.output / "comparison.json").write_text(json.dumps(result, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     print(json.dumps({key: result[key] for key in ("numeric_complexity_status", "shortfalls", "phone_acceptance_status")}))

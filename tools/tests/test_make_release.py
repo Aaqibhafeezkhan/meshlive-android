@@ -52,6 +52,10 @@ def make_repo(root):
 
 class ManifestTest(unittest.TestCase):
     def setUp(self):
+        # The fake repository has no reference-repos/; native pin verification is covered by test_fetch_native_sources.
+        patcher = unittest.mock.patch.object(mr, "verify_native_sources", lambda root: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory(prefix="make-release-test-")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -135,11 +139,11 @@ def ok_inspector(apk):
 
 def write_gradle_outputs(root, universal=True, codes=None, unsigned=False):
     codes = codes or ABI_CODES
-    folder = Path(root) / "app/build/outputs/apk/release"
+    folder = Path(root) / "app/build/outputs/apk/github/release"
     folder.mkdir(parents=True, exist_ok=True)
     elements = []
     for abi in ("arm64-v8a", "armeabi-v7a") + (("universal",) if universal else ()):
-        name = f"app-{abi}-release" + ("-unsigned" if unsigned else "") + ".apk"
+        name = f"app-github-{abi}-release" + ("-unsigned" if unsigned else "") + ".apk"
         fake_apk(folder / name, ["arm64-v8a", "armeabi-v7a"] if abi == "universal" else [abi])
         filters = [] if abi == "universal" else [{"filterType": "ABI", "value": abi}]
         elements.append({"filters": filters, "versionCode": codes[abi], "outputFile": name})
@@ -178,7 +182,7 @@ class MakeReleaseTest(unittest.TestCase):
 
     def runner(self, args, cwd, input_bytes=None):
         self.calls.append(list(args))
-        if "assembleRelease" in " ".join(args):
+        if "assembleGithubRelease" in " ".join(args):
             write_gradle_outputs(cwd, universal="-PuniversalApk=true" in args)
             return b""
         if args[1:2] == ["verify"]:
@@ -194,7 +198,7 @@ class MakeReleaseTest(unittest.TestCase):
         (self.root / "a.txt").write_bytes(b"dirty\n")
         with self.assertRaisesRegex(mr.ReleaseError, "dirty"):
             self.make()
-        self.assertFalse(any("assembleRelease" in " ".join(c) for c in self.calls))
+        self.assertFalse(any("assembleGithubRelease" in " ".join(c) for c in self.calls))
 
     def test_untracked_file_counts_as_dirty(self):
         (self.root / "stray.txt").write_bytes(b"x")
@@ -254,9 +258,9 @@ class MakeReleaseTest(unittest.TestCase):
 
     def test_wrong_abi_inside_apk_refused(self):
         def runner(args, cwd, input_bytes=None):
-            if "assembleRelease" in " ".join(args):
+            if "assembleGithubRelease" in " ".join(args):
                 write_gradle_outputs(cwd)
-                fake_apk(Path(cwd) / "app/build/outputs/apk/release/app-arm64-v8a-release.apk", ["armeabi-v7a"])
+                fake_apk(Path(cwd) / "app/build/outputs/apk/github/release/app-github-arm64-v8a-release.apk", ["armeabi-v7a"])
                 return b""
             if args[1:2] == ["verify"]:
                 return self.certs.encode()
@@ -294,7 +298,7 @@ class MakeReleaseTest(unittest.TestCase):
 
     def test_unsigned_apk_reported(self):
         def runner(args, cwd, input_bytes=None):
-            if "assembleRelease" in " ".join(args):
+            if "assembleGithubRelease" in " ".join(args):
                 write_gradle_outputs(cwd, unsigned=True)
                 return b""
             return mr.run(args, cwd, input_bytes)
@@ -304,7 +308,7 @@ class MakeReleaseTest(unittest.TestCase):
 
     def test_build_that_dirties_tree_refused(self):
         def runner(args, cwd, input_bytes=None):
-            if "assembleRelease" in " ".join(args):
+            if "assembleGithubRelease" in " ".join(args):
                 (Path(cwd) / "a.txt").write_bytes(b"build touched me\n")
                 return b""
             return mr.run(args, cwd, input_bytes)

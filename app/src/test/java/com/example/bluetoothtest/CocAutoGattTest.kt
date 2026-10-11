@@ -96,7 +96,8 @@ class CocAutoGattTest {
         assertEquals(gatt, retry!!.effective)
         assertEquals(l2cap, retry.requested)
         assertEquals(CocFallbackReason.AVAILABILITY_FAILED, retry.reason)
-        assertEquals("Using BLE GATT: L2CAP unavailable", retry.notice)
+        assertTrue(retry.notice!!.startsWith("Using BLE GATT: L2CAP unavailable"))
+        assertTrue("Bluetooth off and on" in retry.notice!!)
         // It sticks for later endpoints of the same adapter session.
         assertEquals(gatt, session.choose(l2cap, on).effective)
         // A second failure on a session already on GATT has no further retry.
@@ -186,26 +187,54 @@ class CocAutoGattTest {
     }
 
     @Test
-    fun settingsResolveLikeTheOtherExperiments() {
-        // Benchmark launch: only its own extras, never the stored choice.
+    fun settingsResolveByTheSharedFeatureRule() {
+        // Benchmark launch: only its own extras, never the stored choice, and the threshold always counts.
         assertEquals(
             CocAutoGattSettings(false, 12),
-            CocAutoGattSettings.resolve(true, false, 12, true, true, 5),
+            CocAutoGattSettings.resolve(true, false, 12, true, 5, leakyStack = false),
         )
         assertEquals(
             CocAutoGattSettings(true, 8),
-            CocAutoGattSettings.resolve(true, true, 8, false, false, 12),
+            CocAutoGattSettings.resolve(true, true, 8, false, 12, leakyStack = false),
         )
-        // Normal launch: the stored setting counts only while Advanced settings are on.
+        // Normal launch: the user's explicit choice, no Manual-settings toggle involved.
         assertEquals(
-            CocAutoGattSettings(true, 5),
-            CocAutoGattSettings.resolve(false, false, 12, true, true, 5),
+            CocAutoGattSettings(true, 5, thresholdActive = true),
+            CocAutoGattSettings.resolve(false, false, 12, true, 5, leakyStack = true),
         )
         assertEquals(
-            CocAutoGattSettings(false, 12),
-            CocAutoGattSettings.resolve(false, false, 12, false, true, 5),
+            CocAutoGattSettings(false, 5, thresholdActive = true),
+            CocAutoGattSettings.resolve(false, true, 12, false, 5, leakyStack = true),
         )
-        assertEquals(CocAutoGattSettings(), CocAutoGattSettings.resolve(false, false, 12, true, false, 12))
+        // Never decided: the shipped default (off until phone test T6), whatever the launch extras say.
+        assertEquals(
+            ConnectivityFeatureDefaults.COC_AUTO_GATT,
+            CocAutoGattSettings.resolve(false, true, 12, null, 12, leakyStack = true).enabled,
+        )
         assertFalse(CocAutoGattSettings().enabled)
+    }
+
+    @Test
+    fun anUntouchedSwitchFollowsTheDefaultConstantButAnExplicitChoiceSticks() {
+        val spec = ConnectivityFeatures.cocAutoGatt.copy(defaultEnabled = true)
+        assertTrue(FeatureCatalog.resolve(spec, false, { false }, { null }))
+        assertFalse(FeatureCatalog.resolve(spec, false, { true }, { false }))
+        // A benchmark launch ignores both the default and the stored choice.
+        assertFalse(FeatureCatalog.resolve(spec, true, { false }, { true }))
+    }
+
+    @Test
+    fun theRegistrationThresholdAppliesOnlyOnStacksThatLeakRegistrations() {
+        val (_, session) = session(registrations = 40)
+        val healthy = CocAutoGattSettings(enabled = true, thresholdActive = false)
+        val choice = session.choose(l2cap, healthy)
+        assertEquals(l2cap, choice.effective)
+        assertEquals(CocFallbackReason.NONE, choice.reason)
+        // A real failure still moves a healthy stack to GATT.
+        assertEquals(gatt, session.onCocFailure(l2cap, healthy, CocFallbackReason.CONNECT_FAILED)!!.effective)
+        // The leaky stack counts.
+        val (_, leaky) = session(registrations = 12)
+        assertEquals(gatt, leaky.choose(l2cap, CocAutoGattSettings(enabled = true, thresholdActive = true)).effective)
+        assertTrue("thresholdActive=false" in choice.logLine())
     }
 }

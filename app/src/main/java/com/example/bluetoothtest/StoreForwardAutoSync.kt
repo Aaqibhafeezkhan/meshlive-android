@@ -5,7 +5,9 @@ import java.util.Properties
 import kotlin.math.pow
 
 /**
- * Experimental automatic store-and-forward sync (default off; needs `test_store_forward` too).
+ * Automatic store-and-forward sync (needs Messages). Settings > Features "Sync messages automatically";
+ * the shipped default is [CallFeatureDefaults.AUTO_SYNC] (off until Messages passes its phone test). A
+ * DEBUG benchmark launch uses only `test_sf_auto_sync`.
  *
  * Without it a user taps a person on the Call screen and chooses Exchange messages. With it, the
  * Call screen's existing discovery starts the same BSF1 exchange by itself when an accepted contact
@@ -21,12 +23,17 @@ import kotlin.math.pow
  */
 object StoreForwardAutoSyncFeature {
     const val EXTRA = "test_sf_auto_sync"
+    const val PREF = "feature_sf_auto_sync"
 
     @Volatile var enabled = false
 
-    /** DEBUG benchmark launches only, and only while store-and-forward itself is on. */
-    fun resolve(benchmarkLaunch: Boolean, extra: (String) -> Boolean, storeForward: Boolean): Boolean =
-        storeForward && benchmarkLaunch && extra(EXTRA)
+    /** Only while store-and-forward itself is on; a benchmark launch follows only its extra. */
+    internal fun resolve(
+        benchmarkLaunch: Boolean,
+        extra: (String) -> Boolean,
+        stored: (String) -> Boolean?,
+        storeForward: Boolean,
+    ): Boolean = storeForward && CallFeatureResolver.enabled(CallFeature.AUTO_SYNC, benchmarkLaunch, extra, stored)
 }
 
 /** What the sender sees for an own message. Local knowledge only. */

@@ -142,6 +142,11 @@ class BluetoothVideoSender(
         proveVideoIntegrityForTest: Boolean = false,
         ioConfig: VideoStreamIoConfig = VideoStreamIoConfig.DEFAULT,
         debugTraceSession: String? = null,
+        /**
+         * Rotating IDs (phase 1b): the viewer request this connection answers, when it is a version 5 request.
+         * Its identity is then proven by the listener's link opening (role 2) instead of the prefix.
+         */
+        selectedRotatingRequest: DiscoveryAnnouncement? = null,
         onConnected: () -> Unit,
     ) {
         debugIntegrityEnabled = BuildConfig.DEBUG && proveVideoIntegrityForTest
@@ -241,16 +246,45 @@ class BluetoothVideoSender(
                     ?: error("Bluetooth output is unavailable")
 
                 onStatus("Authenticating the ${transport.shortLabel} link…")
+                // Rotating IDs, phase 1b: an LE stream hop signs link bit 3 and exchanges BDO1 (this connector
+                // sends its pinned role-1 entries). Off: linkCapabilities is capabilities, nothing is exchanged.
+                val rotatingOn = RotatingDiscoveryFeature.enabled
+                val linkCapabilities = StreamHopOpening.linkCapabilities(capabilities, rotatingOn, transport)
                 val session = classicSession ?: SecureBluetoothHandshake.initiate(
                     BufferedInputStream(rawInput, ioConfig.bufferBytes),
                     BufferedOutputStream(rawOutput, ioConfig.bufferBytes),
                     identity,
-                    capabilities,
+                    linkCapabilities,
                 )
                 require(session.peerCapabilities.transportMask and transport.capabilityMask != 0) {
                     "Peer did not authenticate support for ${transport.shortLabel}"
                 }
-                if (expectedPeerNodeIdPrefix != null) {
+                val rotatingSelection = selectedRotatingRequest?.takeIf { it.rotating }
+                if (rotatingOn && transport != BluetoothTransportOption.CLASSIC_RFCOMM) {
+                    val opening = LinkOpeningExchange.exchange(
+                        session,
+                        linkCapabilities,
+                        RotatingDiscovery.pinned(RotatingDiscoveryIds.ROLE_STREAM_OFFER),
+                    )
+                    if (rotatingSelection != null) {
+                        val result = StreamHopOpening.check(
+                            rotatingSelection,
+                            RotatingDiscoveryIds.ROLE_VIEWER_REQUEST,
+                            session.peerNodeId,
+                            opening,
+                        )
+                        android.util.Log.i(
+                            "BluetoothVideo",
+                            (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "rotid_open: role=viewer | result=$result",
+                        )
+                        require(result == DiscoverySelectionCheck.Result.PASS) {
+                            "Peer identity changed between discovery and connection"
+                        }
+                    }
+                } else {
+                    require(rotatingSelection == null) { "A rotating viewer request needs the rotating-ID experiment" }
+                }
+                if (expectedPeerNodeIdPrefix != null && rotatingSelection == null) {
                     require(
                         session.peerNodeId.toByteArray()
                             .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES)
@@ -287,6 +321,9 @@ class BluetoothVideoSender(
                             "Final receiver cannot decode ${codec.displayName.substringBefore(" - ")}"
                         }
                         endToEndSession = endpoint
+                        require(rotatingSelection == null || endpoint.peerNodeId == session.peerNodeId) {
+                            "Peer identity changed between discovery and connection"
+                        }
                     }
                 } else {
                     null
@@ -294,15 +331,42 @@ class BluetoothVideoSender(
                 activeGattConnection?.let { connection ->
                     // A DEBUG override also applies to a relay-capable child, so the relay airtime A/B
                     // (source_gatt_priority) can test DCK on the upstream link; production is unchanged.
+                    val childCanRelayLink = session.peerCapabilities.maxChildren > 0
                     val authenticatedPriority = DebugTunables.sourceGattPriority
-                        ?: if (session.peerCapabilities.maxChildren > 0) {
-                            BleConnectionPriority.HIGH
-                        } else {
-                            gattPriority
-                        }
+                        ?: relayUpstreamPriority(
+                            planned = if (childCanRelayLink) BleConnectionPriority.HIGH else gattPriority,
+                            childCanRelay = childCanRelayLink,
+                            sdkInt = android.os.Build.VERSION.SDK_INT,
+                            enabled = DebugTunables.relayUpstreamDck,
+                        )
+                    if (DebugTunables.relayUpstreamDck) {
+                        android.util.Log.i(
+                            "BluetoothVideo",
+                            "BENCHMARK relay_upstream_priority: role=source | transport=gatt | childCanRelay=$childCanRelayLink | " +
+                                "priority=${authenticatedPriority.label}",
+                        )
+                    }
                     onStatus(
                         "GATT video ${authenticatedPriority.label} priority retry " +
                             if (connection.requestConnectionPriority(authenticatedPriority)) "queued" else "failed",
+                    )
+                }
+                if (transport == BluetoothTransportOption.BLE_L2CAP && DebugTunables.relayUpstreamDck) {
+                    // CoC requested HIGH on its control connection before the child was known; a relay-capable
+                    // child moves to the experimental DCK upstream priority (test_relay_upstream_dck).
+                    val childCanRelayLink = session.peerCapabilities.maxChildren > 0
+                    val cocPriority = relayUpstreamPriority(
+                        BleConnectionPriority.HIGH,
+                        childCanRelayLink,
+                        android.os.Build.VERSION.SDK_INT,
+                        enabled = true,
+                    )
+                    val queued = cocPriority != BleConnectionPriority.HIGH &&
+                        bleControlConnection?.requestConnectionPriority(cocPriority) == true
+                    android.util.Log.i(
+                        "BluetoothVideo",
+                        "BENCHMARK relay_upstream_priority: role=source | transport=coc | childCanRelay=$childCanRelayLink | " +
+                            "priority=${cocPriority.label} | queued=$queued",
                     )
                 }
                 val streamWriter = EndToEndStreamWriter(
@@ -590,6 +654,15 @@ class BluetoothVideoSender(
     }
 
     internal fun expectsPeriodicChildHeartbeat(): Boolean = periodicChildHeartbeatExpected
+
+    /** The authenticated link peer (null before the link handshake). */
+    internal fun authenticatedPeerNode(): NodeId? = secureSession?.peerNodeId
+
+    /**
+     * The forwarded-stream key this child receives in a `BFG1` grant if it forwards: the key sealed for it.
+     * Null before the end-to-end handshake and for a group hop. Feeds the recovery hint (RV18).
+     */
+    internal fun recoveryMediaKey(): ByteArray? = endToEndSession?.sealer?.copyKeyForForwarding()
 
     internal fun lastChildHeartbeatNs(): Long = lastHeartbeatReceivedNs
 

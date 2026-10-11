@@ -495,6 +495,10 @@ object GattVideoClient {
         val setupLogCount = if (BuildConfig.DEBUG) AtomicInteger(0) else null
         val latch = CountDownLatch(1)
         val mtuRequestedAtNs = AtomicLong(0L)
+        // MTU wait verdicts (GattMtuWait): queued behind the platform's discovery vs dropped.
+        val mtuWait = GattMtuWait(
+            probeEnabled = DebugTunables.gattMtuProbe && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
+        )
         val teardown = GattTeardownSignal()
         val input = GattBytePipe { failure -> onStatus("GATT video input $failure") }
         var mtu = DEFAULT_MTU
@@ -586,6 +590,7 @@ object GattVideoClient {
                         logSetup("mtu_request", "requested=$requestedMtu")
                         linkDiag.requestedMtu = requestedMtu
                         mtuRequestedAtNs.set(System.nanoTime())
+                        mtuWait.onRequested(System.nanoTime() / 1_000_000L)
                         val mtuQueued = activeGatt.requestMtu(requestedMtu)
                         logSetup("mtu_return", "queued=$mtuQueued")
                         if (!mtuQueued) {
@@ -600,6 +605,7 @@ object GattVideoClient {
             override fun onMtuChanged(activeGatt: BluetoothGatt, newMtu: Int, status: Int) {
                 if (cancelled.get()) return
                 mtuRequestedAtNs.set(0L)
+                mtuWait.onMtuCallback()
                 mtu = if (status == BluetoothGatt.GATT_SUCCESS) newMtu else DEFAULT_MTU
                 linkDiag.onMtu(mtu, status)
                 logSetup("mtu_callback", "status=$status reported=$newMtu effective=$mtu")
@@ -609,6 +615,7 @@ object GattVideoClient {
 
             override fun onPhyUpdate(activeGatt: BluetoothGatt, txPhy: Int, rxPhy: Int, status: Int) {
                 if (cancelled.get()) return
+                mtuWait.onPlatformCallback(System.nanoTime() / 1_000_000L)
                 logSetup("phy_update_callback", "status=$status tx=$txPhy rx=$rxPhy")
                 linkDiag.onPhy(txPhy, rxPhy, status)
                 if (complete.get()) linkDiag.log("phy_update")
@@ -619,6 +626,7 @@ object GattVideoClient {
 
             override fun onPhyRead(activeGatt: BluetoothGatt, txPhy: Int, rxPhy: Int, status: Int) {
                 if (cancelled.get()) return
+                mtuWait.onPlatformCallback(System.nanoTime() / 1_000_000L)
                 logSetup("phy_read_callback", "status=$status tx=$txPhy rx=$rxPhy")
                 linkDiag.onPhy(txPhy, rxPhy, status)
                 if (complete.get()) linkDiag.log("phy_read")
@@ -789,12 +797,33 @@ object GattVideoClient {
                 while (!completed && System.nanoTime() < deadlineNs) {
                     completed = latch.await(SETUP_POLL_MS, TimeUnit.MILLISECONDS)
                     val mtuRequested = mtuRequestedAtNs.get()
-                    if (!completed && mtuRequested != 0L &&
-                        System.nanoTime() - mtuRequested > TimeUnit.MILLISECONDS.toNanos(MTU_CALLBACK_TIMEOUT_MS)
-                    ) {
-                        logSetup("mtu_timeout", "waitedMs=$MTU_CALLBACK_TIMEOUT_MS")
-                        finish(message = GATT_MTU_STALLED_MESSAGE)
-                        completed = true
+                    if (!completed && mtuRequested != 0L) {
+                        val nowMs = System.nanoTime() / 1_000_000L
+                        val waitedMs = (System.nanoTime() - mtuRequested) / 1_000_000L
+                        when (val verdict = mtuWait.poll(nowMs)) {
+                            GattMtuWait.Verdict.WAIT -> Unit
+                            GattMtuWait.Verdict.SEND_PROBE -> {
+                                // A controller read: it bypasses the platform's queued discovery, and its
+                                // callback needs the same client record the MTU request needs.
+                                val probing = activeGattRef.get()
+                                if (probing == null) {
+                                    mtuWait.onProbeUnavailable()
+                                } else {
+                                    logSetup("mtu_probe_request", "waitedMs=$waitedMs")
+                                    mtuWait.onProbeSent(nowMs)
+                                    runCatching { probing.readPhy() }.onFailure { mtuWait.onProbeUnavailable() }
+                                }
+                            }
+                            else -> {
+                                logSetup(
+                                    "mtu_timeout",
+                                    "waitedMs=$waitedMs reason=$verdict platformAlive=${mtuWait.platformAlive} " +
+                                        "probeSent=${mtuWait.probeSent}",
+                                )
+                                finish(message = GATT_MTU_STALLED_MESSAGE)
+                                completed = true
+                            }
+                        }
                     }
                 }
                 if (!completed) logSetup("await_timeout", "deadlineSeconds=$CONNECTION_TIMEOUT_SECONDS")
@@ -890,6 +919,13 @@ class GattVideoServer(
     private val onStatus: (String) -> Unit,
     private val onConnection: (GattVideoConnection) -> Unit,
 ) : Closeable {
+    /**
+     * Dual listening (DualListening.kt): false registers the service without any advertising set, so a CoC
+     * endpoint's one connectable set stays the only one and a GATT central reaches this service at that
+     * address. True (the default, every other caller): advertises as always. Set before [start].
+     */
+    @Volatile internal var advertise: Boolean = true
+
     private val appContext = context.applicationContext
     private val bluetoothManager = appContext.getSystemService(BluetoothManager::class.java)
     private val advertiseHandler = Handler(Looper.getMainLooper())
@@ -905,7 +941,9 @@ class GattVideoServer(
     @Volatile private var advertising = false
 
     /** Keeps its random address through the low-latency -> balanced step (StableAdvertisingSet). */
-    private val advertisement = StableAdvertisingSet(
+    @Volatile private var advertisement = newAdvertisement(announcement)
+
+    private fun newAdvertisement(value: DiscoveryAnnouncement) = StableAdvertisingSet(
         adapter,
         connectable = true,
         data = AdvertiseData.Builder()
@@ -914,13 +952,47 @@ class GattVideoServer(
         scanResponse = AdvertiseData.Builder()
             .addManufacturerData(
                 BleL2capControlProtocol.MESH_MANUFACTURER_ID,
-                DiscoveryAnnouncementCodec.encode(announcement),
+                DiscoveryAnnouncementCodec.encode(value),
             )
             .build(),
         label = "GATT video",
         onStatus = onStatus,
         onLost = ::onAdvertisingLost,
+        nonDiscoverable = NonDiscoverableAdvertising.forNewSet(connectable = true),
     )
+
+    /**
+     * Rotating IDs (RV6): while this server still advertises and no peer is connected, stop the set, stay
+     * silent for [silenceMs] and advertise [next] on a new set (new address). The GATT service stays.
+     */
+    @SuppressLint("MissingPermission")
+    fun reannounce(next: DiscoveryAnnouncement, silenceMs: Long) {
+        if (closed.get() || !advertise) return
+        val wasAdvertising = synchronized(this) {
+            val advertisingNow = advertising && activeDevice == null
+            if (advertisingNow) stopAdvertising()
+            advertisement = newAdvertisement(next)
+            advertisingNow
+        }
+        if (!wasAdvertising) return
+        try {
+            Thread.sleep(silenceMs)
+        } catch (_: InterruptedException) {
+            return
+        }
+        if (closed.get() || activeDevice != null) return
+        runCatching { startAdvertising(lowLatency = false) }
+            .onFailure { onStatus("GATT video could not advertise the new ID: ${it.message}") }
+    }
+
+    private val mtuByAddress = HashMap<String, Int>()
+
+    private fun rememberMtu(address: String, value: Int) = synchronized(mtuByAddress) {
+        if (mtuByAddress.size >= MAX_REMEMBERED_MTUS) mtuByAddress.clear()
+        mtuByAddress[address] = value
+    }
+
+    private fun rememberedMtu(address: String): Int = synchronized(mtuByAddress) { mtuByAddress[address] } ?: DEFAULT_MTU
 
     private val callback = object : BluetoothGattServerCallback() {
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
@@ -944,7 +1016,7 @@ class GattVideoServer(
                 activeDevice?.address == device.address
             ) {
                 closeConnection()
-                if (!closed.get() && !advertising) thread(name = "GattVideoReadvertise") {
+                if (advertise && !closed.get() && !advertising) thread(name = "GattVideoReadvertise") {
                     runCatching { startAdvertising() }
                         .onFailure { onStatus("GATT video could not advertise again: ${it.message}") }
                 }
@@ -952,7 +1024,11 @@ class GattVideoServer(
         }
 
         override fun onMtuChanged(device: BluetoothDevice, newMtu: Int) {
-            if (closed.get() || !gattServerOwnsCallback(activeDevice?.address, device.address)) return
+            if (closed.get()) return
+            // A non-advertising second server hears every central that connects to the phone (AOSP tells all
+            // registered apps, gatt_send_conn_cback), so it keeps the MTU per device and takes the admitted one.
+            if (!advertise) rememberMtu(device.address, newMtu)
+            if (!gattServerOwnsCallback(activeDevice?.address, device.address)) return
             mtu = newMtu
             onStatus("GATT video RX MTU $newMtu")
         }
@@ -1001,6 +1077,12 @@ class GattVideoServer(
             if (!valid) return
             activeDevice = device
             stopAdvertising()
+            if (!advertise) {
+                // Events heard before admission belonged to other centrals: start from this device's own state.
+                mtu = rememberedMtu(device.address)
+                currentPhySummary = "PHY pending"
+                server?.readPhy(device)
+            }
             val characteristic = server?.getService(GATT_DATA_SERVICE_UUID)
                 ?.getCharacteristic(NOTIFY_UUID) ?: return
             val activeInput = GattBytePipe { failure ->
@@ -1092,6 +1174,10 @@ class GattVideoServer(
         if (serviceStatus != BluetoothGatt.GATT_SUCCESS) {
             throw IOException("GATT video service failed to register (status $serviceStatus)")
         }
+        if (!advertise) {
+            onStatus("GATT video service is ready (the CoC control server advertises)")
+            return
+        }
         startAdvertising()
         onStatus("GATT video receiver is advertising")
     }
@@ -1102,7 +1188,8 @@ class GattVideoServer(
     @SuppressLint("MissingPermission")
     @Synchronized
     private fun startAdvertising(lowLatency: Boolean) {
-        if (closed.get() || advertising) return
+        // The one funnel of every advertising entry point: a dual-listening second server never advertises.
+        if (closed.get() || advertising || !advertise) return
         val status = advertisement.start(lowLatency, CONTROL_TIMEOUT_SECONDS)
             ?: throw IOException("Timed out advertising GATT video")
         if (status != AdvertisingSetCallback.ADVERTISE_SUCCESS) {
@@ -1218,6 +1305,7 @@ private val NOTIFY_UUID: UUID = UUID.fromString("c8d5a104-9f88-4f65-a03d-7f5a2fb
 private val GATT_DATA_SERVICE_UUID: UUID = UUID.fromString("c8d5a105-9f88-4f65-a03d-7f5a2fb921fa")
 private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 private const val DEFAULT_MTU = 23
+private const val MAX_REMEMBERED_MTUS = 8
 private const val MAX_MTU = 517
 private const val ATT_OVERHEAD = 3
 private const val MAX_ATTRIBUTE_BYTES = 512
@@ -1229,7 +1317,6 @@ private const val TYPE_DATA: Byte = 1
 private const val IO_TIMEOUT_SECONDS = 8L
 private const val CONNECTION_TIMEOUT_SECONDS = 12L
 private const val SETUP_POLL_MS = 250L
-private const val MTU_CALLBACK_TIMEOUT_MS = 3_000L
 private const val CONTROL_TIMEOUT_SECONDS = 8L
 private const val LOW_LATENCY_ADVERTISE_BURST_MS = 10_000L
 private const val LEGACY_GATT_CALL_BYTES_PER_SECOND = 24_000

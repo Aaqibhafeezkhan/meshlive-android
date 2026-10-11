@@ -2,7 +2,13 @@
 
 **Live video, voice calls and messages between nearby phones, over Bluetooth, with no internet.**
 
-> **Privacy warning:** MeshLive's Bluetooth announcements currently carry a stable node-ID prefix that lets anyone listening link a phone's rotating Bluetooth addresses over time. Rotating IDs are only an untested experiment so far; see [What nearby phones can see](#what-nearby-phones-can-see).
+> **Privacy (0.2.0-beta):** MeshLive now broadcasts a random ID that changes every 15 minutes instead of a fixed
+> node-ID prefix, hides both phones' identity keys during calls, and shows a stranger a throwaway identity instead of
+> yours. In our first test (four phones, three ID changes) a passive scanner could not link a phone across any of them.
+> That is an early test, not a guarantee: a live stream still shows its source's identity to viewers, older app
+> versions cannot see updated phones, Bluetooth Classic and the Bluetooth device name on Android 13 and older still
+> leak, and anyone whose call you accept learns who you are. [What nearby phones can see](#what-nearby-phones-can-see)
+> lists what is hidden, what was measured and what was not.
 
 <p align="center">
   <a href="https://github.com/MeshLive/meshlive-android/releases/latest/download/MeshLive.apk"><img alt="Download MeshLive for Android" src="https://img.shields.io/badge/Download-MeshLive%20for%20Android-000000?style=for-the-badge&logo=android&logoColor=white" height="56"></a>
@@ -43,9 +49,10 @@ MeshLive is **pre-release and experimental**.
   project tracks these openly; see [docs/DECISIONS.md](docs/DECISIONS.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 - Video over Bluetooth is a narrow pipe (a few hundred kbps). Expect 240p-480p video at 15-30 FPS, noticeable delay,
   and pauses when the link is busy. Each relay hop spends airtime twice, so long relay chains of video are weak.
-- Many newer features (voice calls, messages, names, rotating discovery IDs, call relaying) are **off by default and
-  labelled Experimental**. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) lists every one with its switch, default and
-  reason, and says which are still untested on phones.
+- Many newer features (voice calls, messages, names, call relaying) are **off by default and labelled
+  Experimental**. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) lists every one with its switch, default and
+  reason, and says which are still untested on phones. The privacy features (rotating discovery IDs, hidden
+  identities, throwaway identities for strangers) are **on by default since 0.2.0-beta**, each with its own switch.
 - Please use it for testing and feedback, **not for situations where your safety depends on it.**
 
 Reference phones used for testing, by alias:
@@ -117,8 +124,9 @@ Detailed measurements are in [docs/DECISIONS.md](docs/DECISIONS.md) and the benc
   AES-256-GCM records, with a second end-to-end layer so a relay in the middle cannot read or alter your media.
   Compare a QR code or a safety code in person to verify a contact.
 - **Experimental: voice-only calls and push-to-talk** (an intercom mode), **store-and-forward messages** (text, voice
-  notes, photos between accepted contacts), **names and titles**, **rotating discovery IDs**, and **calls through up
-  to four relays**.
+  notes, photos between accepted contacts), **names and titles**, and **calls through up to four relays**.
+- **Privacy by default (0.2.0-beta).** Rotating discovery IDs, an identity-hiding call handshake and throwaway
+  identities for strangers are on; each has a switch in Settings.
 - **Offline app sharing.** Hand the installed APK to a nearby phone through the share sheet, with the APK and
   signing-certificate hashes shown on screen. An experimental "Share app nearby" screen serves it over a local
   Wi-Fi Direct link.
@@ -154,6 +162,10 @@ That's it. The phone must run Android 10 or newer. Both people need MeshLive to 
 **Get updates automatically:** install [Obtainium](https://github.com/ImranR98/Obtainium), then tap
 **[Get it on Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/MeshLive/meshlive-android)** (or add `https://github.com/MeshLive/meshlive-android` in Obtainium by hand).
 Obtainium checks this page for new versions and updates MeshLive for you.
+
+**Updates inside the app (release-page builds).** MeshLive can check for a newer version itself, but only after you say yes: the first time you open it, it asks "Check for updates when online?". Until you answer yes it makes no internet request at all. With yes it asks GitHub's release API (`api.github.com`) at most once a day while you are online; GitHub sees your phone's internet address and that you asked about MeshLive, and nothing else is sent (no account, no cookie, no device or version information, no tracker). It downloads nothing until you tap, and it installs a file only if all of these hold: it is signed with the MeshLive release key that is built into the app (the fingerprint under "Verifying a release"), it is newer than your copy, it is for your phone type, and its SHA-256 equals the one the release publishes. Android then asks you to confirm; nothing is ever installed silently or downgraded. Settings > Features > Check for updates changes your answer (a "yes" restored from a backup onto another phone is dropped and asked again: the answer has a marker in the no-backup folder). While it is off, nothing on the Updates screen can contact GitHub. F-Droid builds contain none of this (F-Droid updates them) and do not ask for the install permission.
+
+**A friend has a newer version.** When two phones connect, each tells the other which MeshLive release it runs (in the signed greeting phones already exchange; never in what a phone broadcasts). If a phone this phone connected to (a call, a stream or a relay you started; a stranger who connects to you is not counted) says it runs a newer release you see a quiet note on the home screen. It is only that phone's claim: nothing is downloaded or checked until you pick a file yourself. It explains how to get the file from that phone (Help > Share app nearby on its screen, or any other way you like), and **Choose the file** checks it the same way before offering to install it. Settings > Features > Tell me about newer versions nearby turns this off, in both directions.
 
 **No internet at all?** A friend who already has MeshLive can send it to you: in MeshLive's **Help**, they tap
 **Share this app** and send it with Quick Share, Nearby Share or Bluetooth.
@@ -221,7 +233,7 @@ source it was built from. Signing happens only on the maintainer's machine: CI
 Quick check with the [GitHub CLI](https://cli.github.com/) (replace the file name with the one you downloaded):
 
 ```bash
-gh attestation verify MeshLive-0.1.0-beta-universal.apk --repo MeshLive/meshlive-android
+gh attestation verify MeshLive-0.2.0-beta-universal.apk --repo MeshLive/meshlive-android
 gh attestation verify SOURCE-MANIFEST.txt --repo MeshLive/meshlive-android
 ```
 
@@ -246,8 +258,8 @@ Signing certificate SHA-256 (also in each release's notes and `signing-cert.sha2
 4. **Source.** `SOURCE-MANIFEST.txt` lists the git commit, tree hash and the SHA-256 of every tracked file. Clone,
    `git checkout <commit>`, then `python tools/make_release.py --manifest-only --output mine.txt` and
    `diff mine.txt SOURCE-MANIFEST.txt` (must be identical). To check one file,
-   `git show <commit>:<path> | sha256sum`. The build is not claimed to be bit-for-bit reproducible, so the manifest
-   binds the source set, not the APK bytes.
+   `git show <commit>:<path> | sha256sum`. The manifest binds the source set; for the APK bytes see the reproducibility
+   check under Distribution (verified for the unsigned APKs on one OS only, so it is not yet a published claim).
 
 Maintainer: `python tools/make_release.py` (clean tree, signing key present, fingerprint must match) writes
 `release/<versionName>-<versionCode>/`: the signed APKs, `SHA256SUMS`, `signing-cert.sha256`, `apksigner-certs.txt`,
@@ -270,9 +282,8 @@ This section is for maintainers and packagers.
   Example: base 1 gives 10, 11, 12. `make_release.py` cross-checks Gradle's `output-metadata.json`, each APK's native
   ABIs, the 16 KB page-size check for 64-bit libraries (`tools/check_apk_16kb.py`) and that every APK has exactly the
   expected single signer.
-- **Deterministic version.** `versionName`/`versionCode` are literals (no date or git hash). The APK carries no
-  Google dependency-info block (`dependenciesInfo` off). Bit-for-bit reproducibility of the APK is not verified (see
-  the open item below), so F-Droid signs its own build and the GitHub APK is signed by us.
+- **Flavours.** `github` is the release page's build (`tools/make_release.py` runs `:app:assembleGithubRelease`; the in-app updater and its install permission live only there); `fdroid` is the F-Droid recipe's (`gradle: [fdroid]`, outputs `app-fdroid-<abi>-release-unsigned.apk`). Both carry the "newer version nearby" note. The APK of one source cannot update the other: F-Droid signs its own build, and the in-app updater is offered only to a copy that carries the release key. Neither flavour embeds a build time, so reproducibility is unchanged (`tools/check_reproducible_build.py` defaults to `:app:assembleFdroidRelease`).
+- **Deterministic version.** `versionName`/`versionCode` are literals (no date or git hash). The APK carries no Google dependency-info block (`dependenciesInfo` off). **Reproducible builds.** `python -B tools/check_reproducible_build.py build --tree-a DIR_A --tree-b DIR_B -- -PsplitAbis=true -PenableArmeabiV7a=true -PuniversalApk=false` builds the unsigned release (release key never read; build cache off; sequential; refuses to start when memory use is high) in two clean checkouts at different paths and compares every APK entry; `compare A.apk B.apk` compares two existing APKs ignoring the META-INF signature files, as F-Droid does. Result 2026-10-11 (AGP 8.13.2, Gradle 8.13, JDK 21, Windows): both ABIs bit-identical in two checkouts at different paths. The first run differed only in `libbluetooth_video_native.so`, because libopus `__FILE__`/assert strings embedded the checkout path; `app/src/main/cpp/CMakeLists.txt` now maps the libopus, libaom, app-source and build directories with `-ffile-prefix-map`. Not yet verified: a Linux build (the F-Droid buildserver, JDK 17, Linux NDK) against a Windows build, and the signed APK; so F-Droid still signs its own build and `Binaries` stays commented out in the recipe. A release signed with our key must be re-checked with `compare` against the F-Droid-built APK before enabling it.
 - **Application ID.** The app name is MeshLive and the application ID is `io.github.meshlive.app` (the draft
   F-Droid metadata is `distribution/fdroid/io.github.meshlive.app.yml`). The benchmark harness uses the same ID;
   set `MESHLIVE_APP_ID` to drive a build with another ID. The Kotlin package, `namespace`, proguard rules and the
@@ -286,10 +297,7 @@ This section is for maintainers and packagers.
 - **Dependency licences.** [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), "Runtime dependency licences". All
   Apache-2.0 except libaom (BSD-2-Clause plus the AOM patent licence) and libopus (BSD-3-Clause); nothing
   proprietary.
-- **Open items before an F-Droid request.** A public repository and tag; a final non-`com.example` application ID;
-  real screenshots; verify the split-APK recipe with `fdroid build` and decide whether to chase reproducible builds
-  (compare two builds in different directories; native `__FILE__` paths and the NDK's build IDs are the likely
-  differences).
+- **Open items before an F-Droid request.** public repository and tag; a final non-`com.example` application id; real screenshots; run the split-APK recipe through `fdroid build` on a buildserver image (`fdroid readmeta`/`lint` of the draft pass with fdroidserver 2.4.5; the srclib `distribution/fdroid/srclibs/libaom.yml` goes to fdroiddata too) and cut a release built with AGP 8.13.2 or newer (v0.1.0-beta used 8.13.0-rc01), then point the recipe's `commit` at that tag.
 
 ### Diagnostics block (contract for "Export diagnostics")
 
@@ -343,18 +351,19 @@ cd meshlive-android
 python tools/fetch_native_sources.py
 
 # 2. Unit tests and a debug APK (use .\gradlew.bat on Windows).
-./gradlew :app:testDebugUnitTest :app:assembleDebug
+./gradlew :app:testDebugUnitTest :app:assembleGithubDebug
 
 # 3. Host tool tests (optional).
 python -B -m pytest -q tools
 ```
 
-The debug APK is `app/build/outputs/apk/debug/app-debug.apk`. Install it on a phone you own with
-`adb install -r app/build/outputs/apk/debug/app-debug.apk`. CMake refuses a libopus other than 1.5.2. `-PperlExecutable=<perl>`
+The debug APK is `app/build/outputs/apk/github/debug/app-github-debug.apk`. Install it on a phone you own with
+`adb install -r app/build/outputs/apk/github/debug/app-github-debug.apk`. CMake refuses a libopus other than 1.5.2. `-PperlExecutable=<perl>`
 overrides the Perl used for libaom and `-PaomSourceDir=<dir>` points at a libaom checkout somewhere else.
 
 Notes:
 
+- **Flavours.** Two distribution flavours (`app/build.gradle.kts` `productFlavors`): `github` (what the release page ships, with the opt-in updater and `REQUEST_INSTALL_PACKAGES`) and `fdroid` (what the F-Droid recipe builds; no updater, no install permission). Name the flavour in build tasks: `:app:assembleGithubDebug` (APK `app/build/outputs/apk/github/debug/app-github-debug.apk`, the one `tools/deploy_build.py` installs), `:app:assembleGithubRelease`, `:app:assembleFdroidRelease`. `:app:testDebugUnitTest` is an alias (AGP defines none once flavours exist): the github flavour's unit tests run once, and the fdroid flavour's main and test code must compile; one class: `:app:testGithubDebugUnitTest --tests <class>`. The plain `assembleDebug`/`assembleRelease` aggregates would compile the native libraries twice, so avoid them. `:app:processGithubReleaseManifest :app:processFdroidReleaseManifest` followed by `python -B -m pytest tools/tests/test_flavour_manifests.py` checks the merged manifests.
 - **Application ID.** `io.github.meshlive.app`. The Kotlin package and `namespace` stay `com.example.bluetoothtest`,
   so launch components are `io.github.meshlive.app/com.example.bluetoothtest.MainActivity`. See
   [Distribution](#distribution).
@@ -364,7 +373,7 @@ Notes:
   configuration) lock resolved versions. To change a version, update them together: (1) for Gradle, change
   `distributionUrl` and set `distributionSha256Sum` to the official `.sha256` for that distribution; (2) for
   dependencies, edit `gradle/libs.versions.toml` and run
-  `./gradlew --no-configuration-cache --write-locks --write-verification-metadata sha256 help :app:assembleDebug :app:assembleRelease :app:testDebugUnitTest`
+  `./gradlew --no-configuration-cache --write-locks --write-verification-metadata sha256 help :app:assembleGithubDebug :app:assembleFdroidDebug :app:assembleGithubRelease :app:assembleFdroidRelease :app:testDebugUnitTest`
   (add any other task you run, because tools such as AAPT2 and lint are resolved only when their task runs; a new
   Android Gradle Plugin needs the command on each OS or the published checksums added by hand); (3) review the lockfile
   and verification diff and confirm an `--offline` build.
@@ -400,49 +409,103 @@ registry with official sources and off-switches.
 ## What nearby phones can see
 
 Anyone with a Bluetooth scanner in range can read what MeshLive broadcasts. They do not need to connect or pair. The
-**content** of calls, streams and messages is encrypted, but the fact that a MeshLive phone is there is not hidden.
+**content** of calls, streams and messages is encrypted. What the announcements reveal depends on the settings and the
+app versions below.
 
 **What a phone broadcasts.** When a phone offers a call or a stream it sends a 22-byte Bluetooth LE announcement (or an
 equivalent service UUID when the experimental "find iPhones" switch is on) containing:
 
-- a **stable node-ID prefix** (48 bits, the first 6 bytes of the SHA-256 of the phone's identity key). It does not
-  change until the identity is wiped or reset;
+- a **six-byte ID**. With rotating discovery IDs on (the default since 0.2.0-beta) it is a random-looking 48-bit ID
+  that changes every 15 minutes. It is derived from a key that never leaves the phone, so it says nothing about who
+  the phone is until someone connects (or holds a contact lease, below). Only the cases under "Still stable or
+  exposed" use the fixed node-ID prefix instead (48 bits, the first 6 bytes of the SHA-256 of the phone's identity
+  key; it does not change until the identity is wiped or reset);
 - the Bluetooth transport it offers, which video codecs it supports, and flags such as "accepting connections",
   "can relay", "call available", "stream available" and "paused";
 - the route cost (how many relay hops away the source is);
-- for a stream: a 4-byte broadcast token, a sequence number, and the resolution, frame rate and bitrate. A phone
-  searching for a lost stream can advertise a request that names the lost parent's prefix.
+- for a stream: a 4-byte route token that follows the ID, a sequence number, and the resolution, frame rate and
+  bitrate. A phone searching for a lost stream advertises a request that carries its own current ID and a hint that
+  only the stream's source can match.
 
-**Why this lets people be tracked.** Android changes a phone's own Bluetooth LE address from time to time so that
-scanners cannot follow it. The prefix is in the payload and stays the same, so a scanner that records prefixes can link
-all of those changing addresses to the same phone, across places and days. In normal use the setting **Reachable for
-calls** is on, which means the phone advertises that it can take a call while the app is open and, through its session
-service, in the background. Turning the setting off stops that, at the cost that others cannot call you unless your
-Call screen is open.
+**What rotation changes.** Android changes a phone's own Bluetooth LE address from time to time so that scanners
+cannot follow it. Before 0.2.0-beta the prefix was in the payload and stayed the same, so a scanner that recorded
+prefixes could link all of those changing addresses to the same phone, across places and days. Now every advertising
+set of the app (call-ready presence, stream offer, waiting viewer request, forwarder offer, title pages) stops at each
+UTC quarter hour, stays silent for a random 1 to 8 seconds and restarts on a new address with a new ID. A call or
+stream already connected keeps its link. In normal use the setting **Reachable for calls** is on, which means the
+phone advertises that it can take a call while the app is open and, through its session service, in the background;
+turning it off stops that, at the cost that others cannot call you unless your Call screen is open. Rotating IDs are
+one switch (Settings > Advanced > Rotating discovery IDs); the identity-hiding handshake and the throwaway identities
+for strangers are two more (Settings > Features). All three are on by default and each is its own off-switch.
 
-**Relays repeat it.** A phone relaying a call advertises the callee's prefix, so that identity can be seen beyond
-the first phone. Viewers that pass a stream on advertise the stream too.
+**Who learns who you are.** With the defaults, a call link carries both phones' identity keys encrypted. A phone that
+is not one of your verified contacts meets a throwaway identity instead of your real one. Your real identity goes only
+to verified contacts and, after you press Accept, to the person whose call you accept; a declined call reveals nothing.
+In our test, Bluetooth logs of two phones showed both phones' identities in the clear in a control call with the
+switches off, and none of them in three calls with a stranger (accepted, declined, accepted after an app restart).
+Still true: accepting a call from a stranger tells them who you are, and calling a stranger tells whoever answers who
+you are; a live stream source still answers the old handshake, so a viewer, or anyone who connects to the source,
+learns its identity; and a phone with pseudonyms on refuses the old handshake, so it cannot call, or be called by, an
+older version of the app or a phone that has the switches off. Message exchanges and calls relayed through other
+phones (experimental) work only with verified contacts while pseudonyms are on.
 
-**Anyone who connects learns who you are.** The signed handshake message that starts every Bluetooth connection
-contains the phone's public key and is not encrypted, so a connection attempt, or a sniffer watching one, reveals the
-identity. LE connections need no pairing, so any nearby scanner can try. An identity-hiding handshake is planned, not
-built. Also exposed outside the announcement:
+**What the scanner test measured.** In the combined privacy session of 2026-10-11 (build 3996bfb2, four phones), four phones (Galaxy S24, ASUS, Galaxy M31 and Galaxy A15s) ran
+rotating IDs with the identity-hiding handshake and pseudonyms. A passive-tracker tool read full Bluetooth logs of
+three of them and the phones' own logs: 66 advertising sets decoded across three quarter-hour boundaries (23:15, 23:30
+and 23:45 IST) inside a 40-minute window in which only rotating announcements were on air. Result: **no field
+carried over any of the three boundaries**: no ID, route token, capability hint or page field repeated, and no phone
+reused its advertising address for a new ID. The only allowed repeat was a stream's own logical token, which follows the
+stream. The phones switched IDs within 80 ms of the boundary and stayed silent 1.3 to 7.7 seconds. With the tool's
+default parameters the same data raised six findings, each explained and none a failure of rotation (two old-style
+announcements from the previous test scene still on air, two address resolutions of a bonded phone pair, and two
+restarts of a stream source 11 seconds before a boundary that kept the same ID). The same session ran a 4 minute 51
+second call across a boundary, a stream found and viewed by its rotating ID (a viewer waiting across a boundary joined
+7 seconds after the source returned), a lease exchange between verified contacts, and calls relayed through one phone.
+Calls relayed through two phones formed no route in that session.
 
-- Classic Bluetooth uses the phone's permanent hardware address. A first Classic contact with an unpaired phone shows
-  its name and address while it is discoverable.
-- A phone that is paired with yours through Android can work out your rotating LE addresses.
-- The phone's Bluetooth device name can be read by any phone that connects, before the handshake. MeshLive does not
-  change it unless the rotating-IDs experiment is on.
+**What the test did not measure.** Battery cost; reading the Bluetooth name on the A15s; Bluetooth logs of the A15s and
+the whole time of the M31; an active attacker holding a contact's key, fake announcements, relays with the new
+handshake, message exchange and abuse limits; and the residuals the tool reports but cannot remove: one phone alone in
+an area can be followed by the timing of its announcements, and a few capability bits stay the same across IDs. This was
+one session on four phones. Treat it as evidence that the design works, not as proof that nobody can track you.
+
+**Still stable or exposed.**
+
+- **Older app versions** cannot see a phone with rotating IDs, and a rotating phone sees them by their fixed prefix. A
+  rotating viewer that joins an older source shows its own fixed prefix while its request is on air (the app says so),
+  and anyone can advertise a decoy old-style offer to make a viewer do the same.
+- **Visible by handle.** The Settings button advertises the fixed prefix for 10 to 25 minutes so older builds and
+  people who know your handle can find your streams. Every such window can be linked to every other window and to the
+  minutes just before it. A phone with pseudonyms on still refuses calls from older versions.
+- **Live streams** show their source's identity to every viewer, stay linkable by their route token while they run,
+  and a stream title, if you set one, is advertised openly.
+- **Classic Bluetooth** uses the phone's permanent hardware address. A first Classic contact with an unpaired phone
+  shows its name and address while it is discoverable.
+- **Paired phones.** A phone that is paired with yours through Android can work out your rotating LE addresses.
+- **The Bluetooth device name** can be read by any phone that connects, before the handshake, and is shown by Classic
+  lookups. MeshLive never renames the phone on its own. With rotating IDs on, connectable announcements are
+  non-discoverable on Android 14 and newer, which makes the phone refuse the name to an unpaired phone that connects
+  through them. In the test the S24 (Android 16) sent them that way and the ASUS (Android 11) and M31 (Android 12) did
+  not, so on Android 13 and older the name stays readable. Links your phone opens itself still show the name to the
+  other side. Settings > Advanced has an option, off by default, to use the neutral name "Phone" instead; it renames the
+  phone for everything (headphones, car, watch, PC), shows your original name so you can restore it, and if you
+  uninstall the app while it is on the name stays "Phone" until you rename the phone in Android settings.
+- **Capability bits.** The codec set, transport and relay hint bits stay the same across IDs: a few bits that can
+  single out a phone when few others are nearby.
+- **Verified contacts.** After a call you both answered, mutual verified contacts exchange keys that let each recognise
+  the other's IDs nearby ("seen nearby, unconfirmed", never a check mark) for up to four weeks or until you forget the
+  contact or reset the presence key. A phone read on day D reveals its IDs up to 27 days ahead, so use **Reset presence
+  key** after a phone was out of your hands.
+- **Legacy chips.** A phone whose Bluetooth chip only supports legacy advertising may keep its address when the ID
+  changes and shows a note saying so.
+- **Other Bluetooth radios.** Android's own beacons (Find My Device, offline finding, Fast Pair), the phone's
+  connection-request addresses, and the size and timing of encrypted data on a link are outside the app's control; they
+  show that a call or stream is happening, and roughly of what kind.
 - Optional names and stream titles (experimental) are public while they are enabled.
-- The size and timing of the encrypted data shows that a call or stream is happening, and roughly of what kind.
 
-**Rotating discovery IDs (experimental, off by default, not yet tested on phones).** The first phase replaces the
-prefix with an ID that changes every 15 minutes, and restarts advertising at each change. It covers only the "ready
-for calls" announcement of phones using LE CoC or GATT, and only for people who are not your contacts. Streams, relays,
-viewers and Classic still use the stable prefix, and recognising your own contacts through the changing IDs is not
-built. Until that is finished and measured on phones, assume the stable prefix can be used to track a phone. To reduce
-your exposure now: switch Bluetooth off when you do not need it, switch **Reachable for calls** off when you are not
-expecting calls, leave names and titles off, and give the phone a neutral Bluetooth name.
+To reduce exposure further: switch Bluetooth off when you do not need it, switch **Reachable for calls** off when you are
+not expecting calls, leave names and titles off, use the neutral Bluetooth name option on Android 13 and older, and
+verify the people you call often (QR code or safety code).
 
 ## Security model and limitations
 
@@ -465,9 +528,10 @@ problem privately, read [SECURITY.md](SECURITY.md).
 
 - **Discovery is public.** Anyone with a Bluetooth scanner can see that a MeshLive phone is nearby, whether it offers a
   stream or accepts calls, and the stream's rough size and bitrate.
-- **A stable ID by default.** The announcement carries a fixed 6-byte node prefix, so a passive scanner can follow a
-  phone between places. **Rotating discovery IDs are experimental and off by default**, cover only call-ready presence
-  for strangers (streams, relays and viewers still use the fixed prefix), and are not yet tested on phones.
+- **Rotating IDs, with limits.** Announcements carry a random ID that changes every 15 minutes (on by default since
+  0.2.0-beta), so a passive scanner could not follow a phone across the three ID changes we measured. A live stream
+  source's identity, Classic Bluetooth addresses, paired phones, a lone phone's announcement timing and a few capability
+  bits remain linkable; see [What nearby phones can see](#what-nearby-phones-can-see).
 - **Bluetooth metadata.** Bluetooth names and addresses, the existence of a connection, and the size and timing of
   encrypted records are visible to a radio observer and to every relay on the path. That reveals "a call is
   happening" and often "voice only" versus "video". A first Classic contact with an unpaired phone can expose its name

@@ -377,9 +377,22 @@ TUNABLES = {
     # Default-on fan-out growth in planned-link units; false is the control arm.
     "fanout_proven_links": ("test_fanout_proven_links", bool),
     "relay_parent_trickle": ("test_relay_parent_trickle", bool),
+    # Default-on relay child pacing exempts only an audio record from the pacer (false: the earlier
+    # any-audio-queued test, which left a backlog unpaced); the lead cap is an experiment (app default off).
+    "relay_pace_head": ("test_relay_pace_head", bool),
+    "relay_pace_lead_cap": ("test_relay_pace_lead_cap", bool),
+    # Default-on relay child stall guard (false = control arm: wait for the 5 s supervision timeout); the
+    # upstream DCK priority for a relay-capable child is an experiment (app default off, Android 14+ centrals).
+    "relay_child_stall_guard": ("test_relay_child_stall_guard", bool),
+    "relay_upstream_dck": ("test_relay_upstream_dck", bool),
     # Experimental calls (app default off): authenticated 2 KB video fragments with audio between them,
     # and speech-led call playout (late video may grow the shared call delay by at most 150 ms).
     "call_video_fragments": ("test_call_video_fragments", bool),
+    # Experimental call arm D (app default off, needs call_video_fragments): size each fragment by link
+    # airtime, rate x this many ms (0 = off = fixed 2 KB). The A/B arm uses 40.
+    "call_fragment_airtime_ms": ("test_call_fragment_airtime_ms", int),
+    "gatt_mtu_probe": ("test_gatt_mtu_probe", bool),
+    "receiver_ui_stability": ("test_receiver_ui_stability", bool),
     "call_speech_led_playout": ("test_call_speech_led_playout", bool),
     # Default-on call fixes kept switchable for A/B: audio headroom in the call send queue, and the
     # legacy VP9-only decode restriction widened when the peer encodes no VP9.
@@ -466,6 +479,14 @@ TUNABLES = {
     "classic_addresses": ("test_classic_addresses", str),
     # Experimental call-link pacing on Classic/CoC calls (app default off).
     "call_link_pacing": ("test_call_link_pacing", bool),
+    # DEBUG harness for the rotating-ID presence-lease day roll (P3): moves the discovery wall clock forward by
+    # this many whole days (0-28) at cold start; give both phones of a pair the same value. The one-shot contact
+    # verify/forget extras need a fresh token per run and are produced by tools/debug_verify_contacts.py.
+    "presence_day_offset": ("test_presence_day_offset", int),
+    # DEBUG harness for the rotating-ID phone tests: shortens the discovery epoch (60-900 s, default 900) at cold
+    # start so three boundaries take minutes; give EVERY phone of the run the same value (unequal lengths fail the
+    # two-epoch check by design) and pass the same value to rotid_tracker.py --epoch-s. Presence-lease days stay real.
+    "rotid_epoch_s": ("test_rotid_epoch_s", int),
 }
 
 

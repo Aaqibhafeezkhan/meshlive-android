@@ -1,0 +1,71 @@
+{
+  "url": "https://api.github.com/repos/MeshLive/meshlive-android/releases/408681883",
+  "html_url": "https://github.com/MeshLive/meshlive-android/releases/tag/v0.1.0-beta",
+  "id": 408681883,
+  "tag_name": "v0.1.0-beta",
+  "target_commitish": "main",
+  "name": "MeshLive 0.1.0-beta",
+  "draft": false,
+  "prerelease": false,
+  "created_at": "2026-10-10T05:13:25Z",
+  "published_at": "2026-10-10T05:26:02Z",
+  "assets": [
+    {
+      "name": "MeshLive-0.1.0-beta-arm64-v8a.apk",
+      "size": 11899036,
+      "content_type": "application/vnd.android.package-archive",
+      "state": "uploaded",
+      "digest": "sha256:4a75640f12669bb8780a5039eb4dc9f4a8c8224d91dc6187da14f5c9b6037d91",
+      "browser_download_url": "https://github.com/MeshLive/meshlive-android/releases/download/v0.1.0-beta/MeshLive-0.1.0-beta-arm64-v8a.apk"
+    },
+    {
+      "name": "MeshLive-0.1.0-beta-armeabi-v7a.apk",
+      "size": 11651034,
+      "content_type": "application/vnd.android.package-archive",
+      "state": "uploaded",
+      "digest": "sha256:4fb754af5bc33a5d5e44e5ac66f63913e6a03a37c53ba06c77a940099d036280",
+      "browser_download_url": "https://github.com/MeshLive/meshlive-android/releases/download/v0.1.0-beta/MeshLive-0.1.0-beta-armeabi-v7a.apk"
+    },
+    {
+      "name": "MeshLive-0.1.0-beta-universal.apk",
+      "size": 19105842,
+      "content_type": "application/vnd.android.package-archive",
+      "state": "uploaded",
+      "digest": "sha256:4e5618b30a30fb30a7d64d0a05a004b91e9e5010b12c2f9ef9102495f323413c",
+      "browser_download_url": "https://github.com/MeshLive/meshlive-android/releases/download/v0.1.0-beta/MeshLive-0.1.0-beta-universal.apk"
+    },
+    {
+      "name": "MeshLive.apk",
+      "size": 11899036,
+      "content_type": "application/vnd.android.package-archive",
+      "state": "uploaded",
+      "digest": "sha256:4a75640f12669bb8780a5039eb4dc9f4a8c8224d91dc6187da14f5c9b6037d91",
+      "browser_download_url": "https://github.com/MeshLive/meshlive-android/releases/download/v0.1.0-beta/MeshLive.apk"
+    },
+    {
+      "name": "SHA256SUMS",
+      "size": 388,
+      "content_type": "application/octet-stream",
+      "state": "uploaded",
+      "digest": "sha256:f2e36fe178a2b2eff5130a1659ad654bee631d686ab0d11eb5540c5b78224223",
+      "browser_download_url": "https://github.com/MeshLive/meshlive-android/releases/download/v0.1.0-beta/SHA256SUMS"
+    },
+    {
+      "name": "signing-cert.sha256",
+      "size": 97,
+      "content_type": "application/octet-stream",
+      "state": "uploaded",
+      "digest": "sha256:3e2538365ad53f837cc9655f8ed8b23dc86aba500abd4075890aefa095f73c7d",
+      "browser_download_url": "https://github.com/MeshLive/meshlive-android/releases/download/v0.1.0-beta/signing-cert.sha256"
+    },
+    {
+      "name": "SOURCE-MANIFEST.txt",
+      "size": 81215,
+      "content_type": "text/plain; charset=utf-8",
+      "state": "uploaded",
+      "digest": "sha256:f0f5e0e8b28a34ea8a052504f1d0de5e7af79290957900fffb14e94d8142bc8a",
+      "browser_download_url": "https://github.com/MeshLive/meshlive-android/releases/download/v0.1.0-beta/SOURCE-MANIFEST.txt"
+    }
+  ],
+  "body": "MeshLive 0.1.0-beta (fixture: the real release notes are not needed by the parser)."
+}

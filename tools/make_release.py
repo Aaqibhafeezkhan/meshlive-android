@@ -41,6 +41,9 @@ LICENSE_ID = "GPL-3.0-or-later"
 ABI_DIGITS = {"armeabi-v7a": 1, "arm64-v8a": 2}
 UNIVERSAL = "universal"
 SPLIT_GRADLE_ARGS = ["-PsplitAbis=true", "-PenableArmeabiV7a=true"]
+# The release page ships the github flavour (opt-in updater, REQUEST_INSTALL_PACKAGES); F-Droid builds the fdroid
+# flavour with its own recipe (distribution/fdroid). app/build.gradle.kts `productFlavors` defines both.
+RELEASE_FLAVOUR = "github"
 FASTLANE_CHANGELOGS = Path("fastlane/metadata/android/en-US/changelogs")
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -211,10 +214,10 @@ def find_release_apks(root, base_code, universal=True):
     Fails if an APK is unsigned, the set differs from the requested ABIs, or a versionCode is not
     base * 10 + ABI digit (so Gradle and this script cannot drift apart).
     """
-    folder = Path(root) / "app/build/outputs/apk/release"
+    folder = Path(root) / "app/build/outputs/apk" / RELEASE_FLAVOUR / "release"
     meta = folder / "output-metadata.json"
     if not meta.is_file():
-        raise ReleaseError(f"no {meta}: assembleRelease produced no APKs")
+        raise ReleaseError(f"no {meta}: assemble{RELEASE_FLAVOUR.capitalize()}Release produced no APKs")
     found = {}
     for element in json.loads(meta.read_text(encoding="utf-8")).get("elements", []):
         name = element["outputFile"]
@@ -269,6 +272,9 @@ def check_native_libs(apk, abi, inspector=check_apk_16kb.check_apk):
 
 def apk_file_name(version_name, apk):
     return f"{RELEASE_BASENAME}-{version_name}-{apk['abi']}.apk"
+
+
+STABLE_APK_NAME = "MeshLive.apk"
 
 
 STABLE_APK_NAME = "MeshLive.apk"
@@ -365,7 +371,7 @@ def make_release(root, out_base=None, expected=EXPECTED_CERT_SHA256, runner=run,
     head = runner(["git", "rev-parse", "HEAD"], root).decode().strip()
 
     gradle = [str(root / ("gradlew.bat" if os.name == "nt" else "gradlew")),
-              "--no-daemon", ":app:assembleRelease", *SPLIT_GRADLE_ARGS,
+              "--no-daemon", f":app:assemble{RELEASE_FLAVOUR.capitalize()}Release", *SPLIT_GRADLE_ARGS,
               f"-PuniversalApk={'true' if universal else 'false'}"]
     log("building: " + " ".join(gradle))
     runner(gradle, root)

@@ -23,7 +23,37 @@ class CallUxFeaturesTest {
         val focusOnly = CallUxSettings.resolve(true, true) { it == CallUxSettings.EXTRA_AUDIO_FOCUS }
         assertEquals(CallUxSettings(audioFocus = true), focusOnly)
         val all = CallUxSettings.resolve(true, true) { true }
-        assertEquals(CallUxSettings(true, true, true, true, true, true), all)
+        assertEquals(CallUxSettings(true, true, true, true, true, true, lockScreen = true), all)
+        // The lock-screen extra keeps its old name and effect, and a stored choice never leaks into a measured case.
+        val lockOnly = CallUxSettings.resolve(true, true, stored = { true }) { it == "test_call_lock_screen" }
+        assertEquals(CallUxSettings(lockScreen = true), lockOnly)
+    }
+
+    @Test
+    fun promotedFeaturesFollowTheStoredChoiceOrTheirDefaultInUserSessions() {
+        val promoted = listOf(
+            CallFeature.RINGBACK, CallFeature.EAR_CAMERA_PAUSE, CallFeature.LOCK_SCREEN_CALLS, CallFeature.CALL_NOTIFICATIONS,
+        )
+        val chosen = promoted.map { it.prefKey }.toSet()
+        val stored = { key: String -> if (key in chosen) true else null }
+        val enabled = CallUxSettings.resolve(debugBuild = false, benchmarkLaunch = false, stored = stored) { false }
+        assertEquals(
+            CallUxSettings(
+                audioFocus = true, ringerPolicy = true, ringback = true, callStyleNotifications = true,
+                proximityCameraPause = true, lockScreen = true,
+            ),
+            enabled,
+        )
+        // A DEBUG manual launch (no test_ extras) behaves like a user session, stored choices included.
+        assertEquals(enabled, CallUxSettings.resolve(debugBuild = true, benchmarkLaunch = false, stored = stored) { false })
+        // Untouched switches follow the shipped constants (all off until the phone tests pass).
+        val untouched = CallUxSettings.resolve(debugBuild = false, benchmarkLaunch = false, stored = { null }) { true }
+        assertEquals(CallFeatureDefaults.RINGBACK, untouched.ringback)
+        assertEquals(CallFeatureDefaults.CALL_NOTIFICATIONS, untouched.callStyleNotifications)
+        assertEquals(CallFeatureDefaults.EAR_CAMERA_PAUSE, untouched.proximityCameraPause)
+        assertEquals(CallFeatureDefaults.LOCK_SCREEN_CALLS, untouched.lockScreen)
+        // Audio starvation concealment stays a launch-extra experiment.
+        assertFalse(CallUxSettings.resolve(false, false, stored = { true }) { true }.audioConcealment)
     }
 }
 

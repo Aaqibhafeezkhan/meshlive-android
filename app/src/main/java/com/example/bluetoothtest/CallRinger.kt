@@ -85,12 +85,24 @@ internal object CallRingerPolicy {
     }
 }
 
+/** Where the caller's ringback plays: at the ear for a voice call, from the loudspeaker for a video call. */
+internal object RingbackPolicy {
+    /**
+     * The audio stream for the ringing tone. Before the call's audio session exists the phone is in
+     * normal mode, where the voice-call stream plays from the earpiece (the voice-call default, held to
+     * the ear) and the music stream from the loudspeaker (the video-call default, held at arm's length).
+     */
+    fun stream(callType: CallType?): Int =
+        if (callType == CallType.VOICE) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_MUSIC
+}
+
 /**
  * Incoming-call ringtone/vibration and the caller's outgoing ringback tone.
  *
- * Ringback (experimental, off; `test_call_ringback`): while the callee rings, the caller hears the
- * standard supervisory ringing tone (ToneGenerator.TONE_SUP_RINGTONE on STREAM_VOICE_CALL) instead
- * of silence. Stops on any other phase.
+ * Ringback (Settings > Features "Ringing sound while calling", promoted 2026-10-11, shipped default
+ * [CallFeatureDefaults.RINGBACK]; DEBUG `test_call_ringback`): while the callee rings, the caller hears
+ * the standard supervisory ringing tone (ToneGenerator.TONE_SUP_RINGTONE, on the stream
+ * [RingbackPolicy] picks) instead of silence. Stops on any other phase.
  */
 internal class CallRinger(private val context: Context) {
     private var ringtone: Ringtone? = null
@@ -139,10 +151,10 @@ internal class CallRinger(private val context: Context) {
         vibrator = null
     }
 
-    fun startRingback() {
+    fun startRingback(stream: Int = AudioManager.STREAM_VOICE_CALL) {
         if (ringback != null) return
         ringback = runCatching {
-            ToneGenerator(AudioManager.STREAM_VOICE_CALL, RINGBACK_VOLUME).also {
+            ToneGenerator(stream, RINGBACK_VOLUME).also {
                 it.startTone(ToneGenerator.TONE_SUP_RINGTONE)
             }
         }.getOrNull()

@@ -269,6 +269,14 @@ class RelayChildQueue(
 
     fun hasQueuedAudio(): Boolean = lock.withLock { packets.any { it.envelope.isAudio } }
 
+    /**
+     * The next record the writer takes is audio. The queue is strictly ordered (the child rejects a
+     * sequence that goes backwards), so audio queued behind a video frame cannot be written first:
+     * only the head decides whether the link pacer may be skipped (see [hasQueuedAudio] for the
+     * earlier, wider test).
+     */
+    fun headIsAudio(): Boolean = lock.withLock { packets.firstOrNull()?.envelope?.isAudio == true }
+
     /** A child joining mid-stream starts at the next keyframe. */
     fun waitForKeyFrame() = lock.withLock {
         waitingForJoinKeyFrame = true

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from benchmark_layout import output_path, resolve
+from evidence_relocation import logical
 
 from benchmark_case_state import request_key
 
@@ -58,7 +59,7 @@ def main(argv=None):
     cases = generate_cases(args.source, args.receiver, sender_caps, receiver_caps)
     if not cases:
         parser.error("No compatible scenarios; do not substitute another encoder or target")
-    basis = {phone: {"path": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    basis = {phone: {"path": str(logical(path)), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                      "fingerprint": caps["fingerprint"], "node_prefix": caps.get("node_prefix")}
              for phone, path, caps in ((args.source, args.sender_capabilities, sender_caps),
                                       (args.receiver, args.receiver_capabilities, receiver_caps))}

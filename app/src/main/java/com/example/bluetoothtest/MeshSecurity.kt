@@ -107,15 +107,25 @@ object MeshHandshake {
         capabilities: NodeCapabilities,
         secureRandom: SecureRandom = SecureRandom(),
         purpose: HandshakePurpose = HandshakePurpose.LINK,
+        buildTag: BuildTag? = null,
     ): PendingHandshake {
         val ephemeral = generateEcKeyPair(secureRandom)
+        // PROTOCOL "Build tag in the link hello": a link hello only, and only when bit 7 is free; the nonce
+        // keeps its 32 bytes, with the tag in bytes 0-1 and 30 random bytes after it.
+        val tagged = buildTag != null && purpose == HandshakePurpose.LINK &&
+            capabilities.transportMask and BuildTag.LINK_HELLO_BIT == 0
+        val nonce = ByteArray(NONCE_BYTES).also(secureRandom::nextBytes)
         val unsigned = SignedHandshakeHello(
             role = role,
             nodeId = identity.nodeId,
             identityPublicKey = identity.publicKeyEncoded,
             ephemeralPublicKey = ephemeral.public.encoded,
-            nonce = ByteArray(NONCE_BYTES).also(secureRandom::nextBytes),
-            capabilities = capabilities,
+            nonce = if (tagged) BuildTag.applyTo(nonce, buildTag!!) else nonce,
+            capabilities = if (tagged) {
+                capabilities.copy(transportMask = capabilities.transportMask or BuildTag.LINK_HELLO_BIT)
+            } else {
+                capabilities
+            },
             signature = byteArrayOf(),
         )
         val signature = identity.sign(purpose.signatureContext + HandshakeHelloCodec.encodeUnsigned(unsigned))

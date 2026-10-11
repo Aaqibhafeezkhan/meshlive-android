@@ -4,16 +4,16 @@ import android.content.Context
 import androidx.core.app.NotificationCompat
 
 /**
- * Lock-screen notification privacy (research catalog P10b, 2026-10-10).
+ * Lock-screen notification privacy (research catalog P10b, 2026-10-10; names rule Q16-A, 2026-10-11).
  *
- * Before: the session notification (`ActiveVideoSessionService`) and the experimental incoming-call
- * alert (`CallLockScreen`) set no visibility and no public version, so a lock screen set to show all
- * notification content displayed the activity ("Encrypted private video call") and the alert displayed
- * the caller's name. Now every call/stream notification is VISIBILITY_PRIVATE with a public version
- * that names only the app, and the caller's name is left out of the notification entirely unless the
- * user opts in ([showPeerNames]: Advanced setting, preference [KEY_PEER_NAMES]; DEBUG
- * `test_lock_screen_peer_names`). Opted in, the alert is VISIBILITY_PUBLIC and carries the name.
- * Message content (store-and-forward, none posted today) would be VISIBILITY_SECRET.
+ * Every call/stream notification is VISIBILITY_PRIVATE with a public version that names only the app,
+ * so a secure lock screen shows "Bluetooth Video / Incoming call" and nothing else. The full version,
+ * which Android shows only on an unlocked phone, carries the caller's name. The user can allow names on
+ * the lock screen too ([showPeerNames]: Settings > Features, preference [KEY_PEER_NAMES]; DEBUG
+ * `test_lock_screen_peer_names`): the incoming-call alert is then VISIBILITY_PUBLIC. The call screen
+ * shown over the lock screen follows the same rule ([LockScreenNames]).
+ * Message notifications never carry message text or sender; they are VISIBILITY_SECRET (nothing on a
+ * secure lock screen) unless names are allowed, and then show a generic "New message".
  */
 internal enum class NotificationKind { SESSION, INCOMING_CALL, MESSAGE }
 
@@ -47,9 +47,12 @@ internal object NotificationPrivacy {
             if (peerNamesOptIn) NotificationCompat.VISIBILITY_PRIVATE else NotificationCompat.VISIBILITY_SECRET
     }
 
-    /** The alert's text: the caller's name only when the user opted in. */
-    fun incomingCallText(peerLabel: String, peerNamesOptIn: Boolean): String =
-        if (peerNamesOptIn) peerLabel else HIDDEN_PEER_TEXT
+    /**
+     * The alert's own text, shown only to an unlocked phone (or, with the opt-in, also on the lock
+     * screen): the caller's name, else a prompt to open the app.
+     */
+    fun incomingCallText(peerLabel: String?): String =
+        peerLabel?.trim()?.takeIf { it.isNotEmpty() } ?: HIDDEN_PEER_TEXT
 
     fun publicText(kind: NotificationKind): String = when (kind) {
         NotificationKind.SESSION -> PUBLIC_SESSION_TEXT
@@ -73,4 +76,11 @@ internal object NotificationPrivacy {
             .build()
         return builder.setVisibility(visibility(kind, peerNamesOptIn)).setPublicVersion(publicVersion)
     }
+}
+
+/** What the call screen may show while a secure lock screen is up (Q16-A). */
+internal object LockScreenNames {
+    /** True when the caller's name must be replaced by a neutral label until the phone is unlocked. */
+    fun masked(keyguardLocked: Boolean, keyguardSecure: Boolean, namesAllowed: Boolean): Boolean =
+        keyguardLocked && keyguardSecure && !namesAllowed
 }

@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 
 from benchmark_layout import original, output_path, resolve
+from evidence_relocation import logical
 
 if __package__:
     from .score_device_run import records, scope_records
@@ -298,16 +299,16 @@ def main(argv=None):
         args.output = output_path(args.output, "runs")
         args.manifest = resolve(args.manifest)
         score_path = resolve(original(args.manifest).with_name("score.json"))
-        if args.output.resolve() in {args.manifest.resolve(), score_path.resolve()}:
+        if logical(args.output) in {logical(args.manifest), logical(score_path)}:
             raise ValueError("Output must differ from the existing manifest and score")
         manifest_bytes = args.manifest.read_bytes()
         score_bytes = score_path.read_bytes() if score_path.exists() else None
         manifest = json.loads(manifest_bytes)
         existing = json.loads(score_bytes) if score_bytes is not None else None
         result = score_motion(manifest, existing, original(args.manifest).parent)
-        result["manifest_path"] = str(args.manifest.resolve())
+        result["manifest_path"] = str(logical(args.manifest))
         result["manifest_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
-        result["existing_score_path"] = str(score_path.resolve())
+        result["existing_score_path"] = str(logical(score_path))
         result["existing_score_sha256"] = hashlib.sha256(score_bytes).hexdigest() if score_bytes is not None else None
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

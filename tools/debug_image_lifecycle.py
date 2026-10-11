@@ -9,6 +9,8 @@ import stat
 import uuid
 from pathlib import Path
 
+from evidence_relocation import declared_junction
+
 
 class DebugImages:
     """Lazy, exact-name ownership inside an output's .debug-images directory.
@@ -32,6 +34,8 @@ class DebugImages:
                 continue
             if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & getattr(
                     stat, "FILE_ATTRIBUTE_REPARSE_POINT", 1024):
+                if declared_junction(item):
+                    continue
                 raise ValueError(f"Debug image path cannot use a link or junction: {item}")
 
     def _path(self, name):

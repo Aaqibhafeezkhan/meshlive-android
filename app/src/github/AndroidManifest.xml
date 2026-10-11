@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        The github flavour only (README "Updates"). Installing an update through PackageInstaller needs this
+        permission and the user's per-app "Install unknown apps" choice (Settings, opened by the update
+        screen). The F-Droid flavour declares none of it. Nothing installs without Android's own
+        confirmation screen (USER_ACTION_REQUIRED).
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application>
+        <activity
+            android:name=".UpdateActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- Answers of the update session; reachable only through the PendingIntent MeshLive gave PackageInstaller. -->
+        <receiver
+            android:name=".UpdateInstallReceiver"
+            android:exported="false" />
+
+        <!-- Daily check while "Check for updates" is on (JobScheduler, not persisted across reboots). -->
+        <service
+            android:name=".UpdateJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+    </application>
+</manifest>

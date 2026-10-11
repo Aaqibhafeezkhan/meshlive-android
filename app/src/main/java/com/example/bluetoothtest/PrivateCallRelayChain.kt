@@ -83,9 +83,18 @@ internal object PrivateCallRelayChain {
         chainEnabled: Boolean,
         /** Transport mask of the child's signed link hello; [CALL_RELAY_CAPABILITY] marks a call relay. */
         childTransportMask: Int = CALL_RELAY_CAPABILITY,
+        /**
+         * Rotating IDs (version 5 offer): the child's link `BDO1` opened the offer's RDI for this node, which
+         * replaces the prefix comparison (an RDI is not a prefix). Only meaningful at route cost 0; a relayed
+         * offer's child is another relay and cannot open it. Ignored for a version 2 offer.
+         */
+        openingOpensOffer: Boolean = false,
     ): String? {
-        val matchesCallee = childNodeId.copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES)
-            .contentEquals(offer.nodeIdPrefix)
+        val matchesCallee = if (offer.rotating) {
+            openingOpensOffer
+        } else {
+            childNodeId.copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES).contentEquals(offer.nodeIdPrefix)
+        }
         if (!chainEnabled) return if (matchesCallee) null else CALLEE_CHANGED
         return when {
             childNodeId.contentEquals(localNodeId) -> "A call relay cannot be its own child"
@@ -126,6 +135,8 @@ internal object PrivateCallRelayChain {
             DiscoveryAnnouncement.FLAG_PRIVATE_CALL_AVAILABLE or
             DiscoveryAnnouncement.FLAG_RELAY_CAPABLE or transportFlag,
         routeCost = (child.routeCost + 1).coerceAtMost(0xff),
+        // A relay is single-bearer: it never claims the child's second transport (dual listening hint).
+        capabilitySummary = child.capabilitySummary and DualListeningWire.SUMMARY_BIT.inv(),
     )
 
     private const val CALLEE_CHANGED = "Callee identity changed after discovery"

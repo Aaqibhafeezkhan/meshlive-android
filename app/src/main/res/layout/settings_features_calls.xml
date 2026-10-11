@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Features for calls and messages (CallFeatureSettings.kt binds it; MainActivity.bindCallFeatureSettings).
+     Each switch writes an explicit choice; an untouched switch follows the shipped default in CallFeatureDefaults.
+     Merge note: if the Settings screen gets one shared "Features" header, delete the header TextView below. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/callFeaturesRoot"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/callFeaturesHeader"
+        style="@style/Widget.App.SectionHeader"
+        android:text="@string/settings_section_features" />
+
+    <TextView
+        android:id="@+id/featureBenchmarkNote"
+        style="@style/Widget.App.Description"
+        android:text="@string/feature_benchmark_note"
+        android:visibility="gone" />
+
+    <com.google.android.material.card.MaterialCardView
+        style="@style/Widget.App.Card"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="@dimen/card_padding">
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/featureVoiceCallsSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="0dp"
+                android:drawablePadding="16dp"
+                android:text="@string/feature_voice_calls"
+                app:drawableStartCompat="@drawable/ic_call"
+                app:drawableTint="@color/text_secondary" />
+
+            <TextView
+                style="@style/Widget.App.Description"
+                android:paddingStart="40dp"
+                android:text="@string/feature_voice_calls_description" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/featureRingbackSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:drawablePadding="16dp"
+                android:text="@string/feature_ringback"
+                app:drawableStartCompat="@drawable/ic_volume_up"
+                app:drawableTint="@color/text_secondary" />
+
+            <TextView
+                style="@style/Widget.App.Description"
+                android:paddingStart="40dp"
+                android:text="@string/feature_ringback_description" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/featureEarCameraPauseSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:drawablePadding="16dp"
+                android:text="@string/feature_ear_camera_pause"
+                app:drawableStartCompat="@drawable/ic_videocam_off"
+                app:drawableTint="@color/text_secondary" />
+
+            <TextView
+                style="@style/Widget.App.Description"
+                android:paddingStart="40dp"
+                android:text="@string/feature_ear_camera_pause_description" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/featureLockScreenCallsSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:drawablePadding="16dp"
+                android:text="@string/feature_lock_screen_calls"
+                app:drawableStartCompat="@drawable/ic_lock"
+                app:drawableTint="@color/text_secondary" />
+
+            <TextView
+                style="@style/Widget.App.Description"
+                android:paddingStart="40dp"
+                android:text="@string/feature_lock_screen_calls_description" />
+
+            <TextView
+                android:id="@+id/featureFullScreenText"
+                style="@style/Widget.App.Description"
+                android:paddingStart="40dp"
+                android:text="@string/feature_full_screen_needed"
+                android:visibility="gone" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/featureFullScreenButton"
+                style="@style/Widget.App.Button.Secondary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="40dp"
+                android:layout_marginBottom="8dp"
+                android:minHeight="48dp"
+                android:text="@string/feature_full_screen_open"
+                android:visibility="gone" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/featureCallNotificationsSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:drawablePadding="16dp"
+                android:text="@string/feature_call_notifications"
+                app:drawableStartCompat="@drawable/ic_call"
+                app:drawableTint="@color/text_secondary" />
+
+            <TextView
+                style="@style/Widget.App.Description"
+                android:paddingStart="40dp"
+                android:text="@string/feature_call_notifications_description" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/featureLockScreenNamesSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:drawablePadding="16dp"
+                android:text="@string/feature_lock_screen_names"
+                app:drawableStartCompat="@drawable/ic_visibility"
+                app:drawableTint="@color/text_secondary" />
+
+            <TextView
+                style="@style/Widget.App.Description"
+                android:paddingStart="40dp"
+                android:text="@string/feature_lock_screen_names_description" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/featureMessagesSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:drawablePadding="16dp"
+                android:text="@string/feature_messages"
+                app:drawableStartCompat="@drawable/ic_chat"
+                app:drawableTint="@color/text_secondary" />
+
+            <TextView
+                style="@style/Widget.App.Description"
+                android:paddingStart="40dp"
+                android:text="@string/feature_messages_description" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/featureAutoSyncSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:drawablePadding="16dp"
+                android:text="@string/feature_auto_sync"
+                app:drawableStartCompat="@drawable/ic_refresh"
+                app:drawableTint="@color/text_secondary" />
+
+            <TextView
+                style="@style/Widget.App.Description"
+                android:paddingStart="40dp"
+                android:text="@string/feature_auto_sync_description" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/featureNamesSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:drawablePadding="16dp"
+                android:text="@string/feature_names"
+                app:drawableStartCompat="@drawable/ic_person"
+                app:drawableTint="@color/text_secondary" />
+
+            <TextView
+                style="@style/Widget.App.Description"
+                android:paddingStart="40dp"
+                android:text="@string/feature_names_description" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+</LinearLayout>

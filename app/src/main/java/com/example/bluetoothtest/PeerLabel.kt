@@ -20,6 +20,11 @@ internal data class PeerLabel(
     val callSubject: String? = null,
     val streamTitle: String? = null,
     val streamTitleConfirmed: Boolean = false,
+    /**
+     * A self-claimed [name] that reads like this contact name (or your own) without being the same text
+     * (UTS #39 confusable skeleton, [LookAlike]); the call screen warns. Null for everything else.
+     */
+    val lookAlikeOf: String? = null,
 ) {
     enum class NameKind { NONE, CONTACT, SELF_NAMED }
 
@@ -56,6 +61,12 @@ internal object PeerLabels {
     /** Replaced by the naming implementation (signed labels, subjects, titles) after review. */
     @Volatile var provider: PeerLabelProvider = DefaultPeerLabelProvider
 
+    /**
+     * Names a self-claimed name is compared with for look-alikes: your contacts' labels and your own
+     * name. Set by the activity; empty (no warning) until then.
+     */
+    @Volatile var knownNames: () -> Collection<String> = { emptyList() }
+
     fun forPeer(nodePrefixHex: String, contactName: String? = null): PeerLabel =
         provider.label(nodePrefixHex.lowercase(), contactName)
 
@@ -81,13 +92,15 @@ internal object DefaultPeerLabelProvider : PeerLabelProvider {
             callSubject = session?.callSubject,
             streamTitle = session?.streamTitle,
             streamTitleConfirmed = session?.streamTitle != null,
+            lookAlikeOf = base.name.takeIf { base.nameKind == PeerLabel.NameKind.SELF_NAMED }
+                ?.let { LookAlike.find(it, PeerLabels.knownNames()) },
         )
     }
 }
 
 /**
  * Signed labels verified in the current call or stream sessions, by 12-hex signer prefix
- * (experimental peer labels). Cleared when the session ends: strangers' names are never cached (Q8).
+ * (experimental peer labels). Cleared when the session ends: strangers' names are never cached.
  */
 internal object SessionPeerLabels {
     data class Entry(val selfName: String? = null, val callSubject: String? = null, val streamTitle: String? = null)

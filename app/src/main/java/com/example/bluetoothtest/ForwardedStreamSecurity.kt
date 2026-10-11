@@ -137,6 +137,10 @@ class ReceiverNodeForwardingCore(
     fun hasQueuedAudio(child: NodeId): Boolean =
         synchronized(this) { childQueue.takeIf { childNodeId == child } }?.hasQueuedAudio() == true
 
+    /** The next record the child writer takes is audio (the queue is strictly ordered). */
+    fun headIsAudio(child: NodeId): Boolean =
+        synchronized(this) { childQueue.takeIf { childNodeId == child } }?.headIsAudio() == true
+
     @Synchronized
     fun hasChild(): Boolean = childNodeId != null
 

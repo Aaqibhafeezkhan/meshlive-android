@@ -12,7 +12,9 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Experimental bond-free Classic (off by default; user request 2026-10-09 "Classic as good as LE").
+ * Bond-free Classic, shown to users as "Connect without pairing" (user request 2026-10-09 "Classic as
+ * good as LE"; promoted to Settings > Features on 2026-10-11, default
+ * [ConnectivityFeatureDefaults.CLASSIC_WITHOUT_PAIRING] until phone test T7 passes, design decision Q-P2).
  *
  * Why Classic needed a mutual Android bond:
  * 1. Private calls, the call relay and the stream relay opened Android's *secure* RFCOMM sockets
@@ -35,9 +37,11 @@ import java.util.concurrent.ConcurrentHashMap
 data class ClassicFeatureSettings(
     val bondFree: Boolean = false,
     /**
-     * Experimental bounded connect path for every Classic role (shared candidate order, per-attempt
-     * deadlines, random-address skip, fast unresolved error). Off: each role connects as before
-     * 2026-10-09 (legacyClassicCandidatePlan). Bond-free mode needs it and turns it on.
+     * Bounded connect path for every Classic role (shared candidate order, per-attempt deadlines,
+     * random-address skip, fast unresolved error). Off: each role connects as before 2026-10-09
+     * (legacyClassicCandidatePlan). Bond-free mode needs it and turns it on, so the setting
+     * "Connect without pairing" is also the switch for bounded connects; alone it is a benchmark
+     * extra only ([EXTRA_BOUNDED_CONNECT]).
      */
     val boundedConnect: Boolean = false,
     /**
@@ -58,27 +62,27 @@ data class ClassicFeatureSettings(
         const val PREF_BOND_FREE = "experimental_classic_bond_free"
 
         /**
-         * Same rule as the other experiments: a DEBUG benchmark launch uses only its extras (default
-         * off) so a stored UI choice never leaks into a measured case; otherwise the Advanced setting
-         * applies, and only while Advanced settings are on. Outside benchmark launches the bond-free
-         * mode also asks for visibility, because a first contact needs one discoverable phone.
+         * The shared feature rule ([FeatureCatalog.resolve]): a DEBUG benchmark launch uses only its
+         * extras (default off) so a stored choice never leaks into a measured case. Every other launch
+         * uses the user's explicit choice ([stored] null when never touched) or the shipped default,
+         * with no dependence on Manual settings or the build type. Outside benchmark launches the
+         * bond-free mode also asks for visibility, because a first contact needs one discoverable phone.
          */
         fun resolve(
             benchmarkLaunch: Boolean,
             extra: (String) -> Boolean,
-            advancedSettings: Boolean,
-            stored: (String) -> Boolean,
-        ): ClassicFeatureSettings = if (benchmarkLaunch) {
-            val bondFree = extra(EXTRA_BOND_FREE)
-            ClassicFeatureSettings(
-                bondFree = bondFree,
-                boundedConnect = extra(EXTRA_BOUNDED_CONNECT),
-                requestVisibility = bondFree && extra(EXTRA_REQUEST_VISIBILITY),
-            )
-        } else if (advancedSettings && stored(PREF_BOND_FREE)) {
-            ClassicFeatureSettings(bondFree = true, requestVisibility = true)
-        } else {
-            ClassicFeatureSettings()
+            stored: (String) -> Boolean?,
+        ): ClassicFeatureSettings {
+            val bondFree = FeatureCatalog.resolve(ConnectivityFeatures.classicWithoutPairing, benchmarkLaunch, extra, stored)
+            return if (benchmarkLaunch) {
+                ClassicFeatureSettings(
+                    bondFree = bondFree,
+                    boundedConnect = extra(EXTRA_BOUNDED_CONNECT),
+                    requestVisibility = bondFree && extra(EXTRA_REQUEST_VISIBILITY),
+                )
+            } else {
+                ClassicFeatureSettings(bondFree = bondFree, requestVisibility = bondFree)
+            }
         }
     }
 }
@@ -295,6 +299,17 @@ internal object ClassicAddressBook {
     @Synchronized
     fun forget(prefix: ByteArray, address: String) {
         if (state.forget(prefix.toPrefixHex(), address)) persist()
+    }
+
+    /**
+     * Forgets every remembered address and deletes the file. Called when the user switches "Connect
+     * without pairing" off: the hints are only used while it is on, so none are kept meanwhile.
+     */
+    @Synchronized
+    fun clear() {
+        state = ClassicAddressBookState()
+        runCatching { file?.delete() }
+        runCatching { file?.let { File(it.parentFile, "$FILE_NAME.tmp").delete() } }
     }
 
     private fun persist() {

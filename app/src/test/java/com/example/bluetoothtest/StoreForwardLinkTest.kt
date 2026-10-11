@@ -538,11 +538,13 @@ class StoreForwardLinkTest {
     @Test
     fun featureIsOffUnlessExplicitlyEnabled() {
         assertFalse(StoreForwardFeature.enabled)
-        assertFalse(StoreForwardFeature.resolve(false, { true }, advancedSettings = false, stored = { true }))
-        assertTrue(StoreForwardFeature.resolve(false, { false }, advancedSettings = true, stored = { it == StoreForwardFeature.PREF }))
+        // A user session follows the explicit Settings choice, else the shipped default; no Manual settings toggle.
+        assertTrue(StoreForwardFeature.resolve(false, { false }, stored = { if (it == StoreForwardFeature.PREF) true else null }))
+        assertFalse(StoreForwardFeature.resolve(false, { true }, stored = { if (it == StoreForwardFeature.PREF) false else null }))
+        assertEquals(CallFeatureDefaults.MESSAGES, StoreForwardFeature.resolve(false, { true }, stored = { null }))
         // A benchmark launch uses only its own extra, never a stored UI choice.
-        assertFalse(StoreForwardFeature.resolve(true, { false }, advancedSettings = true, stored = { true }))
-        assertTrue(StoreForwardFeature.resolve(true, { it == StoreForwardFeature.EXTRA }, advancedSettings = false, stored = { false }))
+        assertFalse(StoreForwardFeature.resolve(true, { false }, stored = { true }))
+        assertTrue(StoreForwardFeature.resolve(true, { it == StoreForwardFeature.EXTRA }, stored = { false }))
         assertFalse(StoreForwardLimits().carrierEnabled)
     }
 
@@ -1176,7 +1178,7 @@ class StoreForwardLinkTest {
         val damaged = alice.sendBytes(bob, 40_000)
         val healthy = alice.sendText(bob, "still arrives")
         val chunkFile = File(alice.dir, "store/bundles/${damaged.idHex}/chunks.bin")
-        chunkFile.writeBytes(chunkFile.readBytes().also { it[2 * StoreForwardFormat.CHUNK_CIPHERTEXT_BYTES + 7] = 0x55 })
+        chunkFile.writeBytes(chunkFile.readBytes().also { val at = 2 * StoreForwardFormat.CHUNK_CIPHERTEXT_BYTES + 7; it[at] = (it[at].toInt() xor 0x55).toByte() })
         val result = sync(alice, bob)
         assertEquals(StoreForwardSyncOutcome.COMPLETE, result.initiator.outcome)
         assertEquals(1, result.responder.refusals[StoreForwardRefusal.INVALID])

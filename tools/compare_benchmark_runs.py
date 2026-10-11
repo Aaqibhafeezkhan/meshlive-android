@@ -51,6 +51,7 @@ import re
 import statistics
 
 from benchmark_layout import resolve
+from evidence_relocation import logical
 
 
 # name, label, better ("higher"/"lower"), absolute band, relative band (fraction of baseline) or None
@@ -292,7 +293,7 @@ def measure(directory, scenario, manifest, score):
 
 
 def load_run(path, cache):
-    run = Path(path).resolve()
+    run = logical(path)  # a finished run moved behind a declared junction keeps its project path
     if not run.is_dir():
         raise ValueError(f"Run directory not found: {path}")
     jobs = (optional(run / "plan.json") or {}).get("jobs", [])

@@ -1,0 +1,6 @@
+# fdroiddata srclibs/libaom.yml (submitted together with metadata/io.github.meshlive.app.yml).
+# MeshLive pins libaom by commit in the Builds entry (srclibs: libaom@<commit>); this file only says where
+# to clone from. The commit is a main-branch commit after the v3.14.1 tag; tools/fetch_native_sources.py
+# verifies the same commit plus a SHA-256 manifest of the tree, and a libaom release tarball is NOT the same source.
+RepoType: git
+Repo: https://aomedia.googlesource.com/aom

@@ -118,3 +118,24 @@ internal fun forwarderGattPriority(
     val productionPriority = gattVideoPriority(videoBitrateKbps)
     return if (isDebugBuild) debugOverride ?: productionPriority else productionPriority
 }
+
+/**
+ * Experimental (`test_relay_upstream_dck`, default off): the connection priority a central requests on the
+ * link to a child that can relay (`maxChildren > 0`). A relay is peripheral to this link and central to its
+ * own child link, and both settle at HIGH (11.25-15 ms, 15 ms on every controller seen). Two links at the
+ * same interval keep a fixed relative anchor phase for the whole connection, and on the Exynos 9611
+ * controller (M31) a child anchor in the wrong part of the parent's cycle starves the child link
+ * completely (relayfix-0725a213 diagM1/diagP2: 9 of 55 attempts dead, 22 never established). With the
+ * parent at DCK (30 ms, `gatt_dck_priority_*_interval` = 24 units in AOSP) the relay's 15 ms child link
+ * has two events per parent event, so one of them always falls outside any parent window shorter than
+ * 15 ms minus one child exchange. DCK exists from Android 14 (API 34); older centrals keep [planned].
+ * Hypothesis under A/B, not a measured fix; Core Spec Vol 6 Part B 4.5 leaves overlapping events of two
+ * connections to the controller.
+ */
+internal fun relayUpstreamPriority(
+    planned: BleConnectionPriority,
+    childCanRelay: Boolean,
+    sdkInt: Int,
+    enabled: Boolean,
+): BleConnectionPriority =
+    if (enabled && childCanRelay && sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) BleConnectionPriority.DCK else planned

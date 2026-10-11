@@ -156,7 +156,11 @@ internal object ClassicConnector {
         )
         if (unresolved) throw ClassicPeerUnresolvedException(classicUnresolvedPeerMessage(bondFree), failure)
         if (legacy && role == ClassicRole.STREAM_SENDER && bonded.isEmpty()) {
-            throw IOException("Pair these phones in Android Bluetooth settings, then retry Classic", failure)
+            throw IOException(
+                "Pair these phones in Android Bluetooth settings, or turn on Connect without pairing " +
+                    "(Settings > Features) on both phones, then retry Classic",
+                failure,
+            )
         }
         throw failure as? IOException ?: IOException(failure?.message ?: "Classic connection failed", failure)
     }

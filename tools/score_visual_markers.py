@@ -14,6 +14,7 @@ import zlib
 import numpy as np
 
 from benchmark_layout import original, output_path, resolve as resolve_input
+from evidence_relocation import logical
 
 
 SCHEMA = "benchmark-visual-markers-v1"
@@ -456,8 +457,8 @@ def main(argv=None):
         spec_path = resolve_input(args.spec)
         data = spec_path.read_bytes()
         result = analyze(json.loads(data.decode("utf-8-sig")), original(spec_path).parent)
-        protected = {Path(record["path"]).resolve() for record in result["evidence"].values()} | {spec_path}
-        if args.output.resolve() in protected or args.output.exists():
+        protected = {logical(record["path"]) for record in result["evidence"].values()} | {spec_path}
+        if logical(args.output) in protected or args.output.exists():
             raise ValueError("Output must be fresh and cannot replace source evidence")
         result["spec"] = {"path": str(spec_path), "sha256": hashlib.sha256(data).hexdigest()}
         args.output.parent.mkdir(parents=True, exist_ok=True)

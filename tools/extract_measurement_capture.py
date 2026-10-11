@@ -17,6 +17,7 @@ import subprocess
 import wave
 
 from benchmark_layout import original, output_path, resolve as resolve_input
+from evidence_relocation import logical
 
 
 def integer(value, name, minimum=None):
@@ -168,7 +169,7 @@ def write_csv(path, fields, rows):
         writer = csv.DictWriter(source, fields)
         writer.writeheader()
         writer.writerows(rows)
-    return {"path": str(path.resolve()), "sha256": digest(path), "bytes": path.stat().st_size}
+    return {"path": str(logical(path)), "sha256": digest(path), "bytes": path.stat().st_size}
 
 
 def extract(spec, base, output):
@@ -338,7 +339,7 @@ def main(argv=None):
     try:
         spec_path = resolve_input(args.spec)
         data = spec_path.read_bytes()
-        if spec_path.is_relative_to(args.output.resolve()):
+        if spec_path.is_relative_to(logical(args.output)):
             raise ValueError("Fresh output cannot contain its original specification")
         result = extract(json.loads(data.decode("utf-8-sig")), original(spec_path).parent, args.output)
         result["spec"] = {"path": str(spec_path), "sha256": hashlib.sha256(data).hexdigest()}

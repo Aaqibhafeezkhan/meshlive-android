@@ -22,16 +22,20 @@ be agreed (see [../CONTRIBUTING.md](../CONTRIBUTING.md)).
 | --- | --- | --- | --- |
 | 1 | [Open defects in shipped behaviour](#open-defects-in-shipped-behaviour) | Open | No |
 | 2 | [Policy work: fewer fixed limits](#policy-work-fewer-fixed-limits) | In progress | No |
-| 3 | [Discovery privacy](#discovery-privacy) (rotating IDs) | Phase 1 coded, Experimental | Yes |
+| 3 | [Discovery privacy](#discovery-privacy) (rotating IDs) | Phases 1, 1b and 2 coded; on by default since 0.2.0-beta | Yes |
 | 4 | [Intercom core and product direction](#intercom-core-and-product-direction) | Partly coded, Experimental | Parts |
 | 5 | [Design A: store-and-forward messages](#design-a-store-and-forward-messages-delay-tolerant) | v1 coded, JVM-tested only | Yes |
 | 6 | [Design B: group calls](#design-b-group-calls-3-6-people-and-group-push-to-talk) | Design only | Yes |
-| 7 | [Bluetooth headsets](#bluetooth-headsets) | Deliberately excluded; open question | No |
-| 8 | [Distribution and field reports](#distribution-and-field-reports) | In progress | No |
-| 9 | [iPhone interoperability](#iphone-interoperability) | Compact discovery coded, Experimental | Yes |
-| 10 | [Wi-Fi Direct / Aware bearer](#wi-fi-direct--aware-bearer-later) | Not started | Yes |
-| 11 | [Measurement adapters still missing](#measurement-adapters-still-missing) | Open | No |
-| 12 | [Platform and product work](#platform-and-product-work) | Open | Parts |
+| 7 | [Design C: relayed private calls](#design-c-relayed-private-calls-and-multi-hop-discovery) | First slice coded, Experimental | Yes |
+| 8 | [Design D: dual listening](#design-d-dual-listening-coc-and-gatt-at-once) | Coded, Experimental | Yes |
+| 9 | [Design E: uniform adverts](#design-e-uniform-adverts-capability-fields-behind-the-handshake) | Design only | Yes |
+| 10 | [Design F: BMH3 handshake and stranger pseudonyms](#design-f-bmh3-identity-hiding-handshake-and-stranger-pseudonyms) | Coded; on by default since 0.2.0-beta | Yes |
+| 11 | [Bluetooth headsets](#bluetooth-headsets) | Deliberately excluded; open question | No |
+| 12 | [Distribution and field reports](#distribution-and-field-reports) | In progress | No |
+| 13 | [iPhone interoperability](#iphone-interoperability) | Compact discovery coded, Experimental | Yes |
+| 14 | [Wi-Fi Direct / Aware bearer](#wi-fi-direct--aware-bearer-later) | Not started | Yes |
+| 15 | [Measurement adapters still missing](#measurement-adapters-still-missing) | Open | No |
+| 16 | [Platform and product work](#platform-and-product-work) | Open | Parts |
 
 ## Open defects in shipped behaviour
 
@@ -41,9 +45,14 @@ These are open across every phone combination that uses the affected behaviour. 
 | Work | What must be established before closing it |
 | --- | --- |
 | Uneven playback and picture quality | Separate source pacing, encoder output, Bluetooth stalls, receive queues, decoder processing and presentation. Correlate traces with run, session and PID identity and each phone's clock; compare the same input and settings. Frame-timing proxies and short clean prefixes cannot approve screen smoothness. The retained scheduler analysis has initial-only clock snapshots, so obtain the missing stage and clock evidence before promoting another display policy |
-| Connecting/Recovering flashes and reconnect-to-scan loops | Trace each setup, scan, cancellation, disconnect and completion against its owning attempt and session. Establish a stable UI state, bounded retries, truthful discovery and reusable availability after End, loss and cancellation; keep planned losses distinct from unexpected ones |
+| Connecting/Recovering flashes and reconnect-to-scan loops | Trace each setup, scan, cancellation, disconnect and completion against its owning attempt and session. Establish a stable UI state, bounded retries, truthful discovery and reusable availability after End, loss and cancellation; keep planned losses distinct from unexpected ones. Causes found offline from saved viewer logs (2026-10-11): the recovery cover (a 70% black layer) followed the decoder's recovery flag with no hysteresis and flashed on and off about a dozen times in 30 s on older builds; a failed join returns to the browser by design while its route cools down. Fix built (default on, control arm `test_receiver_ui_stability=false`, not yet tested on phones). Still open: a failed join still shows the playback screen for 0.25-0.4 s, some "Connecting" overlays wait the full 15 s with no progress text, and planned versus unexpected loss is not distinguished in the UI |
 | Real three-phone chains | Diagnose the retained decrypt failures, missing completions and guard withdrawals without assuming that event order across different phone clocks proves the cause. Preserve the authenticated original source, requested immediate parent, ordered encryption, admission and overload protection; direct-source fallback fails the requested chain |
-| Bidirectional calls and reverse setup | Resolve the reverse-caller GATT setup that queued MTU work without completing it; trace request, callback, teardown and stale-session ownership. Native inputs reject a negotiated geometry or FPS mismatch before media starts, so prepare exact matching native call requests or report ineligibility. Improve both directions, local controls, framing and recovery independently |
+| Bidirectional calls and reverse setup | Resolve the reverse-caller GATT setup that queued MTU work without completing it; trace request, callback, teardown and stale-session ownership. Native inputs reject a negotiated geometry or FPS mismatch before media starts, so prepare exact matching native call requests or report ineligibility. Improve both directions, local controls, framing and recovery independently. Causes found offline (2026-10-11): the original wedge was MTU, PHY and priority work queued within 1 ms of the connection callback (fixed by the setup order MTU, services, subscription, then the client PHY); the stalls that remain (21 of 1,167 saved setup attempts with an MTU request and no callback) are either a dropped request (the stack logs `configureMTU() - No connection`, all before the deferred GATT close on SDK <= 30) or a request queued behind the stack's own service discovery (A15s median 1.34 s, a 5th relay child 3.2 s). Fix built (default on, control arm `test_gatt_mtu_probe=false`, not yet tested on phones): at 0.75 s without a callback one `readPhy` proves the request is only queued and the wait runs to 8 s; no callback keeps the 3 s verdict. Still open: the retry onto a half-closed ACL, and one A15s case that received the MTU response with no app callback |
+| Relayed viewers hold seconds of media | A viewer behind a relay showed 2.7-7.5 s held age with its playout pinned at 2000 ms (direct 250-345 ms). Traced per stage (S24 -> M31 -> ASUS, LE CoC, 200 kbps offered): the source and the first hop add tens of milliseconds, the relay forwards the original frames, the relay's app queue holds 1.3-1.9 s, the Android socket buffer and stack below it 3.2-4.4 s, the air carries a flat 144 kbps (one PDU per 15 ms event), and the viewer's playout then holds 2 s because it cannot shrink while media is late. The relay skipped its child pacer whenever audio was queued anywhere, which is always during a backlog. Built 2026-10-11: `test_relay_pace_head` (default on, control arm false) and Experimental `test_relay_pace_lead_cap` (see the register in ARCHITECTURE.md). Open: a phone A/B on one frozen build (control / head fix / head fix + lead cap, CoC and GATT, 3 repeats, a direct control); a policy for a relay link slower than the stream (shed, withdraw and reroute, lower the sender rate, or batch audio records); a relay holds its own screen 1562 ms (the child-join reserve) |
+| Relay dual-role scheduling (M31 relay child link) | A relay is LE peripheral to its parent and LE central to its child, both at 15 ms, so their anchors keep one fixed phase. On the M31 (Exynos 9611) a child anchor 11.3-13.7 ms after the parent anchor got no completed exchange (9 of 55 child attempts silent until disconnect reason 0x08, 22 never established with 0x3E; ASUS: 0 and 5 of 29); the 7.5 ms and 45 ms stages never died. Built: default-on `test_relay_child_stall_guard` (closes a silent LE child link after 2 s, counted by the establishment fallback), Experimental `test_relay_upstream_dck` (an Android 14+ parent requests DCK, 30 ms, for a relay-capable child so the relay's 15 ms child link has two events per parent event), an inert device-policy proposal, and `tools/relay_dual_role_snoop.py`. Open: the phone A/B with HCI snoops on both relay candidates (relay under test and control relay, GATT and CoC, planned viewer restarts labelled, 3 repeats, at least 15 child attempts per arm; DCK passes when the parent link shows 30 ms, no silent timeouts and no worse leaf freezes; the stall guard passes when a dead attempt ends within 3.5 s and no healthy join is closed). Evidence: DECISIONS "Relay dual-role scheduling" |
+| Call speech behind video writes (head-of-line) | GATT call audio waited 620-1193 ms behind one video frame; the audio-headroom fix only stopped queue overflow. A four-arm A/B (control, fragments, fragments + speech-led playout, fragments + airtime-sized chunks) on M31 <-> ASUS and S24 <-> A15s is in DECISIONS "Call head-of-line A/B"; fragments with speech-led playout are on for direct GATT calls in user launches since 0.2.0-beta. Open: received-audio continuity and A/V offset with speech-led playout, CPU and battery cost on the M31 sender, a third repeat on two arms, A15s over CoC, and an HCI-level check that audio really goes on air between fragments |
+| Visible age of the last received frame | A frozen frame must never be presented as live. Built behind the default-off switch `test_viewer_frame_age` (Settings > Features): stale-picture dim and badge, an honest "Last update" label (this phone's last picture, not camera-to-screen delay) and `viewer_frame_age` log lines. Remaining: a phone test in the relay loss/rejoin lane, then flip the default. Still open: a stall that keeps the link up replays its backlog late by the no-loss design (the bounded-age experiment is the separate answer); a clock-synced end-to-end age would need a protocol design |
+| Stream link role reversal (design, needs a PROTOCOL review) | Today a relay or source is the LE central and connects to the advertising child. A relay that is a busy peripheral on its parent link cannot always establish that second, central connection (an M31 snoop shows ten LE Connection Complete events at 45 ms, each ending 0x3E after 6 events). Root fix: the child connects to the relay as central and the relay accepts the CoC, with the same authentication, grant and hop-local control. It would remove the central-initiation failures but not the equal-interval collision above, so do not build it before the dual-role A/B shows how many failures remain with `test_relay_upstream_dck`. Before coding, record in PROTOCOL.md the advertisement and accept flow and its admission check, discovery and privacy impact, and behaviour on Android 10-14 stacks |
 | Requested versus effective settings | Use the register of concrete limits and the capability evidence to challenge call budgets, legacy protections and other limits. DEBUG higher-rate comparisons stay experiments. Expose every difference in encoder, allocation, geometry, rate, FPS, audio and buffer rather than silently substituting settings |
 
 ## Policy work: fewer fixed limits
@@ -105,10 +114,17 @@ between places. The goal: discovery stops broadcasting a stable prefix, using co
 explicit discoverability windows. In-person contact verification (QR code or safety code; the verification API exists
 and its UI binding is still to come) and key-change warnings come before the app is positioned for at-risk users.
 
-Status: the design was reviewed on 2026-10-10 (review findings RV1-RV19). Phase 1 for LE call-ready presence, the
-Visible-by-handle window and the phase 2 formats (presence leases, `BDX1`, the recognition table; not sent yet) are
-coded behind `test_rotating_ids` ("Experimental: rotating discovery IDs"); formats and vectors are in PROTOCOL.md
-under "Experimental rotating discovery IDs". Not yet tested on phones. Remaining, in order:
+Status (2026-10-12): rotating discovery IDs, the BMH3 identity-hiding handshake and pseudonyms toward strangers are on
+by default since 0.2.0-beta (one constant each; an explicit stored choice wins). The design was reviewed on 2026-10-10
+(findings RV1-RV19). Coded: phase 1 (LE call-ready presence), the Visible-by-handle window, phase 1b (stream offers,
+viewer requests, forwarders, call-relay chains), phase 2 (presence leases, `BDX1`, the recognition table), reach pages
+version 6 for relayed calls and non-discoverable connectable sets on Android 14+; formats and vectors are in PROTOCOL.md
+under "Experimental rotating discovery IDs". Measured once, on four phones: no field carried over any of three ID
+changes (README "What nearby phones can see"). Not measured: battery cost, the Bluetooth name read on the A15s, an
+active attacker holding a contact's key, fake adverts, relays with the new handshake and abuse limits. Open design
+question: the monotonic epoch never returns after a backward clock step, so a lead of 3 to 96 epochs leaves a phone
+unable to receive a version 5 call until it recovers. The list below was the plan; items 0 and 1 were exercised in that
+session, the rest follow:
 
 0. **Phase 0 measurements** on every reference phone (`tools/rotid_phase0.py`): does an advertising-set restart change
    the address; are the GAP Device Name and PSM characteristic readable by an unpaired central; do SCAN_REQ and
@@ -231,6 +247,134 @@ battery drain (rotate via succession); a mouth-to-ear target of at most 400 ms, 
 and rekey storms under churn. Prototype order: (1) an audio-only mixing star, N = 3 over GATT, measuring hub
 throughput, per-leaf media age, mouth-to-ear latency and hub CPU and battery; (2) N of 4-6 with DTX on and off; (3) PTT
 passthrough with the floor state machine; (4) `BGK2` rekey on join and leave with JVM tests. Video and trees come after.
+
+## Design C: relayed private calls and multi-hop discovery
+
+**Design review required.** Default off (`test_relayed_calls`, Settings > Advanced "Experimental: relayed calls"). The
+design was reviewed independently on 2026-10-11 and builds on the earlier draft (R14-R22) and on these design
+decisions: hop-local reading accepted, relay helping on by default while the app runs once the feature is enabled,
+consent asked once and preselected, a radius of 2 relays. Wire rules: PROTOCOL.md "Experimental relayed calls and
+multi-hop discovery". With the switch off, every byte on air and on the link is unchanged.
+
+**Goal.** A caller A reaches a call-ready phone D that is one or two relay phones away, and an ordinary phone relays
+calls in the background without being told which call to take. Before this, only DEBUG relays existed (a launch extra
+names the callee).
+
+- **Roles and reach table.** Target D (call-ready, consents), relay helper R (opted in, call endpoint idle), caller A.
+  Each helper keeps a table of targets fed only by adverts it scanned itself: D's own call offer gives a cost-1 entry, a
+  neighbour's reach-page entry gives cost + 1, up to the cap (default 2, DEBUG `test_relayed_calls_max_relays`, at most
+  4). Reach pages are a second legacy non-connectable advertising set (one page per second).
+- **On-demand setup.** A connects to R1's call listener, authenticates the hop, and sends `SETUP(target, budget,
+  remaining time, setup ID)` as the first hop record (hop type 12). R1 checks its table, connects to the next hop
+  itself and regenerates the same message downstream; `READY` and `FAIL` return one hop at a time. After READY the
+  existing opaque call relay copies the ordered end-to-end records, and A runs the ordinary end-to-end handshake
+  through the chain.
+- **Hop-local, with stated stretch.** A phone re-advertises only what its direct neighbours told it, and setup is
+  regenerated at every hop with a new ID, smaller budget and shorter deadline. Reachability spreads by repeated
+  re-advertisement (a distance vector with an age), and the target's identifier travels the chain inside the SETUP, so
+  each relay on the path learns its adjacent links, the target and (from the signed end-to-end hello it copies) both
+  endpoint identities. A passive observer near a relay learns that D is within N hops of it.
+- **Identity and abuse limits.** A relay cannot read or forge content (end-to-end keys). A requires the end-to-end
+  peer to match the target it selected (the full fingerprint for a verified contact); each helper link identity must
+  equal the helper offer that was selected; the last relay accepts only the target or another relay as its child.
+  Absolute deadlines from READY (10 s end-to-end handshake, 20 s Invite) and a 60 s ringing cap stop a caller from
+  pinning helpers.
+- **Rotating IDs.** With both experiments on, relaying uses role-0 rotating IDs only (reach pages version 6, `SETUP`
+  message 4, every hop checked with `BDO1`/`BDX1`); DEBUG `test_relayed_rotating=false` restores the earlier exclusion.
+- **Battery and pre-emption.** Helping runs only while the phone is call-ready and none of these hold: battery below
+  20% and not charging, Battery Saver, severe thermal status, Bluetooth off, the phone's own exchange. A relayed call
+  already running is not cut by a pause. Starting or answering the phone's own call or stream ends any relay in
+  progress. The foreground notification reads "Helping a call nearby" with a Stop action. Idle scanning cost per hour is
+  a gate to measure on each reference phone before any default is considered.
+- **Failure and fallback.** A shows the route ("Nearby", or "Via 2 phones, heard 8 s ago, unconfirmed"), picks the
+  fewest relays then the freshest, and skips a failed pair for 30 s. A chain that breaks mid-call ends the call;
+  automatic re-routing is future work. Direct fallback is a failed requested chain: `test_relayed_calls_require=<n>`
+  accepts only a chain of exactly n relays. One bearer end to end; only LE transports are supported on demand. iPhones
+  can neither help nor be relayed targets until the compact amendment.
+- **Status.** The first phone probe (2026-10-11) found a helper crash from an API 33 call (fixed; see DECISIONS
+  "Relayed calls: first phone probe"). In the 0.2.0-beta combined privacy session, one-helper calls completed on GATT
+  and LE CoC; two helpers never formed a route. Deferred: automatic candidate iteration inside one attempt, the embedded
+  single-entry carrier for phones without a free advertising set, Classic on-demand relays, mid-call re-routing,
+  extended-advertising reach lists and an iPhone caller.
+- **Phone verification queue** (one helper at a time, `test_relayed_calls=true` on every participant): run
+  `python -B tools/dex_api_scan.py` on the APK first; then one helper on GATT with `test_relayed_calls_require=1`,
+  rotating IDs off and on (S24 -> ASUS -> M31 and the reverse, then each phone as helper; the M31's dual-role limit
+  decides which may help), then the same on LE CoC. Record setup time (invite to ringing) and compare quality with the
+  DEBUG chain at the same settings (relayed video cap 15 FPS / 110 kbps).
+
+## Design D: dual listening, CoC and GATT at once
+
+**Design review required.** Default off (`test_dual_listening`, Settings > Features "Reachable over both Bluetooth LE
+links"). Wire rules: PROTOCOL.md "Experimental dual listening".
+
+**Problem.** A call endpoint advertises one transport. The A15s stack stops accepting LE CoC listens and connects after
+about 15 registrations per Bluetooth process. The safety net (automatic GATT when LE CoC fails) moves the failing phone
+to GATT, but only phones that also scan GATT see it, and once it is a GATT endpoint it lists only GATT offers, so it can
+no longer call a CoC phone.
+
+**Design.** A CoC-primary call offer carries one more bit (`capabilitySummary` bit 3, "also answers over GATT"); the
+endpoint hosts the existing GATT server beside the CoC server (one advertising set, one database); a caller tries CoC
+first for a bounded 9 s, then GATT to the same device from the same sighting; the endpoint keeps its primary transport
+and gets a per-link override. Out of scope: streams, store-and-forward as the dialing side, relay hops, Classic,
+GATT-primary dual, and the iPhone compact form. Cost: one more GATT server registration and six ATT handles per dual
+endpoint. An independent review (14 findings) was adopted.
+
+**Phone test.** With the switch off, the scan response and behaviour are unchanged; with it on, calls between mixed
+pairs set up within 1 s of the off matrix, the A15s forced to GATT lists CoC phones and completes 20 consecutive call
+cycles, and the first 30 s of a call over the second transport match a native call of that transport. The S22, Xiaomi
+and A55 run it as soon as they are available.
+
+**Open design question:** the monotonic epoch of rotating IDs never returns after a backward clock step (see "Discovery
+privacy").
+
+## Design E: uniform adverts, capability fields behind the handshake
+
+**Design review required. Designed 2026-10-11; not coded.** A version 5 advert hides who the phone is, but the rest of
+its bytes are the same in every epoch of one phone: the transport bit, the two codec bits, the relay-helper flag, the
+relay-consent and dual-listening bits, and for streams the resolution, frame rate and bitrate. Together they are a few
+bits of per-phone state that split a crowd into groups (GAEN and DULT require everything that differs between devices to
+rotate with the address or be identical for all). PROTOCOL.md "Fields that stay constant across epochs" lists the
+inventory and the reductions already made.
+
+What has to stay in the advert: kind, transport, accepting/paused/full, route cost, sequence. What can move behind the
+handshake (its hello already carries the codec masks, bitrate and `maxChildren`): the codec masks, the helper flag, the
+consent bit, the dual-listening hint and the stream's resolution, FPS and bitrate. The cost: a caller can no longer hide a
+phone with no common codec before connecting (an incompatible call fails after the handshake with a clear message, after
+one connection of 2-4 s), and a relay helper learns the consent only on connecting.
+
+| Option | What changes | Tradeoff |
+| --- | --- | --- |
+| A | Measure first: count the distinct version 5 layouts per kind on the reference phones before flipping defaults | No code now; the decision comes while changing version 5 is still free |
+| B (recommended if more than one layout is populated) | Redefine version 5: the capability summary of calls and streams becomes a constant, and the codec check, helper flag, consent bit and dual hint move into the signed hello | One more failure path for calls with no common codec; a protocol version change |
+| C | Leave the bits and disclose them as a few bits of quasi-identifier | Nothing to build; a crowd is split into a few groups |
+
+## Design F: BMH3 identity-hiding handshake and stranger pseudonyms
+
+**Coded 2026-10-11; on by default since 0.2.0-beta** (Settings > Features "Hidden identities" and its child
+"Pseudonymous toward strangers"; DEBUG `test_bmh3`, `test_bmh3_pseudonyms`). Wire rules: PROTOCOL.md "Experimental
+BMH3 identity-hiding link handshake" and "Phase 2: pseudonymous stranger identities". The protocol choice and the
+rejected alternatives are in DECISIONS "BMH3 identity-hiding handshake: protocol choice" and "Pseudonymous strangers:
+design choice".
+
+**Why.** Rotating discovery IDs hide the advertisement only; the BMH2 link handshake sends both identity keys in the
+clear on every hop and answers any connector with its own. BMH3 is a SIGMA-style handshake in both reveal orders using
+the existing primitives and the signing-only Keystore key, with a lease-keyed contact tag bound to the selected advert.
+Phase 2 gives a stranger who connects a throwaway software identity per connection; the real identity follows only for
+verified contacts or after the callee presses Accept, in a signed `REVEAL` bound to the session.
+
+**Reviews.** Two independent security reviews (findings SR1-SR14 and BR1-BR11 for the handshake, PR1-PR15 for the
+pseudonyms) were adopted or rejected with reasons in the design record; the executable specification is
+`tools/bmh3_reference.py` with byte-exact vectors in the JVM tests.
+
+**Measured** (the combined privacy session of 2026-10-11, build 3996bfb2): a snoop of the BMH2 control call showed both
+identities in the clear and none in three stranger calls; the reveal followed Accept and never followed Decline. Not
+measured: battery, the A15s name read, an active lease-key prober, fake adverts, relays with BMH3, message exchanges and
+abuse limits.
+
+**Still open.** Streams answer BMH2, so a source's identity stays visible to viewers. A phone with pseudonyms on refuses
+the old handshake, so it cannot call or be called by older versions or by a phone with the switches off. Message
+exchanges and relayed calls work only with verified contacts while pseudonyms are on. A stranger who calls or answers
+still learns who you are once you accept. Binding the verification QR to a live handshake is a follow-up.
 
 ## Bluetooth headsets
 

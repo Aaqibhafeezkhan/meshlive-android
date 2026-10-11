@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Messages (store-and-forward, direct neighbours only): MessagesActivity and its notification. -->
+<resources>
+    <string name="messages_title">Messages</string>
+    <string name="messages_back">Back</string>
+    <string name="messages_intro">End-to-end encrypted to one contact; only that contact\'s phone can open them. To move messages, open Call on both phones, tap the person and choose Exchange messages. Messages expire after their lifetime.</string>
+    <string name="messages_intro_auto">Messages also move by themselves when a contact comes into range (Sync messages automatically).</string>
+    <string name="messages_starting">Opening your messages…</string>
+    <string name="messages_could_not_start">Messages could not start: %1$s</string>
+
+    <string name="messages_section_card">Your contact card</string>
+    <string name="messages_copy_card">Copy my card</string>
+    <string name="messages_add_contact">Add contact</string>
+    <string name="messages_section_pending">Cards received nearby</string>
+    <string name="messages_pending_row">%1$s\nSafety number %2$s</string>
+    <string name="messages_accept">Accept</string>
+    <string name="messages_ignore">Ignore</string>
+    <string name="messages_none">None</string>
+
+    <string name="messages_section_write">Write</string>
+    <string name="messages_write_to">To</string>
+    <string name="messages_no_contacts">No contacts yet</string>
+    <string name="messages_hint">Message</string>
+    <string name="messages_attach_photo">Attach photo</string>
+    <string name="messages_record">Record voice note</string>
+    <string name="messages_stop_recording">Stop recording</string>
+    <string name="messages_recording">Recording (up to 2 minutes)…</string>
+    <string name="messages_recording_blocked">A call is using the microphone. Finish the call, then record your voice note.</string>
+    <string name="messages_recording_failed">Recording failed: %1$s</string>
+    <string name="messages_voice_attached">Voice note attached (%1$d s, %2$d KB)</string>
+    <string name="messages_photo_attached">Photo attached (%1$d KB)</string>
+    <string name="messages_photo_failed">Photo not attached: %1$s</string>
+    <string name="messages_lifetime">Lifetime</string>
+    <string name="messages_send">Send</string>
+    <string name="messages_queued">Queued. It moves at the next message exchange.</string>
+    <string name="messages_not_sent">Not sent: %1$s</string>
+    <string name="messages_add_first">Add or accept a contact first</string>
+    <string name="messages_write_something">Write a message or attach something</string>
+
+    <string name="messages_section_inbox">Inbox</string>
+    <string name="messages_section_inbox_unread">Inbox · %1$d new</string>
+    <string name="messages_section_sent">Sent</string>
+    <string name="messages_inbox_empty">No messages yet</string>
+    <string name="messages_sent_empty">Nothing sent</string>
+    <string name="messages_row_from">From %1$s · %2$s</string>
+    <string name="messages_row_to">To %1$s · %2$s · %3$s</string>
+    <string name="messages_new">New</string>
+    <string name="messages_kind_voice">Voice note (%1$d KB) · tap to play</string>
+    <string name="messages_kind_photo">Photo (%1$d KB) · tap to view</string>
+    <string name="messages_kind_other">%1$s (%2$d bytes)</string>
+    <string name="messages_status_waiting">waiting for a link</string>
+    <string name="messages_status_attempt">waiting for a link (attempt %1$d of %2$d)</string>
+    <string name="messages_status_failed_attempts">not delivered after %1$d attempts · open Call and Exchange to retry</string>
+    <string name="messages_status_courier">with a courier</string>
+    <string name="messages_status_handed">on their phone</string>
+    <string name="messages_status_delivered">delivered</string>
+    <string name="messages_status_damaged">failed (stored copy damaged) · send again</string>
+    <string name="messages_status_expired">expired or removed</string>
+    <string name="messages_delete_prompt">Delete this message from this phone?</string>
+    <string name="messages_delete">Delete</string>
+    <string name="messages_storage">Storage: outgoing %1$d KB, incoming %2$d KB, carried %3$d KB</string>
+    <string name="messages_close">Close</string>
+    <string name="messages_cannot_play">Cannot play: %1$s</string>
+
+    <string name="messages_card_copied_title">Your contact card (copied)</string>
+    <string name="messages_card_copied_body">%1$s\n\nGive this text to a contact in person (for example as a QR code) or exchange cards over an encrypted link with Exchange messages. Your node: %2$s\n\nYour safety number: %3$s\nCompare it in person with the number your contact sees for you.</string>
+    <string name="messages_add_title">Add contact from card text</string>
+    <string name="messages_card_hint">BCC1:…</string>
+    <string name="messages_name_hint">Name</string>
+    <string name="messages_add_done">Contact added</string>
+    <string name="messages_add_failed">Card not added: %1$s</string>
+    <string name="messages_accept_title">Accept %1$s?</string>
+    <string name="messages_accept_body">This card came over an encrypted link from that phone. Accept it only if you know who it is.\n\nSafety number: %1$s\nAsk them to read their safety number from their Messages screen (Copy my card) and check that it matches.</string>
+    <string name="messages_accept_opened">%1$d waiting message(s) opened</string>
+    <string name="messages_accept_failed">Not accepted: %1$s</string>
+    <string name="messages_key_reset_title">Message key reset</string>
+    <string name="messages_key_reset_body">This phone\'s message key was lost and a new one was made. Messages sent to your old card cannot be opened. Give your contacts your new card (Copy my card) or exchange messages with them again.</string>
+    <string name="messages_ok">OK</string>
+    <string name="messages_cancel">Cancel</string>
+
+    <!-- Notification: never shows message content, and never the sender unless the user allowed names on the lock screen. -->
+    <string name="messages_channel_name">Messages</string>
+    <string name="messages_channel_description">Quiet alerts for new messages. Message content is never shown.</string>
+    <string name="messages_notification_title">Messages</string>
+    <plurals name="messages_notification_text">
+        <item quantity="one">%1$d new message</item>
+        <item quantity="other">%1$d new messages</item>
+    </plurals>
+    <string name="messages_toast_new">%1$d new message(s)</string>
+</resources>

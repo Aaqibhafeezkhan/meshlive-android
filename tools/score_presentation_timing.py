@@ -12,6 +12,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from benchmark_layout import output_path, resolve
+from evidence_relocation import logical
 
 
 PREFIX = "BENCHMARK video presentation v1 "
@@ -311,7 +312,7 @@ def main(argv=None):
         args.output = output_path(args.output, "runs")
         args.log = resolve(args.log)
         result = parse_log(args.log.read_text(encoding="utf-8-sig"))
-        result["input_log"] = str(args.log.resolve())
+        result["input_log"] = str(logical(args.log))
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     except (ValueError, OSError, UnicodeError) as error:

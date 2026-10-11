@@ -11,29 +11,27 @@ import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Bundle
-import android.os.PersistableBundle
-import android.view.WindowManager
 import android.os.Handler
 import android.os.Looper
-import android.text.InputType
+import android.os.PersistableBundle
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.ArrayAdapter
-import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.text.DateFormat
@@ -41,28 +39,35 @@ import java.util.Date
 import java.util.concurrent.Executors
 
 /**
- * Experimental store-and-forward Messages screen (StoreForwardFeature, default off): your contact
- * card, cards received over a link, compose (text, voice note, photo) and the inbox/sent lists.
- * Messages move when two phones exchange them from the Call screen (Exchange messages).
+ * Messages (store-and-forward, direct neighbours only; Settings > Features "Messages"): your contact
+ * card, cards received over a link, compose (text, voice note, photo) and the inbox/sent lists, in
+ * the shared monochrome theme (activity_messages.xml). Messages move when two phones exchange them
+ * from the Call screen (Exchange messages), or by themselves with "Sync messages automatically".
+ * Unread inbox rows carry a dot until the screen is left; the Home tile and a quiet notification
+ * carry the count ([MessageNotifications]).
  */
 class MessagesActivity : AppCompatActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
     private var node: StoreForwardNode? = null
-    private lateinit var content: LinearLayout
     private lateinit var contactSpinner: Spinner
     private lateinit var messageInput: EditText
     private lateinit var attachmentText: TextView
-    private lateinit var recordButton: Button
+    private lateinit var recordButton: MaterialButton
     private lateinit var lifetimeSpinner: Spinner
     private lateinit var pendingSection: LinearLayout
     private lateinit var inboxSection: LinearLayout
+    private lateinit var inboxHeader: TextView
     private lateinit var sentSection: LinearLayout
     private lateinit var storageText: TextView
+    private lateinit var statusText: TextView
     private var contacts: List<StoreForwardContact> = emptyList()
     @Volatile private var failedIds: Set<String> = emptySet()
-    /** Experimental automatic sync only: own message ID -> (outbox status, delivery attempts). */
+    /** Automatic sync only: own message ID -> (outbox status, delivery attempts). */
     @Volatile private var outboxStatus: Map<String, Pair<OutboxStatus, Int>> = emptyMap()
+    /** When the user last left this screen: rows received after it show as new until the next exit. */
+    @Volatile private var seenMs = 0L
+    private var seenStore: InboxSeenStore? = null
     private var attachment: Pair<MessageKind, ByteArray>? = null
     private var recorder: MediaRecorder? = null
     private var recordingFile: File? = null
@@ -89,17 +94,22 @@ class MessagesActivity : AppCompatActivity() {
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         // Plaintext a previous process may have left behind (finding 8).
         StoreForwardPlaintextFiles.cleanLeftovers(cacheDir)
-        setContentView(buildLayout())
+        setContentView(R.layout.activity_messages)
+        bindViews()
         worker.execute {
             val opened = runCatching { StoreForwardRuntime.node(applicationContext) }
+            val store = runCatching { InboxSeenStore.forRoot(StoreForwardRuntime.root(applicationContext)) }.getOrNull()
             runOnUiThread {
                 opened.onSuccess {
                     node = it
+                    seenStore = store
+                    seenMs = store?.read() ?: 0L
+                    statusText.visibility = View.GONE
                     refresh()
                     showKeyResetNoticeIfAny()
                 }.onFailure {
                     Log.e("BluetoothVideo", "Store-forward could not open", it)
-                    storageText.text = "Messages could not start: ${it.message ?: it.javaClass.simpleName}"
+                    statusText.text = getString(R.string.messages_could_not_start, it.message ?: it.javaClass.simpleName)
                 }
             }
         }
@@ -107,14 +117,19 @@ class MessagesActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        MessagesScreenState.visible = true
+        MessageNotifications.cancel(this)
         handler.post(refresher)
     }
 
     override fun onPause() {
+        MessagesScreenState.visible = false
         handler.removeCallbacks(refresher)
         stopRecording(keep = false)
         releasePlayer()
         StoreForwardPlaintextFiles.cleanLeftovers(cacheDir)
+        // Leaving the screen marks what was shown as read.
+        seenStore?.write(System.currentTimeMillis())
         super.onPause()
     }
 
@@ -125,59 +140,51 @@ class MessagesActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun buildLayout(): View {
-        val scroll = ScrollView(this).apply { setBackgroundColor(color(R.color.app_background)) }
-        content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(20), dp(20), dp(32))
-        }
-        scroll.addView(content)
-        ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
+    private fun bindViews() {
+        val root = findViewById<View>(R.id.messagesRoot)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
         }
-        content.addView(text("Messages", 28f, bold = true))
-        content.addView(text(
-            "Experimental. End-to-end encrypted to one contact; only that contact's phone can open them. " +
-                "To move messages, open Call on both phones, tap the other person and choose Exchange messages. " +
-                "Messages expire after their lifetime.",
-            13f, secondary = true,
-        ))
-
-        content.addView(heading("Your contact card"))
-        content.addView(row(
-            button("Copy my card") { copyMyCard() },
-            button("Add contact") { addContactDialog() },
-        ))
-        content.addView(heading("Cards received nearby"))
-        pendingSection = vertical().also(content::addView)
-
-        content.addView(heading("Write"))
-        contactSpinner = Spinner(this).also(content::addView)
-        messageInput = EditText(this).apply {
-            hint = "Message"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            minLines = 2
-            setTextColor(color(R.color.text_primary))
-        }
-        content.addView(messageInput)
-        recordButton = button("Record voice note") { toggleRecording() }
-        content.addView(row(button("Attach photo") { pickPhoto.launch("image/*") }, recordButton))
-        attachmentText = text("", 13f, secondary = true).also(content::addView)
-        lifetimeSpinner = Spinner(this).apply {
+        findViewById<View>(R.id.messagesBackButton).setOnClickListener { finish() }
+        statusText = findViewById(R.id.messagesStatus)
+        bindAutoSyncSwitch()
+        findViewById<View>(R.id.messagesCopyCard).setOnClickListener { copyMyCard() }
+        findViewById<View>(R.id.messagesAddContact).setOnClickListener { addContactDialog() }
+        pendingSection = findViewById(R.id.messagesPending)
+        contactSpinner = findViewById(R.id.messagesContactSpinner)
+        messageInput = findViewById(R.id.messagesInput)
+        attachmentText = findViewById(R.id.messagesAttachment)
+        recordButton = findViewById(R.id.messagesRecord)
+        recordButton.setOnClickListener { toggleRecording() }
+        findViewById<View>(R.id.messagesAttachPhoto).setOnClickListener { pickPhoto.launch("image/*") }
+        lifetimeSpinner = findViewById<Spinner>(R.id.messagesLifetimeSpinner).apply {
             adapter = ArrayAdapter(this@MessagesActivity, android.R.layout.simple_spinner_dropdown_item, LIFETIMES.map { it.first })
             setSelection(1)
         }
-        content.addView(row(text("Lifetime", 14f), lifetimeSpinner))
-        content.addView(button("Send") { send() })
+        findViewById<View>(R.id.messagesSend).setOnClickListener { send() }
+        inboxHeader = findViewById(R.id.messagesInboxHeader)
+        inboxSection = findViewById(R.id.messagesInbox)
+        sentSection = findViewById(R.id.messagesSent)
+        storageText = findViewById(R.id.messagesStorage)
+    }
 
-        content.addView(heading("Inbox"))
-        inboxSection = vertical().also(content::addView)
-        content.addView(heading("Sent"))
-        sentSection = vertical().also(content::addView)
-        storageText = text("", 12f, secondary = true).also(content::addView)
-        return scroll
+    /**
+     * "Sync messages automatically" (the same switch as Settings > Features). A benchmark launch reads
+     * only its extra, so the switch there shows that value and cannot be changed.
+     */
+    private fun bindAutoSyncSwitch() {
+        val switch = findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.messagesAutoSyncSwitch)
+        val benchmark = BuildConfig.DEBUG && DebugTunables.benchmarkLaunch
+        switch.isChecked = StoreForwardAutoSyncFeature.enabled
+        switch.isEnabled = !benchmark
+        switch.setOnCheckedChangeListener { _, enabled ->
+            // Settings > Features and MainActivity re-read the stored choice; this keeps the running value in step.
+            getSharedPreferences(CallFeatureDefaults.APP_SETTINGS_PREFERENCES, MODE_PRIVATE).edit()
+                .putBoolean(StoreForwardAutoSyncFeature.PREF, enabled).apply()
+            StoreForwardAutoSyncFeature.enabled = enabled && StoreForwardFeature.enabled
+        }
     }
 
     private fun refresh() {
@@ -209,83 +216,95 @@ class MessagesActivity : AppCompatActivity() {
         states: Map<String, StoredBundle>,
         usage: Map<BundleRole, Long>,
     ) {
+        if (isDestroyed) return
         val accepted = allContacts.filter { it.state == ContactState.ACCEPTED }
         if (accepted.map { it.nodeId } != contacts.map { it.nodeId }) {
             val selected = contacts.getOrNull(contactSpinner.selectedItemPosition)?.nodeId
             contacts = accepted
             contactSpinner.adapter = ArrayAdapter(
                 this, android.R.layout.simple_spinner_dropdown_item,
-                accepted.map { it.label }.ifEmpty { listOf("No contacts yet") },
+                accepted.map { it.label }.ifEmpty { listOf(getString(R.string.messages_no_contacts)) },
             )
             accepted.indexOfFirst { it.nodeId == selected }.takeIf { it >= 0 }?.let(contactSpinner::setSelection)
         }
         val names = allContacts.associate { it.nodeId.toString() to it.label }
         pendingSection.removeAllViews()
         allContacts.filter { it.state == ContactState.PENDING }.forEach { contact ->
-            pendingSection.addView(row(
-                text("${contact.nodeId.shortLabel()}\nSafety number ${contact.card.safetyNumber()}", 13f),
-                button("Accept") { acceptDialog(contact) },
-                button("Ignore") { worker.execute { node?.removeContact(contact.nodeId); refresh() } },
-            ))
+            val row = layoutInflater.inflate(R.layout.item_message_card_row, pendingSection, false)
+            row.findViewById<TextView>(R.id.cardDescription).text =
+                getString(R.string.messages_pending_row, contact.nodeId.shortLabel(), contact.card.safetyNumber())
+            row.findViewById<View>(R.id.cardAccept).setOnClickListener { acceptDialog(contact) }
+            row.findViewById<View>(R.id.cardIgnore).setOnClickListener {
+                worker.execute { node?.removeContact(contact.nodeId); refresh() }
+            }
+            pendingSection.addView(row)
         }
-        if (pendingSection.childCount == 0) pendingSection.addView(text("None", 13f, secondary = true))
+        if (pendingSection.childCount == 0) pendingSection.addView(quietLine(R.string.messages_none))
         inboxSection.removeAllViews()
         sentSection.removeAllViews()
+        val unread = UnreadMessages.count(messages, seenMs)
+        inboxHeader.text = if (unread > 0) getString(R.string.messages_section_inbox_unread, unread) else getString(R.string.messages_section_inbox)
         messages.sortedByDescending { it.receivedMs }.forEach { entry ->
             val peer = names[entry.peerNode] ?: entry.peerNode.take(12)
             val time = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(entry.createdMs))
-            val label = when (entry.kind) {
+            val body = when (entry.kind) {
                 MessageKind.TEXT -> entry.preview
-                MessageKind.VOICE -> "Voice note (${entry.bodyBytes / 1024} KB) - tap to play"
-                MessageKind.PHOTO -> "Photo (${entry.bodyBytes / 1024} KB) - tap to view"
-                else -> "${entry.kind.label} (${entry.bodyBytes} bytes)"
+                MessageKind.VOICE -> getString(R.string.messages_kind_voice, entry.bodyBytes / 1024)
+                MessageKind.PHOTO -> getString(R.string.messages_kind_photo, entry.bodyBytes / 1024)
+                else -> getString(R.string.messages_kind_other, entry.kind.label, entry.bodyBytes)
             }
-            val status = if (entry.direction == MessageDirection.OUT) {
-                val auto = outboxStatus[entry.bundleIdHex]
-                when (states[entry.bundleIdHex]?.state) {
-                    BundleState.QUEUED -> when (auto?.first) {
-                        OutboxStatus.FAILED -> "not delivered after ${auto?.second} attempts - open Call and Exchange to retry"
-                        OutboxStatus.CARRIED -> "with a courier"
-                        else -> if ((auto?.second ?: 0) > 0) "waiting for a link (attempt ${auto?.second} of ${AutoSyncPolicy().maxAttempts})" else "waiting for a link"
-                    }
-                    BundleState.HANDED -> "on their phone"
-                    BundleState.DELIVERED -> "delivered"
-                    BundleState.FAILED -> "failed (stored copy damaged) - send again"
-                    null -> if (entry.bundleIdHex in failedIds) "failed (stored copy damaged) - send again" else "expired or removed"
-                    else -> states[entry.bundleIdHex]?.state?.name?.lowercase()
-                }
-            } else null
-            val header = if (entry.direction == MessageDirection.IN) "From $peer - $time" else "To $peer - $time - $status"
-            val view = vertical().apply {
-                setPadding(0, dp(8), 0, dp(8))
-                addView(text(header, 12f, secondary = true))
-                addView(text(label, 15f))
-                setOnClickListener { open(entry.bundleIdHex) }
-                setOnLongClickListener {
-                    AlertDialog.Builder(this@MessagesActivity)
-                        .setMessage("Delete this message from this phone?")
-                        .setPositiveButton("Delete") { _, _ -> worker.execute { node?.deleteMessage(entry.bundleIdHex); refresh() } }
-                        .setNegativeButton("Cancel", null)
-                        .show()
-                    true
-                }
+            val isNew = UnreadMessages.isUnread(entry, seenMs)
+            val header = if (entry.direction == MessageDirection.IN) {
+                getString(R.string.messages_row_from, peer, time)
+            } else {
+                val status = OutgoingMessageStatus.of(
+                    states[entry.bundleIdHex]?.state,
+                    outboxStatus[entry.bundleIdHex],
+                    entry.bundleIdHex in failedIds,
+                    AutoSyncPolicy().maxAttempts,
+                )
+                getString(R.string.messages_row_to, peer, time, getString(status.stringRes, *status.args.toTypedArray()))
             }
-            (if (entry.direction == MessageDirection.IN) inboxSection else sentSection).addView(view)
+            val row = layoutInflater.inflate(R.layout.item_message_row, null)
+            row.findViewById<TextView>(R.id.messageHeader).text = header
+            row.findViewById<TextView>(R.id.messageBody).text = body
+            row.findViewById<View>(R.id.messageUnreadDot).visibility = if (isNew) View.VISIBLE else View.INVISIBLE
+            row.contentDescription = (if (isNew) getString(R.string.messages_new) + ". " else "") + header + ". " + body
+            row.setOnClickListener { open(entry.bundleIdHex) }
+            row.setOnLongClickListener {
+                MaterialAlertDialogBuilder(this@MessagesActivity)
+                    .setMessage(R.string.messages_delete_prompt)
+                    .setPositiveButton(R.string.messages_delete) { _, _ -> worker.execute { node?.deleteMessage(entry.bundleIdHex); refresh() } }
+                    .setNegativeButton(R.string.messages_cancel, null)
+                    .show()
+                true
+            }
+            (if (entry.direction == MessageDirection.IN) inboxSection else sentSection).addView(
+                row,
+                ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+            )
         }
-        if (inboxSection.childCount == 0) inboxSection.addView(text("No messages yet", 13f, secondary = true))
-        if (sentSection.childCount == 0) sentSection.addView(text("Nothing sent", 13f, secondary = true))
-        storageText.text = "Storage: outgoing ${kb(usage[BundleRole.OWN])}, incoming ${kb(usage[BundleRole.INBOX])}, " +
-            "carried ${kb(usage[BundleRole.FOREIGN])}"
+        if (inboxSection.childCount == 0) inboxSection.addView(quietLine(R.string.messages_inbox_empty))
+        if (sentSection.childCount == 0) sentSection.addView(quietLine(R.string.messages_sent_empty))
+        storageText.text = getString(
+            R.string.messages_storage,
+            kb(usage[BundleRole.OWN]), kb(usage[BundleRole.INBOX]), kb(usage[BundleRole.FOREIGN]),
+        )
+    }
+
+    private fun quietLine(textRes: Int) = TextView(this).apply {
+        setText(textRes)
+        setTextAppearance(R.style.TextAppearance_App_Body)
+        setPadding(0, dp(8), 0, dp(8))
     }
 
     private fun showKeyResetNoticeIfAny() {
         val root = StoreForwardRuntime.root(applicationContext)
         MailboxKeyResetNotice.pendingSinceMs(root) ?: return
-        AlertDialog.Builder(this)
-            .setTitle("Message key reset")
-            .setMessage("This phone's message key was lost and a new one was made. Messages sent to your old card " +
-                "cannot be opened. Give your contacts your new card (Copy my card) or exchange messages with them again.")
-            .setPositiveButton("OK") { _, _ -> MailboxKeyResetNotice.dismiss(root) }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.messages_key_reset_title)
+            .setMessage(R.string.messages_key_reset_body)
+            .setPositiveButton(R.string.messages_ok) { _, _ -> MailboxKeyResetNotice.dismiss(root) }
             .setCancelable(false)
             .show()
     }
@@ -301,28 +320,28 @@ class MessagesActivity : AppCompatActivity() {
                     description.extras = PersistableBundle().apply { putBoolean(EXTRA_IS_SENSITIVE, true) }
                 }
                 getSystemService(ClipboardManager::class.java)?.setPrimaryClip(clip)
-                AlertDialog.Builder(this)
-                    .setTitle("Your contact card (copied)")
-                    .setMessage(card + "\n\nGive this text to a contact in person (for example as a QR code) or exchange cards " +
-                        "over an encrypted link with Exchange messages. Your node: ${node.nodeId.shortLabel()}\n\n" +
-                        "Your safety number: ${node.ownCard.safetyNumber()}\nCompare it in person with the number " +
-                        "your contact sees for you.")
-                    .setPositiveButton("OK", null)
+                MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.messages_card_copied_title)
+                    .setMessage(getString(R.string.messages_card_copied_body, card, node.nodeId.shortLabel(), node.ownCard.safetyNumber()))
+                    .setPositiveButton(R.string.messages_ok, null)
                     .show()
             }
         }
     }
 
     private fun addContactDialog() {
-        val layout = vertical().apply { setPadding(dp(20), dp(8), dp(20), 0) }
-        val cardInput = EditText(this).apply { hint = "BCC1:..." }
-        val nameInput = EditText(this).apply { hint = "Name" }
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val cardInput = EditText(this).apply { hint = getString(R.string.messages_card_hint) }
+        val nameInput = EditText(this).apply { hint = getString(R.string.messages_name_hint) }
         layout.addView(cardInput)
         layout.addView(nameInput)
-        AlertDialog.Builder(this)
-            .setTitle("Add contact from card text")
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.messages_add_title)
             .setView(layout)
-            .setPositiveButton("Add") { _, _ ->
+            .setPositiveButton(R.string.messages_add_contact) { _, _ ->
                 val node = node ?: return@setPositiveButton
                 val cardText = cardInput.text.toString()
                 val name = nameInput.text.toString()
@@ -334,24 +353,22 @@ class MessagesActivity : AppCompatActivity() {
                         node.openPendingFrom(card.nodeId)
                     }
                     runOnUiThread {
-                        toast(result.fold({ "Contact added" }, { "Card not added: ${it.message}" }))
+                        toast(result.fold({ getString(R.string.messages_add_done) }, { getString(R.string.messages_add_failed, it.message) }))
                         refresh()
                     }
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(R.string.messages_cancel, null)
             .show()
     }
 
     private fun acceptDialog(contact: StoreForwardContact) {
-        val nameInput = EditText(this).apply { hint = "Name" }
-        AlertDialog.Builder(this)
-            .setTitle("Accept ${contact.nodeId.shortLabel()}?")
-            .setMessage("This card came over an encrypted link from that phone. Accept it only if you know who it is.\n\n" +
-                "Safety number: ${contact.card.safetyNumber()}\nAsk them to read their safety number from their " +
-                "Messages screen (Copy my card) and check that it matches.")
+        val nameInput = EditText(this).apply { hint = getString(R.string.messages_name_hint) }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.messages_accept_title, contact.nodeId.shortLabel()))
+            .setMessage(getString(R.string.messages_accept_body, contact.card.safetyNumber()))
             .setView(nameInput)
-            .setPositiveButton("Accept") { _, _ ->
+            .setPositiveButton(R.string.messages_accept) { _, _ ->
                 val name = nameInput.text.toString()
                 worker.execute {
                     val result = runCatching {
@@ -360,13 +377,13 @@ class MessagesActivity : AppCompatActivity() {
                     }
                     runOnUiThread {
                         result.onSuccess { opened ->
-                            if (opened.isNotEmpty()) toast("${opened.size} waiting message(s) opened")
-                        }.onFailure { toast("Not accepted: ${it.message}") }
+                            if (opened.isNotEmpty()) toast(getString(R.string.messages_accept_opened, opened.size))
+                        }.onFailure { toast(getString(R.string.messages_accept_failed, it.message)) }
                         refresh()
                     }
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(R.string.messages_cancel, null)
             .show()
     }
 
@@ -374,13 +391,13 @@ class MessagesActivity : AppCompatActivity() {
         val node = node ?: return
         val contact = contacts.getOrNull(contactSpinner.selectedItemPosition)
         if (contact == null) {
-            toast("Add or accept a contact first")
+            toast(getString(R.string.messages_add_first))
             return
         }
         val textBody = messageInput.text.toString().trim()
         val media = attachment
         if (textBody.isEmpty() && media == null) {
-            toast("Write a message or attach something")
+            toast(getString(R.string.messages_write_something))
             return
         }
         val ttl = LIFETIMES[lifetimeSpinner.selectedItemPosition].second
@@ -402,12 +419,17 @@ class MessagesActivity : AppCompatActivity() {
                 result.onSuccess {
                     messageInput.setText("")
                     attachment = null
-                    attachmentText.text = ""
-                    toast("Queued. It moves at the next message exchange.")
-                }.onFailure { toast("Not sent: ${it.message}") }
+                    showAttachment(null)
+                    toast(getString(R.string.messages_queued))
+                }.onFailure { toast(getString(R.string.messages_not_sent, it.message)) }
                 refresh()
             }
         }
+    }
+
+    private fun showAttachment(text: String?) {
+        attachmentText.text = text.orEmpty()
+        attachmentText.visibility = if (text.isNullOrEmpty()) View.GONE else View.VISIBLE
     }
 
     private fun preparePhoto(uri: Uri) {
@@ -434,14 +456,20 @@ class MessagesActivity : AppCompatActivity() {
         runOnUiThread {
             result.onSuccess { bytes ->
                 attachment = MessageKind.PHOTO to bytes
-                attachmentText.text = "Photo attached (${bytes.size / 1024} KB)"
-            }.onFailure { toast("Photo not attached: ${it.message}") }
+                showAttachment(getString(R.string.messages_photo_attached, bytes.size / 1024))
+            }.onFailure { toast(getString(R.string.messages_photo_failed, it.message)) }
         }
     }
 
     private fun toggleRecording() {
         if (recorder != null) {
             stopRecording(keep = true)
+            return
+        }
+        // The microphone belongs to the call (or live stream) that holds it: recording now could leave
+        // the other person hearing silence.
+        if (VoiceNoteGate.blockedNow()) {
+            toast(getString(R.string.messages_recording_blocked))
             return
         }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -471,15 +499,15 @@ class MessagesActivity : AppCompatActivity() {
             recorder = it
             recordingFile = file
             recordingStartedMs = System.currentTimeMillis()
-            recordButton.text = "Stop recording"
-            attachmentText.text = "Recording (up to 2 minutes)..."
-        }.onFailure { toast("Recording failed: ${it.message}") }
+            recordButton.setText(R.string.messages_stop_recording)
+            showAttachment(getString(R.string.messages_recording))
+        }.onFailure { toast(getString(R.string.messages_recording_failed, it.message)) }
     }
 
     private fun stopRecording(keep: Boolean) {
         val active = recorder ?: return
         recorder = null
-        recordButton.text = "Record voice note"
+        recordButton.setText(R.string.messages_record)
         val ok = runCatching { active.stop() }.isSuccess
         active.release()
         val file = recordingFile
@@ -489,10 +517,10 @@ class MessagesActivity : AppCompatActivity() {
             file.delete()
             attachment = MessageKind.VOICE to bytes
             val seconds = (System.currentTimeMillis() - recordingStartedMs) / 1000
-            attachmentText.text = "Voice note attached (${seconds}s, ${bytes.size / 1024} KB)"
+            showAttachment(getString(R.string.messages_voice_attached, seconds.toInt(), bytes.size / 1024))
         } else {
             file?.delete()
-            attachmentText.text = ""
+            showAttachment(null)
         }
     }
 
@@ -523,21 +551,21 @@ class MessagesActivity : AppCompatActivity() {
                         prepare()
                         start()
                     }
-                }.onFailure { toast("Cannot play: ${it.message}") }.getOrNull()
+                }.onFailure { toast(getString(R.string.messages_cannot_play, it.message)) }.getOrNull()
             }
             MessageKind.PHOTO -> {
                 val bitmap = BitmapFactory.decodeByteArray(entry.message.body, 0, entry.message.body.size) ?: return
-                AlertDialog.Builder(this)
+                MaterialAlertDialogBuilder(this)
                     .setView(ImageView(this).apply {
                         setImageBitmap(bitmap)
                         adjustViewBounds = true
                     })
-                    .setPositiveButton("Close", null)
+                    .setPositiveButton(R.string.messages_close, null)
                     .show()
             }
-            MessageKind.TEXT -> AlertDialog.Builder(this)
+            MessageKind.TEXT -> MaterialAlertDialogBuilder(this)
                 .setMessage(String(entry.message.body, Charsets.UTF_8))
-                .setPositiveButton("Close", null)
+                .setPositiveButton(R.string.messages_close, null)
                 .show()
             else -> Unit
         }
@@ -557,33 +585,8 @@ class MessagesActivity : AppCompatActivity() {
         override fun close() = Unit
     }
 
-    private fun heading(value: String) = text(value, 18f, bold = true).apply { setPadding(0, dp(20), 0, dp(6)) }
-
-    private fun text(value: String, size: Float, bold: Boolean = false, secondary: Boolean = false) = TextView(this).apply {
-        text = value
-        textSize = size
-        setTextColor(color(if (secondary) R.color.text_secondary else R.color.text_primary))
-        if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
-    }
-
-    private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
-        text = label
-        isAllCaps = false
-        setOnClickListener { onClick() }
-    }
-
-    private fun vertical() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-
-    private fun row(vararg views: View) = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        views.forEach { view ->
-            addView(view, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        }
-    }
-
-    private fun color(id: Int) = ContextCompat.getColor(this, id)
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
-    private fun kb(bytes: Long?) = "${(bytes ?: 0) / 1024} KB"
+    private fun kb(bytes: Long?) = ((bytes ?: 0) / 1024).toInt()
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
 
     private companion object {

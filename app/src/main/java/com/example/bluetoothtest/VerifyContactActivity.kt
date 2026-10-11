@@ -158,10 +158,38 @@ class VerifyContactActivity : AppCompatActivity() {
                 findViewById<TextView>(R.id.verifySafetyCode).text =
                     code?.let { IdentityFormat.groupedDigits(it) } ?: IdentityFormat.groupedHex(peer)
                 showState(state)
+                bindPresenceSwitch(peer, state)
                 findViewById<View>(R.id.verifyMarkButton).apply {
                     isEnabled = security.verificationAvailable && state != ContactVerification.VERIFIED
                     setOnClickListener { markVerified(peer, null, viaQr = false) }
                 }
+            }
+        }
+    }
+
+    /**
+     * Rotating IDs, phase 2: "Can see when I'm nearby" for this verified contact (default on). Shown only with
+     * the experiment on, a persistent presence store and a verified contact; turning it off after the contact
+     * received a key starts a new presence key.
+     */
+    private fun bindPresenceSwitch(peer: String, state: ContactVerification) {
+        val row = findViewById<View>(R.id.verifyVisibleRow)
+        val vault = if (RotatingDiscoveryFeature.enabled) RotatingDiscovery.presenceVault() else null
+        val node = runCatching {
+            NodeId.fromBytes(ByteArray(peer.length / 2) { peer.substring(it * 2, it * 2 + 2).toInt(16).toByte() })
+        }.getOrNull()
+        if (vault == null || !vault.persistent || node == null || state != ContactVerification.VERIFIED) {
+            row.visibility = View.GONE
+            return
+        }
+        row.visibility = View.VISIBLE
+        val toggle = findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.verifyVisibleSwitch)
+        toggle.setOnCheckedChangeListener(null)
+        toggle.isChecked = vault.visibleToThem(node)
+        toggle.setOnCheckedChangeListener { _, checked ->
+            worker.execute {
+                runCatching { vault.setVisible(node, checked) }
+                RotatingDiscovery.requestRecognitionRebuild()
             }
         }
     }
@@ -190,6 +218,7 @@ class VerifyContactActivity : AppCompatActivity() {
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 showState(state)
+                bindPresenceSwitch(peer, state)
                 findViewById<View>(R.id.verifyMarkButton).isEnabled = outcome != MarkVerifiedOutcome.VERIFIED
                 val message = when (outcome) {
                     MarkVerifiedOutcome.VERIFIED -> getString(

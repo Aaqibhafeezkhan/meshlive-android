@@ -43,6 +43,13 @@ class ReceiverStreamForwarder(
      * source for this stream, forwarded byte for byte after GROUP_KEY when the child's hello has bit 5.
      */
     private val forwardLabels: (() -> List<ByteArray>)? = null,
+    /**
+     * Rotating IDs (phase 1b): the announced bytes of the version 5 offer this forwarder joined (an RDI),
+     * from which the logical stream token is derived. Null: the node prefix, as before.
+     */
+    private val upstreamAnnouncedBytes: ByteArray? = null,
+    /** Rotating IDs: this forwarder's own offers are version 5 (role-1 RDI) on LE, and rotate at boundaries. */
+    private val rotatingOffers: Boolean = false,
 ) : Closeable {
     private val appContext = context.applicationContext
     private val closed = AtomicBoolean(false)
@@ -52,12 +59,19 @@ class ReceiverStreamForwarder(
     @Volatile private var withdrawalReason: StreamRouteWithdrawal? = null
     private val logicalStreamToken = StreamRouteToken.logicalFrom(
         streamToken,
-        upstreamPeerNodeId.toByteArray().copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES),
+        upstreamAnnouncedBytes ?: upstreamPeerNodeId.toByteArray().copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES),
     )
-    private val downstreamStreamToken = StreamRouteToken.forAdvertiser(
+    @Volatile private var downstreamStreamToken = StreamRouteToken.forAdvertiser(
         logicalStreamToken,
         identity.nodeId.toByteArray().copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES),
     )
+
+    /** The viewer-request tokens this forwarder accepts: the current one, plus the previous for 60 s (PROTOCOL Phase 1b). */
+    private val requestTokens = RouteTokenWindow().also { it.reset(logicalStreamToken, downstreamStreamToken) }
+    private val rotateOnBoundary = rotatingOffers && RotatingDiscoveryFeature.enabled &&
+        transport != BluetoothTransportOption.CLASSIC_RFCOMM
+    private val boundaryListener: (Long) -> Unit = { _ -> rotatePresence() }
+    private val rotating = AtomicBoolean(false)
     private val linkLoadSaturatedByChild = AtomicBoolean(false)
     @Volatile private var activeLinkLoad: NodeLinkLoad.Handle? = null
 
@@ -98,7 +112,39 @@ class ReceiverStreamForwarder(
         require(streamToken != 0) { "A forwarded stream needs its discovery token" }
     }
 
-    fun start() = startPresence()
+    fun start() {
+        if (rotateOnBoundary) RotatingDiscovery.addBoundaryListener(boundaryListener)
+        startPresence()
+    }
+
+    /**
+     * Rotating IDs (RV6, RV12): a boundary stops the offer, the viewer-request scan and the title pages,
+     * stays silent for 1-8 s and starts them again on new sets with the new role-1 RDI. A forwarder with a
+     * child advertises nothing, and its child link does not depend on any set. One rotation at a time.
+     */
+    private fun rotatePresence() {
+        if (closed.get() || terminalSeen.get() || core.hasChild()) return
+        if (!rotating.compareAndSet(false, true)) return
+        thread(name = "ForwarderIdRotation") {
+            try {
+                stopPresence()
+                Thread.sleep(RotatingDiscovery.boundarySilenceMs())
+                // A start that began before the boundary may still be running and may publish a set of the old
+                // epoch: let it finish, close whatever it left, then start on the new epoch.
+                var waitedMs = 0
+                while (connecting.get() && waitedMs < 5_000 && !closed.get()) {
+                    Thread.sleep(100)
+                    waitedMs += 100
+                }
+                stopPresence()
+                startPresence()
+                if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK rotid_restart: role=stream_forwarder")
+            } catch (_: InterruptedException) {
+            } finally {
+                rotating.set(false)
+            }
+        }
+    }
 
     fun onEnvelope(envelope: MeshEnvelope): RelayResult {
         val result = core.receive(envelope)
@@ -130,7 +176,7 @@ class ReceiverStreamForwarder(
         thread(name = "ReceiverNodePresence") {
             try {
                 if (closed.get() || terminalSeen.get() || core.hasChild()) return@thread
-                val announcement = DiscoveryAnnouncement(
+                val baseAnnouncement = DiscoveryAnnouncement(
                     nodeIdPrefix = identity.nodeId.toByteArray()
                         .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES),
                     flags = DiscoveryAnnouncement.FLAG_STREAM_AVAILABLE or
@@ -144,6 +190,23 @@ class ReceiverStreamForwarder(
                     streamFps = header.fps,
                     streamBitrateKbps = streamBitrateKbps,
                 )
+                // Rotating IDs: a version 5 offer with the role-1 RDI (version 2 only inside a Visible-by-handle
+                // window); the route token follows the advertised bytes and the previous one keeps its grace.
+                val announcement = if (rotateOnBoundary && !RotatingDiscovery.visibleByHandle()) {
+                    RotatingStreamAnnouncements.streamOffer(
+                        baseAnnouncement,
+                        RotatingDiscovery.advertise(RotatingDiscoveryIds.ROLE_STREAM_OFFER),
+                        logicalStreamToken,
+                    )
+                } else if (rotateOnBoundary) {
+                    baseAnnouncement.copy(
+                        streamToken = StreamRouteToken.forAdvertiser(logicalStreamToken, baseAnnouncement.nodeIdPrefix),
+                    )
+                } else {
+                    baseAnnouncement
+                }
+                downstreamStreamToken = announcement.streamToken
+                if (rotateOnBoundary) requestTokens.advance(logicalStreamToken, announcement.streamToken, android.os.SystemClock.elapsedRealtime())
                 Log.i(
                     "BluetoothVideo",
                     "Relay route tokens: upstream=${streamToken.toUInt().toString(16)}, " +
@@ -161,7 +224,15 @@ class ReceiverStreamForwarder(
                     newAdvertiser.close()
                     return@thread
                 }
-                advertiser = newAdvertiser
+                synchronized(stateLock) {
+                    // Never overwrite a live set: an overlapping start would leak it (and its scanner).
+                    advertiser?.close()
+                    discovery?.close()
+                    titleAdvertiser?.close()
+                    discovery = null
+                    titleAdvertiser = null
+                    advertiser = newAdvertiser
+                }
                 lateinit var newDiscovery: BleL2capDiscovery
                 newDiscovery = BleL2capDiscovery(
                     adapter,
@@ -181,7 +252,9 @@ class ReceiverStreamForwarder(
                     },
                     { value ->
                         val transportMatches = value.transportOption() == transport
-                        value.isViewerRequest(downstreamStreamToken) && transportMatches
+                        value.flags and DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS != 0 &&
+                            requestTokens.accepts(value.streamToken, android.os.SystemClock.elapsedRealtime()) &&
+                            transportMatches
                     },
                     scanDurationMs = 0L,
                     reportDuplicates = true,
@@ -191,6 +264,7 @@ class ReceiverStreamForwarder(
                     // balanced scanning still sees the child's continuous request advertisement.
                     continuousLowLatency = false,
                     startLowLatency = false,
+                    acceptRotating = rotateOnBoundary,
                 )
                 discovery = newDiscovery
                 newDiscovery.start()
@@ -198,7 +272,7 @@ class ReceiverStreamForwarder(
                 // start never delays it). Kept only while this presence is still current: a child,
                 // close or restart during the blocking start would otherwise leak a running set.
                 verifiedTitle()?.let { title ->
-                    runCatching { TitleAdvertiser(adapter, downstreamStreamToken, title) }.getOrNull()?.let { pages ->
+                    runCatching { TitleAdvertiser(adapter, downstreamStreamToken, title, selfRotate = false) }.getOrNull()?.let { pages ->
                         if (pages.start() == android.bluetooth.le.AdvertisingSetCallback.ADVERTISE_SUCCESS) {
                             val kept = synchronized(stateLock) {
                                 (advertiser === newAdvertiser && !closed.get()).also { current ->
@@ -228,6 +302,7 @@ class ReceiverStreamForwarder(
     }
 
     private fun stopPresence() {
+        if (rotateOnBoundary) RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_STREAM_OFFER)
         synchronized(stateLock) {
             discovery?.close()
             discovery = null
@@ -248,6 +323,8 @@ class ReceiverStreamForwarder(
         val writerThread = thread(start = false, name = "ReceiverNodeChildConnect") {
             var attemptPhy: BlePhyPreference? = null
             var hopAuthenticated = false
+            val stalled = AtomicBoolean(false)
+            var stallGuard: RelayChildStallGuard? = null
             var pending: ChildConnection? = null
             var pendingSocket: BluetoothSocket? = null
             var pendingGatt: GattVideoConnection? = null
@@ -318,21 +395,91 @@ class ReceiverStreamForwarder(
                 }
                 pendingGatt = gatt
                 DebugTunables.forwarderChildIntervalUnits?.let { LeChildInterval.requestLater(device.address, it) }
-                val rawInput = gatt?.inputStream ?: socket?.inputStream
+                val linkInput = gatt?.inputStream ?: socket?.inputStream
                     ?: error("Downstream Bluetooth input is unavailable")
+                // Relay child stall guard (LE only): see RelayChildStallGuard.
+                val guard = if (DebugTunables.relayChildStallGuard && transport != BluetoothTransportOption.CLASSIC_RFCOMM) {
+                    RelayChildStallGuard(android.os.SystemClock.elapsedRealtime())
+                } else {
+                    null
+                }
+                stallGuard = guard
+                val rawInput = guard?.let { watched ->
+                    ProgressInputStream(linkInput) { watched.onProgress(android.os.SystemClock.elapsedRealtime()) }
+                } ?: linkInput
+                guard?.let { watch ->
+                    thread(name = "ReceiverNodeChildStallGuard", isDaemon = true) {
+                        try {
+                            while (watch.isOpen() && !closed.get() && !terminalSeen.get()) {
+                                Thread.sleep(RelayChildStallGuard.POLL_MS)
+                                val silentMs = watch.stalledFor(android.os.SystemClock.elapsedRealtime()) ?: continue
+                                stalled.set(true)
+                                Log.i(
+                                    "BluetoothVideo",
+                                    "BENCHMARK relay_child_stall: child=${AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix)} | " +
+                                        "transport=${transport.shortLabel} | stage=${if (hopAuthenticated) "e2e" else "hop"} | " +
+                                        "silentMs=$silentMs | action=close",
+                                )
+                                onStatus("The next phone's link carried nothing for ${silentMs / 1_000.0} s; closing it to try again.")
+                                runCatching { pendingGatt?.close() }
+                                runCatching { pendingSocket?.close() }
+                                return@thread
+                            }
+                        } catch (interrupted: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                        }
+                    }
+                }
                 val rawOutput = gatt?.outputStream ?: socket?.mediaOutputStream()
                     ?: error("Downstream Bluetooth output is unavailable")
+                val childLinkCapabilities = StreamHopOpening.linkCapabilities(
+                    LocalNodeCapabilities.forTransport(transport, maxChildren = 1),
+                    RotatingDiscoveryFeature.enabled,
+                    transport,
+                )
                 val secure = classicSecure ?: SecureBluetoothHandshake.initiate(
                     BufferedInputStream(rawInput, ioConfig.bufferBytes),
                     BufferedOutputStream(rawOutput, ioConfig.bufferBytes),
                     identity,
-                    LocalNodeCapabilities.forTransport(transport, maxChildren = 1),
+                    childLinkCapabilities,
                 )
-                require(
-                    secure.peerNodeId.toByteArray()
-                        .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES)
-                        .contentEquals(peer.announcement.nodeIdPrefix),
-                ) { "Downstream identity changed between discovery and connection" }
+                if (peer.announcement.rotating) {
+                    // RV15: the child's version 5 viewer request must open for the link node (role 2). This
+                    // forwarder is the connector and sends its pinned role-1 entries.
+                    val opening = LinkOpeningExchange.exchange(
+                        secure,
+                        childLinkCapabilities,
+                        RotatingDiscovery.pinned(RotatingDiscoveryIds.ROLE_STREAM_OFFER),
+                    )
+                    val result = StreamHopOpening.check(
+                        peer.announcement,
+                        RotatingDiscoveryIds.ROLE_VIEWER_REQUEST,
+                        secure.peerNodeId,
+                        opening,
+                    )
+                    Log.i(
+                        "BluetoothVideo",
+                        (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "rotid_open: role=viewer | result=$result",
+                    )
+                    require(result == DiscoverySelectionCheck.Result.PASS) {
+                        "Downstream identity changed between discovery and connection"
+                    }
+                } else {
+                    if (RotatingDiscoveryFeature.enabled && transport != BluetoothTransportOption.CLASSIC_RFCOMM) {
+                        // Both hellos may carry bit 3: the first record each way is a BDO1, read and ignored
+                        // (the selected request is version 2, so the prefix check below applies).
+                        LinkOpeningExchange.exchange(
+                            secure,
+                            childLinkCapabilities,
+                            RotatingDiscovery.pinned(RotatingDiscoveryIds.ROLE_STREAM_OFFER),
+                        )
+                    }
+                    require(
+                        secure.peerNodeId.toByteArray()
+                            .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES)
+                            .contentEquals(peer.announcement.nodeIdPrefix),
+                    ) { "Downstream identity changed between discovery and connection" }
+                }
                 hopAuthenticated = true
                 RelayChildEstablishment.tracker.onSuccess(AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix))
                 AdaptivePhyMemory.bind(device.address, transport, secure.peerNodeId.shortLabel())
@@ -348,6 +495,15 @@ class ReceiverStreamForwarder(
                 )
                 require(endpoint.peerNodeId == secure.peerNodeId) {
                     "Downstream link and media identities do not match"
+                }
+                guard?.let { done ->
+                    done.complete(android.os.SystemClock.elapsedRealtime())
+                    Log.i(
+                        "BluetoothVideo",
+                        "BENCHMARK relay_child_stall: child=${AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix)} | " +
+                            "transport=${transport.shortLabel} | result=ok | handshakeMs=${done.handshakeMs()} | " +
+                            "maxSilentMs=${done.maxSilentMs()}",
+                    )
                 }
                 require(endpoint.peerCapabilities.decodeCodecMask and codecCapabilityMask(header.codecId) != 0) {
                     "Downstream child cannot decode this stream"
@@ -367,10 +523,37 @@ class ReceiverStreamForwarder(
                     LabelRecords.write(secure.writer, endpoint.sealer, provider())
                 }
                 secure.writer.flush()
+                // test_relay_upstream_dck (default off): a child that can relay gets DCK instead of HIGH on this
+                // link, so its own HIGH child link has two events per event of this one.
+                val childCanRelayLink = endpoint.peerCapabilities.maxChildren > 0
+                val linkPriority = relayUpstreamPriority(
+                    planned = gattPriority,
+                    childCanRelay = childCanRelayLink,
+                    sdkInt = android.os.Build.VERSION.SDK_INT,
+                    enabled = DebugTunables.relayUpstreamDck,
+                )
                 gatt?.let { connection ->
                     onStatus(
-                        "Downstream GATT ${gattPriority.label} priority retry " +
-                            if (connection.requestConnectionPriority(gattPriority)) "queued" else "failed",
+                        "Downstream GATT ${linkPriority.label} priority retry " +
+                            if (connection.requestConnectionPriority(linkPriority)) "queued" else "failed",
+                    )
+                }
+                if (DebugTunables.relayUpstreamDck) {
+                    val cocPlanned = DebugTunables.forwarderCocPriority ?: BleConnectionPriority.HIGH
+                    val cocPriority = relayUpstreamPriority(
+                        cocPlanned,
+                        childCanRelayLink,
+                        android.os.Build.VERSION.SDK_INT,
+                        enabled = true,
+                    )
+                    val cocQueued = control != null && cocPriority != cocPlanned &&
+                        control.requestConnectionPriority(cocPriority)
+                    Log.i(
+                        "BluetoothVideo",
+                        "BENCHMARK relay_upstream_priority: role=relay | transport=${transport.shortLabel} | " +
+                            "childCanRelay=$childCanRelayLink | priority=" +
+                            "${if (gatt != null) linkPriority.label else cocPriority.label}" +
+                            if (control != null) " | queued=$cocQueued" else "",
                     )
                 }
                 val connection = ChildConnection(
@@ -435,6 +618,10 @@ class ReceiverStreamForwarder(
                 var bytesWritten = 0L
                 val deliveredBytes = AtomicLong(0)
                 val starvation = RelayChildStarvation()
+                val paceHeadOnly = DebugTunables.relayPaceHeadOnly
+                var paceHeldNs = 0L
+                var paceExemptWrites = 0L
+                var paceExemptWaitNs = 0L
                 val linkLoad = NodeLinkLoad.open(transport, LinkDirection.SEND).also { activeLinkLoad = it }
                 // The writer judges the child only after a write returns, and a write into a stalled
                 // link can block for many seconds (mesh4-7a6c401c 0001: ASUS -> M31 CoC at 8 kbps was
@@ -531,12 +718,21 @@ class ReceiverStreamForwarder(
                 }
                 try {
                     while (!closed.get() && child === connection) {
-                        // Audio is never held for link credit.
-                        while (!closed.get() && !core.hasQueuedAudio(endpoint.peerNodeId)) {
-                            val waitNs = connection.pacer.waitNs()
-                            if (waitNs <= 0L) break
-                            val sliceNs = minOf(waitNs, 5_000_000L)
-                            Thread.sleep(sliceNs / 1_000_000L, (sliceNs % 1_000_000L).toInt())
+                        // Audio is never held for link credit. The child queue is strictly ordered, so a
+                        // video record ahead of queued audio is paced like any other (relayPaceHeadOnly);
+                        // the earlier any-audio-queued test skipped the pacer for the whole backlog.
+                        val credit = awaitLinkCredit(
+                            connection.pacer,
+                            audioExempt = {
+                                if (paceHeadOnly) core.headIsAudio(endpoint.peerNodeId)
+                                else core.hasQueuedAudio(endpoint.peerNodeId)
+                            },
+                            running = { !closed.get() },
+                        )
+                        paceHeldNs += credit.sleptNs
+                        if (credit.exemptedWaitNs > 0L) {
+                            paceExemptWrites++
+                            paceExemptWaitNs += credit.exemptedWaitNs
                         }
                         val envelope = core.take(endpoint.peerNodeId) ?: break
                         if (envelope.sequence <= lastSequence) continue
@@ -597,6 +793,21 @@ class ReceiverStreamForwarder(
                                         "peer=${endpoint.peerNodeId.shortLabel()} | backlogMs=$backlogAgeMs | $summary",
                                 )
                             }
+                            if (BuildConfig.DEBUG) {
+                                val pacer = connection.pacer
+                                Log.i(
+                                    "BluetoothVideo",
+                                    "BENCHMARK relay_pacing: headOnly=$paceHeadOnly | leadCap=${DebugTunables.relayPaceLeadCap} | " +
+                                        "capMs=${pacer.leadCapMs()} | paceKbps=${pacer.bytesPerSecond * 8 / 1_000} | " +
+                                        "measured=${pacer.measured} | paceLeadMs=${pacer.paceLeadMs()} | " +
+                                        "modelLeadMs=${pacer.modelLeadMs()} | childLate=${connection.linkLate} | " +
+                                        "heldMs=${paceHeldNs / 1_000_000L} | exemptWrites=$paceExemptWrites | " +
+                                        "exemptWaitMs=${paceExemptWaitNs / 1_000_000L} | backlogMs=$backlogAgeMs",
+                                )
+                                paceHeldNs = 0L
+                                paceExemptWrites = 0L
+                                paceExemptWaitNs = 0L
+                            }
                             lastMetricsNs = nowNs
                         }
                         if (terminal) {
@@ -632,7 +843,8 @@ class ReceiverStreamForwarder(
             } catch (error: Exception) {
                 if (!closed.get() && !terminalSeen.get()) {
                     if (DebugTunables.relayEstablishFallback &&
-                        isRelayEstablishmentFailure(hopAuthenticated, error.message)
+                        (isRelayEstablishmentFailure(hopAuthenticated, error.message) ||
+                            isRelayStallEstablishmentFailure(stalled.get(), hopAuthenticated))
                     ) {
                         val childKey = AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix)
                         if (RelayChildEstablishment.tracker.onFailure(childKey, android.os.SystemClock.elapsedRealtime())) {
@@ -664,6 +876,8 @@ class ReceiverStreamForwarder(
                     )
                 }
             } finally {
+                // A failed attempt must not leave its watchdog polling a link that is already closed.
+                stallGuard?.complete(android.os.SystemClock.elapsedRealtime())
                 reanchorClosedChild.set(false)
                 pending?.let(::removeChild)
                 runCatching { pendingGatt?.close() }
@@ -742,6 +956,8 @@ class ReceiverStreamForwarder(
                             SecureLinkControlProtocol.requireHeartbeat(record)?.takeUnless { it.deliveryOnly }?.let { report ->
                                 // The child's own link is late: capacity evidence for this relay only.
                                 if (report.linkLate) linkLoadSaturatedByChild.set(true)
+                                connection.linkLate = report.linkLate
+                                connection.pacer.setLeadCapNs(relayLeadCapNs(DebugTunables.relayPaceLeadCap, report.linkLate))
                                 core.setChildAddedDelayMs(connection.endpoint.peerNodeId, report.addedDelayMs)
                                 if (report.arrivalKbps > 0) {
                                     LinkCapacity.recordProbe(transport, report.arrivalKbps)
@@ -825,6 +1041,7 @@ class ReceiverStreamForwarder(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         RelayUpstream.exit()
+        if (rotateOnBoundary) RotatingDiscovery.removeBoundaryListener(boundaryListener)
         stopPresence()
         val activeChild = child
         activeChild?.let(::detachChild)
@@ -856,6 +1073,8 @@ class ReceiverStreamForwarder(
         val lastHeartbeatReceivedNs = AtomicLong(System.nanoTime())
         /** Paces this child link at the rate the child measured (see LinkPacer). */
         val pacer = LinkPacer()
+        /** The child's last full report said its playout is pinned at the maximum and media is still late. */
+        @Volatile var linkLate = false
         @Volatile var controlThread: Thread? = null
         @Volatile var heartbeatThread: Thread? = null
         private val closed = AtomicBoolean(false)
@@ -898,3 +1117,51 @@ class ReceiverStreamForwarder(
  */
 internal fun relayChildSetupRetriesOn1M(guardOn: Boolean, attemptPhy: BlePhyPreference?, hopAuthenticated: Boolean): Boolean =
     guardOn && !hopAuthenticated && attemptPhy == BlePhyPreference.TWO_M
+
+/** Largest sleep slice while the child writer waits for link credit. */
+private const val PACE_SLICE_NS = 5_000_000L
+
+/**
+ * Experimental in-flight cap while the child reports late media (DebugTunables.relayPaceLeadCap): the
+ * relay keeps at most this much measured-rate link time ahead of the link. About four frames at
+ * 15 FPS and many connection events (15 ms each), so the link stays busy through a scheduling gap
+ * and the train meter keeps reading the link rate, but a fraction of the 400 ms the relay-child
+ * media-age budget sheds at, so the queue the shed reads is the delay the child sees (no 3-4 s of
+ * bytes hidden in the socket buffer).
+ */
+internal const val RELAY_PACE_LEAD_CAP_NS = 250_000_000L
+
+/** Lead cap for [LinkPacer.setLeadCapNs]: set only while the experiment is on and the child reports late media. */
+internal fun relayLeadCapNs(enabled: Boolean, childLate: Boolean): Long =
+    if (enabled && childLate) RELAY_PACE_LEAD_CAP_NS else 0L
+
+/** Result of [awaitLinkCredit]. */
+internal class LinkCreditWait(
+    /** Time the writer slept for the pacer. */
+    val sleptNs: Long,
+    /** The pacer would have held the writer this long, but the next record is exempt (audio). */
+    val exemptedWaitNs: Long,
+)
+
+/**
+ * Waits for the child link's pacer before the writer takes its next record. Audio is never held for
+ * credit, so the wait ends at once when the next record is audio ([audioExempt] is read again every
+ * slice, because audio can arrive at the head of an empty queue meanwhile).
+ */
+internal fun awaitLinkCredit(
+    pacer: LinkPacer,
+    audioExempt: () -> Boolean,
+    running: () -> Boolean,
+    sleepNs: (Long) -> Unit = { ns -> Thread.sleep(ns / 1_000_000L, (ns % 1_000_000L).toInt()) },
+): LinkCreditWait {
+    var sleptNs = 0L
+    while (running()) {
+        val waitNs = pacer.waitNs()
+        if (waitNs <= 0L) return LinkCreditWait(sleptNs, 0L)
+        if (audioExempt()) return LinkCreditWait(sleptNs, waitNs)
+        val sliceNs = minOf(waitNs, PACE_SLICE_NS)
+        sleepNs(sliceNs)
+        sleptNs += sliceNs
+    }
+    return LinkCreditWait(sleptNs, 0L)
+}

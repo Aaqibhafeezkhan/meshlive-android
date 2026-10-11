@@ -20,10 +20,10 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 
 /**
- * Experimental store-and-forward messages (PLAN Design A v1), off by default. Same rule as the
- * other experiments: a DEBUG benchmark launch (any `test_` extra) uses only its own
- * `test_store_forward` extra; otherwise the Advanced setting applies, and only while Advanced
- * settings are on. Off: no Messages entry, no hop type 11 accepted anywhere, no change to calls.
+ * Store-and-forward Messages (PLAN Design A v1, direct neighbours only). Promoted 2026-10-11 to the
+ * Settings > Features switch "Messages"; the shipped default is [CallFeatureDefaults.MESSAGES]. A DEBUG
+ * benchmark launch (any `test_` extra) uses only its own `test_store_forward` extra, default off.
+ * Off: no Messages entry, no hop type 11 accepted anywhere, no change to calls.
  */
 object StoreForwardFeature {
     const val EXTRA = "test_store_forward"
@@ -31,16 +31,11 @@ object StoreForwardFeature {
 
     @Volatile var enabled = false
 
-    fun resolve(
+    internal fun resolve(
         benchmarkLaunch: Boolean,
         extra: (String) -> Boolean,
-        advancedSettings: Boolean,
-        stored: (String) -> Boolean,
-    ): Boolean = when {
-        benchmarkLaunch -> extra(EXTRA)
-        advancedSettings -> stored(PREF)
-        else -> false
-    }
+        stored: (String) -> Boolean?,
+    ): Boolean = CallFeatureResolver.enabled(CallFeature.MESSAGES, benchmarkLaunch, extra, stored)
 }
 
 /**

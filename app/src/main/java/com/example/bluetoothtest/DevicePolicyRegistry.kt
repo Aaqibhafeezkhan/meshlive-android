@@ -795,7 +795,8 @@ internal object DevicePolicyRegistry {
             BluetoothTransportPolicy.entries +
             BackgroundPolicy.entries +
             MemoryThermalPolicy.entries +
-            NativeCompat.policyEntries
+            NativeCompat.policyEntries +
+            PeerLabelPolicy.entries
     }
 
     private fun proposal(

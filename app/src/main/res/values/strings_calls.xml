@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Features for calls (CallFeatureSettings.kt, settings_features_calls.xml) and call-screen notices. -->
+<resources>
+    <string name="settings_section_features">Features</string>
+    <string name="feature_benchmark_note">This is a benchmark launch. These switches show the launch options and cannot be changed.</string>
+
+    <string name="feature_voice_calls">Voice calls</string>
+    <string name="feature_voice_calls_description">Call someone without video, and add video during the call. A voice call plays from the earpiece. Someone on an older version of the app answers with their camera on.</string>
+
+    <string name="feature_ringback">Ringing sound while calling</string>
+    <string name="feature_ringback_description">Hear a ringing tone while the other phone rings.</string>
+
+    <string name="feature_ear_camera_pause">Pause video at the ear</string>
+    <string name="feature_ear_camera_pause_description">In a video call with sound on the earpiece, stop sending your camera while the phone is held to your ear.</string>
+
+    <string name="feature_lock_screen_calls">Calls on the lock screen</string>
+    <string name="feature_lock_screen_calls_description">An incoming call turns the screen on and appears over the lock screen. The caller\'s name stays hidden until you unlock, unless you allow it below.</string>
+    <string name="feature_full_screen_needed">Android needs your permission to show call alerts over the lock screen.</string>
+    <string name="feature_full_screen_open">Open Android settings</string>
+
+    <string name="feature_call_notifications">Answer and decline from notifications</string>
+    <string name="feature_call_notifications_description">Incoming and ongoing calls show Answer, Decline and Hang up buttons in the notification.</string>
+
+    <string name="feature_lock_screen_names">Show caller names on the lock screen</string>
+    <string name="feature_lock_screen_names_description">Off: a locked phone shows only “Incoming call”. Anyone who can see your screen can read a name shown here.</string>
+
+    <string name="feature_messages">Messages</string>
+    <string name="feature_messages_description">Send text, voice notes and photos to a contact. They travel when your two phones meet, and expire after the lifetime you choose.</string>
+
+    <string name="feature_auto_sync">Sync messages automatically</string>
+    <string name="feature_auto_sync_description">When a contact comes into range, exchange messages without a tap. Needs Messages.</string>
+
+    <string name="feature_names">Names and titles</string>
+    <string name="feature_names_description">Add an optional name to your ID, a subject to calls and a title to your live video. A stream title can be seen by anyone nearby before they join.</string>
+
+    <!-- Call screen -->
+    <string name="call_peer_no_voice">%1$s\'s app does not support voice calls, so it started its camera. You can turn on your video too.</string>
+    <string name="call_name_hidden_locked">Encrypted call</string>
+    <string name="call_name_hidden_locked_hint">Unlock to see who is calling.</string>
+    <string name="call_incoming_lookalike">Looks like your contact %1$s. Check the ID before you answer.</string>
+    <!-- Hold Mute to talk (TalkBack) -->
+    <string name="call_talk_action">Talk</string>
+    <string name="call_muted_again">Muted</string>
+    <string name="call_unmute_description">Unmute your microphone. Touch and hold to talk while you hold. With a screen reader, use the Talk action to start and stop talking.</string>
+    <string name="call_mute_description">Mute your microphone</string>
+</resources>

@@ -62,6 +62,11 @@ class VideoStreamDecoder(
      * first frame is fed and released at once instead of at its playout target. False: unchanged.
      */
     private val presentFirstFrameImmediately: Boolean = false,
+    /**
+     * Experimental viewer frame age (null = off): the source timestamp of each frame the codec
+     * rendered to the surface. Called on the codec worker thread; it must only record.
+     */
+    private val onFrameRendered: ((Long) -> Unit)? = null,
 ) : Closeable {
     private val running = AtomicBoolean(true)
     private val debugStageTrace = DebugStageTrace.startIfRequested(debugTraceSession, "video_decoder")
@@ -317,6 +322,7 @@ class VideoStreamDecoder(
             }
             lastRenderedAtNs = renderedAtNs
             actuallyRenderedFrames.incrementAndGet()
+            onFrameRendered?.invoke(presentationTimeUs)
             val recoveryPtsUs = recoveryPresentationTimeUs.get()
             if (recoveryPtsUs != Long.MAX_VALUE && presentationTimeUs >= recoveryPtsUs &&
                 recovering.compareAndSet(true, false)

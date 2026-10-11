@@ -24,6 +24,12 @@ enum class EndToEndContentType(val wireValue: Int) {
 
     /** Experimental peer labels (PeerLabelFeature): one `BLB1` container; only after both endpoint hellos set bit 5. */
     LABELS(10),
+
+    /**
+     * Experimental rotating discovery IDs (RotatingDiscovery): one `BDX1` container (OPENING, RECOGNITION_OFFER,
+     * PRESENCE_LEASE); only after both call endpoint hellos set bit 3 (0x08).
+     */
+    DISCOVERY(11),
 }
 
 enum class StreamLifecycleState(val wireValue: Int) {
@@ -117,6 +123,9 @@ class EndToEndContentSealer internal constructor(key: ByteArray) : Closeable {
         corruptNextRecord = true
     }
 
+    /** The forwarded-stream key this sealer's receiver passes on in its `BFG1` grant (recovery hint, RV18). */
+    internal fun copyKeyForForwarding(): ByteArray = key.copyOf()
+
     override fun close() = key.fill(0)
 }
 
@@ -136,11 +145,17 @@ class EndToEndContentOpener internal constructor(key: ByteArray) : Closeable {
      */
     @Volatile internal var acceptLabels = false
 
+    /**
+     * Experimental rotating discovery IDs: only a call endpoint that advertised hello bit 3 sets this.
+     * Every other opener rejects content type 11 exactly as an unknown type, as before.
+     */
+    @Volatile internal var acceptDiscovery = false
+
     internal fun copyKeyForForwarding(): ByteArray = key.copyOf()
 
     @Synchronized
     fun open(encoded: ByteArray): EndToEndContentRecord {
-        val metadata = EndToEndContentProtocol.inspect(encoded, acceptVideoFragments, acceptLabels)
+        val metadata = EndToEndContentProtocol.inspect(encoded, acceptVideoFragments, acceptLabels, acceptDiscovery)
         require(metadata.sequence >= nextSequence) {
             "Replayed or reordered end-to-end sequence ${metadata.sequence}; expected at least $nextSequence"
         }
@@ -186,6 +201,7 @@ object EndToEndContentProtocol {
         encoded: ByteArray,
         acceptVideoFragments: Boolean = false,
         acceptLabels: Boolean = false,
+        acceptDiscovery: Boolean = false,
     ): EndToEndContentMetadata {
         require(encoded.size >= HEADER_BYTES) { "Truncated end-to-end content" }
         val input = DataInputStream(ByteArrayInputStream(encoded, 0, HEADER_BYTES))
@@ -195,6 +211,7 @@ object EndToEndContentProtocol {
         val type = EndToEndContentType.entries.firstOrNull { it.wireValue == typeValue }
             ?.takeIf { it != EndToEndContentType.VIDEO_FRAGMENT || acceptVideoFragments }
             ?.takeIf { it != EndToEndContentType.LABELS || acceptLabels }
+            ?.takeIf { it != EndToEndContentType.DISCOVERY || acceptDiscovery }
             ?: error("Unknown end-to-end content type $typeValue")
         val sequence = input.readLong()
         require(sequence >= 0) { "Invalid end-to-end content sequence" }
@@ -218,10 +235,26 @@ data class EndToEndVideoSession(
     val opener: EndToEndContentOpener,
     /** Full SHA-256 fingerprint of the peer's authenticated identity key (PROTOCOL "Identity verification"). */
     val peerFingerprint: IdentityFingerprint,
+    /**
+     * BMH3 pseudonyms (PROTOCOL "Phase 2: pseudonymous stranger identities"): non-null when either end presented a
+     * throwaway key; it holds the reveal rules and, once the peer's reveal verified, the peer's real identity.
+     */
+    val reveal: Bmh3RevealSession? = null,
 ) : Closeable {
+    /** True while the peer is only a declared throwaway key: show "unverified stranger", never a node ID. */
+    val peerIsPseudonym: Boolean get() = reveal?.peerPseudonymous == true && reveal.revealed == null
+
+    /** The peer's real node ID once revealed, else the handshake's (a pseudonym's, or the real one for a contact). */
+    val effectivePeerNodeId: NodeId get() = reveal?.revealed?.nodeId ?: peerNodeId
+
+    /** The fingerprint [effectivePeerNodeId] corresponds to. */
+    val effectivePeerFingerprint: IdentityFingerprint
+        get() = reveal?.revealed?.let { IdentityFingerprint.fromPublicKey(it.spki) } ?: peerFingerprint
+
     override fun close() {
         sealer.close()
         opener.close()
+        reveal?.close()
     }
 }
 
@@ -399,11 +432,14 @@ class EndToEndStreamReader(
 }
 
 object EndToEndVideoHandshake {
+    /** [bmh3] null (default): BMH2, exactly as before; non-null: the experimental BMH3 end-to-end handshake. */
     fun initiate(
         link: SecureBluetoothSession,
         identity: SigningIdentity,
         capabilities: NodeCapabilities,
+        bmh3: Bmh3InitiatorOptions? = null,
     ): EndToEndVideoSession {
+        if (bmh3 != null) return Bmh3EndpointHandshake.initiate(link, identity, capabilities, bmh3)
         val pending = MeshHandshake.start(
             identity,
             HandshakeRole.INITIATOR,
@@ -417,14 +453,32 @@ object EndToEndVideoHandshake {
         return session(remote, keys)
     }
 
+    /**
+     * [bmh3] null (default): BMH2 only, a BMH3 first record is rejected as an invalid handshake message exactly
+     * as by an old build. Non-null: the first record's magic selects BMH3 or (when allowed) BMH2.
+     */
     fun respond(
         link: SecureBluetoothSession,
         identity: SigningIdentity,
         capabilities: NodeCapabilities,
         /** A first record the caller already read from [link] (experimental store-and-forward dispatch). */
         firstRecord: SecureRecord? = null,
+        bmh3: Bmh3ResponderOptions? = null,
     ): EndToEndVideoSession {
-        val remote = readHello(link, firstRecord)
+        val remote = if (bmh3 == null) {
+            readHello(link, firstRecord)
+        } else {
+            val record = firstRecord ?: link.reader.read()
+            require(record.type == SecureRecordType.END_TO_END_HANDSHAKE) { "Expected an end-to-end handshake" }
+            if (Bmh3Wire.isBmh3(record.payload)) {
+                return Bmh3EndpointHandshake.respond(link, record, identity, capabilities, bmh3)
+            }
+            if (!bmh3.acceptBmh2) {
+                bmh3.log("bmh3: event=refused_bmh2 | layer=endpoint")
+                throw Bmh3Failure("bmh2 refused")
+            }
+            HandshakeHelloCodec.decode(record.payload)
+        }
         require(remote.role == HandshakeRole.INITIATOR) { "Expected an end-to-end initiator" }
         val pending = MeshHandshake.start(
             identity,

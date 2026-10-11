@@ -1,22 +1,28 @@
 package com.example.bluetoothtest
 
 /**
- * Experimental intercom features (design decision 2026-10-09, product pillar 1), all off by default:
- * voice-only calls with per-direction video upgrade/downgrade, and push-to-talk within a call.
+ * Intercom features (design decision 2026-10-09, product pillar 1; promoted to a normal Settings >
+ * Features switch 2026-10-11): voice-only calls with per-direction video upgrade/downgrade, and
+ * push-to-talk within a call. The shipped default is [CallFeatureDefaults.VOICE_CALLS]; the user's
+ * switch and the DEBUG `test_voice_calls` extra override it.
  *
  * Voice calls add no wire value. They use the existing authenticated, ordered `BMC2` camera-state
- * signals (PROTOCOL "Experimental voice calls"): a voice caller sends Invite immediately followed by
+ * signals (PROTOCOL "Voice calls"): a voice caller sends Invite immediately followed by
  * Camera off, and a callee that answers as voice sends Accept followed by Camera off. A peer without
- * the feature (or with it switched off) already accepts Camera off at any call phase, so it simply
- * sees a video call whose caller has video off. Nothing here changes encryption, ordering,
- * hop-local control or admission.
+ * the feature (an older build, or the switch off) already accepts Camera off at any call phase, so
+ * it simply sees a video call whose caller has video off and answers with its own camera. Nothing
+ * here changes encryption, ordering, hop-local control or admission.
  */
 enum class CallType(val label: String) {
     VOICE("voice"),
     VIDEO("video"),
 }
 
-/** Effective experimental intercom switches. Push-to-talk mode implies the push-to-talk button. */
+/**
+ * Effective intercom switches. The hold-Mute-to-talk gesture is part of every call; the explicit
+ * push-to-talk button and PTT mode stay DEBUG launch extras only (DECISIONS: push-to-talk is not a
+ * mode), so a user session never has them.
+ */
 data class IntercomFeatureSettings(
     val voiceCalls: Boolean = false,
     val pushToTalk: Boolean = false,
@@ -34,29 +40,19 @@ data class IntercomFeatureSettings(
 
         /**
          * A DEBUG benchmark launch (any `test_` extra) uses only its own extras, default off, so a
-         * stored UI choice never leaks into a measured case (as for temporal layering). Otherwise the
-         * persisted Advanced settings apply, and only while Advanced settings are on.
+         * stored UI choice never leaks into a measured case. Otherwise the user's explicit voice-call
+         * choice applies, else [CallFeatureDefaults.VOICE_CALLS]. The push-to-talk button and PTT
+         * mode exist only as launch extras.
          */
         fun resolve(
             benchmarkLaunch: Boolean,
             extra: (String) -> Boolean,
-            advancedSettings: Boolean,
-            stored: (String) -> Boolean,
-        ): IntercomFeatureSettings = if (benchmarkLaunch) {
-            IntercomFeatureSettings(
-                voiceCalls = extra(EXTRA_VOICE_CALLS),
-                pushToTalk = extra(EXTRA_PUSH_TO_TALK),
-                pttMode = extra(EXTRA_PTT_MODE),
-            )
-        } else if (advancedSettings) {
-            IntercomFeatureSettings(
-                voiceCalls = stored(PREF_VOICE_CALLS),
-                pushToTalk = stored(PREF_PUSH_TO_TALK),
-                pttMode = stored(PREF_PTT_MODE),
-            )
-        } else {
-            IntercomFeatureSettings()
-        }
+            stored: (String) -> Boolean?,
+        ): IntercomFeatureSettings = IntercomFeatureSettings(
+            voiceCalls = CallFeatureResolver.enabled(CallFeature.VOICE_CALLS, benchmarkLaunch, extra, stored),
+            pushToTalk = benchmarkLaunch && extra(EXTRA_PUSH_TO_TALK),
+            pttMode = benchmarkLaunch && extra(EXTRA_PTT_MODE),
+        )
     }
 }
 
@@ -155,6 +151,16 @@ class CallLayoutState(callType: CallType) {
         private set
     private var remoteSignalled = false
 
+    /**
+     * True when the peer's first video frame arrived in a voice call before any Camera on/off signal.
+     * An app with voice calls signals its camera state right after Accept, so a bare video frame means
+     * the peer's app (an older build, or voice calls switched off) treats this as a video call and
+     * answered with its own camera. The call screen tells the caller once ([consumePeerLacksVoiceNotice]).
+     */
+    var peerLacksVoiceSupport = false
+        private set
+    private var peerLacksVoiceNoticed = false
+
     val layout: CallLayout
         get() = if (localVideo || remoteVideo) CallLayout.VIDEO else CallLayout.VOICE
 
@@ -168,7 +174,15 @@ class CallLayoutState(callType: CallType) {
 
     fun onRemoteFrame(): Boolean {
         if (remoteSignalled || remoteVideo) return false
+        peerLacksVoiceSupport = true
         return update { remoteVideo = true }
+    }
+
+    /** True once, the first time [peerLacksVoiceSupport] is set. */
+    fun consumePeerLacksVoiceNotice(): Boolean {
+        if (!peerLacksVoiceSupport || peerLacksVoiceNoticed) return false
+        peerLacksVoiceNoticed = true
+        return true
     }
 
     private inline fun update(change: () -> Unit): Boolean {

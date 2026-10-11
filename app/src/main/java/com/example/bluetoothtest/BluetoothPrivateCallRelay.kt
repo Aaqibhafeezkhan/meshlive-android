@@ -33,6 +33,23 @@ class BluetoothPrivateCallRelay(
         override fun close() = closeConnection()
     }
 
+    /**
+     * Experimental relayed calls: the parent link of an on-demand relay, already authenticated by the
+     * call endpoint that accepted it (the caller or the previous relay, SETUP read). This relay closes
+     * it when the call ends, exactly like the parent connection it accepts itself in [start].
+     */
+    internal class OnDemandParent(
+        val session: SecureBluetoothSession,
+        val closeConnection: () -> Unit,
+        val phySummary: () -> String = { "" },
+    )
+
+    /** Relayed calls only: tears the chain down when the caller never completes the call setup. */
+    @Volatile private var chainGuard: RelayChainGuard? = null
+
+    /** Set by close(): a relay closed before it started never starts (relayed calls, on-demand mode). */
+    @Volatile private var cancelled = false
+
     /** PHY this relay requested on its callee hop (it is central there); 2M unless remembered bad. */
     @Volatile private var calleeLinkPhy: BlePhyPreference = BlePhyPreference.TWO_M
     /** System.nanoTime when both hops authenticated and forwarding started (0 = not yet). */
@@ -88,7 +105,31 @@ class BluetoothPrivateCallRelay(
                     LocalNodeCapabilities.forTransport(transport, maxChildren = 1),
                     chainEnabled,
                 )
+                // Rotating IDs, phase 1b: the hello toward the child also signs link bit 3 (the parent-facing hello
+                // never does: a relay cannot open the callee's ID), and a cost-0 version 5 callee must open the RDI
+                // this relay mirrors, over its link BDO1 (this relay is the connector and sends none).
+                val rotatingOffer = callee.announcement.rotating && RotatingDiscoveryFeature.enabled &&
+                    transport != BluetoothTransportOption.CLASSIC_RFCOMM
+                val childCapabilities = if (rotatingOffer) {
+                    capabilities.copy(transportMask = capabilities.transportMask or RotatingDiscoveryIds.LINK_HELLO_BIT)
+                } else {
+                    capabilities
+                }
                 val checkChild = { session: SecureBluetoothSession ->
+                    val opensOffer = rotatingOffer && callee.announcement.routeCost == 0 && run {
+                        val opening = LinkOpeningExchange.exchange(session, childCapabilities, emptyList())
+                        val result = DiscoverySelectionCheck.check(
+                            callee.announcement,
+                            RotatingDiscoveryIds.ROLE_CALL_OFFER,
+                            session.peerNodeId.toByteArray(),
+                            opening,
+                        )
+                        android.util.Log.i(
+                            "BluetoothVideo",
+                            (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "rotid_open: role=call_relay_child | result=$result",
+                        )
+                        result == DiscoverySelectionCheck.Result.PASS
+                    }
                     PrivateCallRelayChain.childProblem(
                         callee.announcement,
                         session.peerNodeId.toByteArray(),
@@ -96,6 +137,7 @@ class BluetoothPrivateCallRelay(
                         localNodeId,
                         chainEnabled,
                         session.peerCapabilities.transportMask,
+                        openingOpensOffer = opensOffer,
                     )?.let { problem -> throw IllegalArgumentException(problem) }
                     Unit
                 }
@@ -119,7 +161,9 @@ class BluetoothPrivateCallRelay(
                     )
                     val connection = connectCallee(context, callee.device, transport)
                     downstream = connection
-                    connection to authenticateCallee(connection, identity, capabilities, checkChild).also { session ->
+                    connection to authenticateCallee(
+                        connection, identity, childCapabilities, checkChild, context, callee.announcement,
+                    ).also { session ->
                         AdaptivePhyMemory.bind(
                             runCatching { callee.device.address }.getOrNull(),
                             transport,
@@ -152,6 +196,8 @@ class BluetoothPrivateCallRelay(
                     BufferedOutputStream(callerConnection.output, BUFFER_BYTES),
                     identity,
                     capabilities,
+                    // Experimental hidden identities (BMH3): null while the switch is off, BMH2 exactly as before.
+                    bmh3 = Bmh3Wiring.responder(emptyList(), identity.nodeId.toByteArray()),
                 )
                 upstreamSession = callerSession
                 require(callerSession.peerCapabilities.transportMask and transport.capabilityMask != 0) {
@@ -191,6 +237,300 @@ class BluetoothPrivateCallRelay(
         }
     }
 
+    /**
+     * Experimental relayed calls (PLAN Design C): serves a SETUP that the call endpoint read from its
+     * parent. Connects to the next hop as central (the target itself when [nextBudget] is 0, else another
+     * helper that receives a regenerated SETUP), then reports READY upstream through [onReady] and
+     * copies the ordered end-to-end records exactly as [start] does. [onFailed] runs once, only before
+     * READY, with the reason for the FAIL reply; afterwards a failure just closes both links.
+     * The hop admission is the existing chain admission ([PrivateCallRelayChain.childProblem] and
+     * [PrivateCallRelayChain.parentProblem]). One absolute deadline ([remainingMs]) covers connect,
+     * authentication and the next hop's answer: when it passes without a reply, FAIL(timeout) goes upstream
+     * and both links close, whatever the next hop is doing (a hop that never answers its hello cannot hold
+     * this phone).
+     */
+    @SuppressLint("MissingPermission")
+    internal fun startOnDemand(
+        context: Context,
+        adapter: BluetoothAdapter,
+        child: BleL2capPeer,
+        transport: BluetoothTransportOption,
+        parent: OnDemandParent,
+        target: ByteArray,
+        nextBudget: Int,
+        /** The prefix of the helper offer selected as next hop (nextBudget > 0); its link identity must equal it. */
+        hopPrefix: ByteArray?,
+        remainingMs: Int,
+        onReady: (relays: Int) -> Unit,
+        onFailed: (RelaySetupFailure) -> Unit,
+        /** Rotating IDs + relayed calls: [target] and [hopPrefix] are role-0 RDIs, checked over a link `BDO1`; SETUP message 4. */
+        rotating: Boolean = false,
+    ) {
+        // Cancellation is terminal: a close() that arrived before this start (the endpoint closed in between)
+        // must not be undone by the start.
+        if (cancelled) {
+            runCatching { onFailed(RelaySetupFailure.REFUSED) }
+            onStopped()
+            return
+        }
+        check(running.compareAndSet(false, true)) { "Private-call relay is already running" }
+        if (cancelled) {
+            running.set(false)
+            runCatching { onFailed(RelaySetupFailure.REFUSED) }
+            onStopped()
+            return
+        }
+        callRelayTransport = transport
+        val replied = AtomicBoolean(false)
+        val replyReady = { relays: Int -> if (replied.compareAndSet(false, true)) onReady(relays) }
+        val replyFailed = { reason: RelaySetupFailure -> if (replied.compareAndSet(false, true)) onFailed(reason) }
+        val deadline = thread(name = "BluetoothPrivateCallRelayDeadline", isDaemon = true) {
+            try {
+                Thread.sleep(remainingMs.toLong())
+            } catch (_: InterruptedException) {
+                return@thread
+            }
+            if (!replied.get()) {
+                runCatching { replyFailed(RelaySetupFailure.TIMEOUT) }
+                onStatus("Private-call relay setup missed its deadline")
+                close()
+            }
+        }
+        worker = thread(name = "BluetoothPrivateCallRelayOnDemand") {
+            var stage = OnDemandStage.CONNECTING
+            try {
+                require(transport != BluetoothTransportOption.CLASSIC_RFCOMM) { "Classic is not relayed on demand" }
+                require(child.announcement.transportOption() == transport) {
+                    "Next hop is not using ${transport.shortLabel}"
+                }
+                val startedNs = System.nanoTime()
+                val identity = AndroidNodeIdentityStore().getOrCreate()
+                val localNodeId = identity.nodeId.toByteArray()
+                val capabilities = RelayedCalls.linkCapabilities(
+                    PrivateCallRelayChain.relayCapabilities(
+                        LocalNodeCapabilities.forTransport(transport, maxChildren = 1),
+                        chainEnabled = true,
+                    ),
+                    featureOn = true,
+                    helperActive = true,
+                )
+                val rotatingHop = rotating && RotatingDiscoveryFeature.enabled
+                val childCapabilities = if (rotatingHop) {
+                    capabilities.copy(transportMask = capabilities.transportMask or RotatingDiscoveryIds.LINK_HELLO_BIT)
+                } else {
+                    capabilities
+                }
+                val checkChild = { session: SecureBluetoothSession ->
+                    // Rotating hop: this relay is the connector (count 0) and the next hop's link BDO1 must open the
+                    // ID this relay selected: the next helper's offer, or the target's own offer for the last hop.
+                    val openedSelected = rotatingHop && run {
+                        val opening = LinkOpeningExchange.exchange(session, childCapabilities, emptyList())
+                        val expected = if (nextBudget > 0) {
+                            RelayedCalls.helperOfferFor(requireNotNull(hopPrefix))
+                        } else {
+                            child.announcement
+                        }
+                        val result = DiscoverySelectionCheck.check(
+                            expected,
+                            RotatingDiscoveryIds.ROLE_CALL_OFFER,
+                            session.peerNodeId.toByteArray(),
+                            opening,
+                        )
+                        android.util.Log.i(
+                            "BluetoothVideo",
+                            (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "rotid_open: role=relay_hop | result=$result",
+                        )
+                        result == DiscoverySelectionCheck.Result.PASS
+                    }
+                    PrivateCallRelayChain.childProblem(
+                        child.announcement,
+                        session.peerNodeId.toByteArray(),
+                        session.peerCapabilities.maxChildren,
+                        localNodeId,
+                        chainEnabled = true,
+                        session.peerCapabilities.transportMask,
+                        openingOpensOffer = openedSelected && nextBudget == 0,
+                    )?.let { problem -> throw IllegalArgumentException(problem) }
+                    // The actual bearer bit, not an intersection of whole masks (extension bits 4 and 6 would pass).
+                    require(session.peerCapabilities.transportMask and transport.capabilityMask != 0) {
+                        "Next hop did not authenticate ${transport.shortLabel}"
+                    }
+                    // Never splice a parent into its own call (as in start()): the parent is not the child and
+                    // not the target.
+                    PrivateCallRelayChain.parentProblem(
+                        parent.session.peerNodeId.toByteArray(),
+                        session.peerNodeId.toByteArray(),
+                        target,
+                        localNodeId,
+                        chainEnabled = true,
+                    )?.let { problem -> throw IllegalArgumentException(problem) }
+                    if (nextBudget > 0) {
+                        require(RelayedCalls.linkAcceptsSetup(session.peerCapabilities)) {
+                            "Next relay did not authenticate as a relayed-call helper"
+                        }
+                        require(
+                            if (rotatingHop) {
+                                openedSelected
+                            } else {
+                                hopPrefix != null && session.peerNodeId.toByteArray()
+                                    .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES).contentEquals(hopPrefix)
+                            },
+                        ) { "Next relay is not the helper that was selected" }
+                    }
+                }
+                calleeLinkPhy = AdaptivePhyMemory.phyFor(
+                    transport,
+                    child.announcement.nodeIdPrefix,
+                    BlePhyPreference.TWO_M,
+                    "call-relay",
+                    relayedOffer = child.announcement.routeCost > 0,
+                )
+                val connection = connectCallee(context, child.device, transport)
+                downstream = connection
+                stage = OnDemandStage.AUTHENTICATING
+                val childSession = authenticateCallee(connection, identity, childCapabilities, checkChild).also { session ->
+                    AdaptivePhyMemory.bind(
+                        runCatching { child.device.address }.getOrNull(),
+                        transport,
+                        session.peerNodeId.shortLabel(),
+                    )
+                }
+                downstreamSession = childSession
+                val relaysBelow = if (nextBudget > 0) {
+                    stage = OnDemandStage.WAITING_FOR_NEXT
+                    val left = RelayedCalls.nextHopRemainingMs(
+                        remainingMs,
+                        (System.nanoTime() - startedNs) / 1_000_000L,
+                    ) ?: throw java.io.IOException("No time left for the next relay")
+                    val setupId = RelaySetupCodec.newSetupId()
+                    RelaySetupExchange.writeMessage(
+                        childSession,
+                        RelaySetupMessage.Setup(target, nextBudget, left, setupId, rotating = rotatingHop),
+                    )
+                    val reply = RelaySetupExchange.awaitReply(
+                        childSession,
+                        setupId,
+                        left + RelaySetupExchange.SETUP_REPLY_GRACE_MS,
+                    ) { downstream?.close() }
+                    when (reply) {
+                        is RelaySetupMessage.Ready -> reply.relays
+                        is RelaySetupMessage.Fail -> {
+                            replyFailed(reply.reason)
+                            return@thread
+                        }
+                        is RelaySetupMessage.Setup -> throw IllegalArgumentException("Setup reply expected")
+                    }
+                } else {
+                    0
+                }
+                forwardOnDemand(
+                    parent,
+                    childSession,
+                    relaysBelow,
+                    replied,
+                    replyReady,
+                    beforeReady = { stage = OnDemandStage.RELAYING },
+                    afterReady = { deadline.interrupt() },
+                )
+            } catch (thrown: Throwable) {
+                // An Error here (a missing platform method, say) must not take the app down with a stranger's
+                // request: it ends this duty and the caller hears FAIL (asRelayDutyException).
+                val error = thrown.asRelayDutyException() ?: throw thrown
+                if (!replied.get()) {
+                    runCatching { replyFailed(onDemandFailure(stage, error)) }
+                }
+                if (running.get()) {
+                    onStatus("Private-call relay stopped: ${error.message ?: error.javaClass.simpleName}")
+                }
+            } finally {
+                deadline.interrupt()
+                running.set(false)
+                chainGuard = null
+                closeResources()
+                worker = null
+                onStopped()
+            }
+        }
+    }
+
+    /**
+     * The on-demand relay once its child hop is authenticated: READY goes upstream, then the ordered
+     * end-to-end records are copied both ways until either side ends. A separate member so JVM tests can
+     * run this stage over real record sessions ([markStartedForTest]); they cannot open Bluetooth.
+     * [replied] is the once-only reply latch shared with the setup deadline: when the deadline already
+     * answered FAIL, nothing is forwarded.
+     */
+    internal fun forwardOnDemand(
+        parent: OnDemandParent,
+        childSession: SecureBluetoothSession,
+        relaysBelow: Int,
+        replied: AtomicBoolean,
+        replyReady: (relays: Int) -> Unit,
+        beforeReady: () -> Unit = {},
+        afterReady: () -> Unit = {},
+    ) {
+        upstreamSession = parent.session
+        // Not InputStream.nullInputStream(): API 33, minSdk is 29 (RelayParentStreams).
+        upstream = TransportConnection(
+            RelayParentStreams.emptyInput(),
+            RelayParentStreams.discardingOutput(),
+            parent.closeConnection,
+            phySummary = parent.phySummary,
+        )
+        onStatus(
+            "Relaying an endpoint-encrypted private call between ${parent.session.peerNodeId.shortLabel()} " +
+                "and ${childSession.peerNodeId.shortLabel()}; this relay cannot decrypt call media.",
+        )
+        forwardingStartNs = System.nanoTime()
+        lastCallerProgressNs = forwardingStartNs
+        lastCalleeProgressNs = forwardingStartNs
+        val guard = RelayChainGuard(forwardingStartNs)
+        chainGuard = guard
+        beforeReady()
+        // READY goes upstream only when the child hop is proven; the copy loops start right after.
+        if (replied.get()) return
+        replyReady(relaysBelow + 1)
+        afterReady()
+        thread(name = "BluetoothPrivateCallRelayGuard", isDaemon = true) {
+            while (running.get() && !guard.satisfied) {
+                guard.violation(System.nanoTime())?.let { reason ->
+                    if (running.getAndSet(false)) {
+                        onStatus("Private-call relay closed: $reason")
+                        closeConnections()
+                        worker?.interrupt()
+                        reverseWorker?.interrupt()
+                    }
+                    return@thread
+                }
+                try {
+                    Thread.sleep(GUARD_POLL_MS)
+                } catch (_: InterruptedException) {
+                    return@thread
+                }
+            }
+        }
+        reverseWorker = thread(name = "BluetoothPrivateCallRelayReverse") {
+            copyRecords(childSession, parent.session, "callee")
+        }
+        copyRecords(parent.session, childSession, "caller")
+    }
+
+    /** JVM tests mark the duty started exactly as [startOnDemand] does, then call [forwardOnDemand]. */
+    internal fun markStartedForTest() {
+        check(running.compareAndSet(false, true)) { "Private-call relay is already running" }
+    }
+
+    internal enum class OnDemandStage { CONNECTING, AUTHENTICATING, WAITING_FOR_NEXT, RELAYING }
+
+    /** The FAIL reason for an error that ended a setup before READY (PROTOCOL: 1 no route, 3 child auth, 4 timeout). */
+    internal fun onDemandFailure(stage: OnDemandStage, error: Exception): RelaySetupFailure = when {
+        error is RelayDutyError -> RelaySetupFailure.REFUSED
+        stage == OnDemandStage.WAITING_FOR_NEXT -> RelaySetupFailure.TIMEOUT
+        stage == OnDemandStage.AUTHENTICATING && error !is java.io.IOException -> RelaySetupFailure.CHILD_AUTHENTICATION
+        error is IllegalArgumentException -> RelaySetupFailure.CHILD_AUTHENTICATION
+        else -> RelaySetupFailure.NO_ROUTE
+    }
+
     private fun copyRecords(
         source: SecureBluetoothSession,
         destination: SecureBluetoothSession,
@@ -209,6 +549,7 @@ class BluetoothPrivateCallRelay(
                         record.type == SecureRecordType.END_TO_END_CONTENT ||
                         record.type == SecureRecordType.LINK_HEARTBEAT,
                 ) { "Unexpected $direction private-call record ${record.type}" }
+                chainGuard?.onRecord(direction == "caller", record.type)
                 // Capacity reports describe one hop; across this relay only liveness is forwarded, as
                 // a plain version-1 heartbeat (an empty payload is rejected and closed the call).
                 if (record.type == SecureRecordType.LINK_HEARTBEAT) {
@@ -222,7 +563,10 @@ class BluetoothPrivateCallRelay(
             }
         } catch (error: Exception) {
             if (forwardedRecord) armConnectionCloseDrain()
-            if (running.get()) noteHopLoss(error, if (reading) source else destination, if (reading) direction else otherSide(direction))
+            // Diagnostics only: a failure in the hop-loss note must never keep this relay from closing its links.
+            if (running.get()) {
+                runCatching { noteHopLoss(error, if (reading) source else destination, if (reading) direction else otherSide(direction)) }
+            }
             if (running.getAndSet(false)) {
                 onStatus("Private-call $direction path closed: ${error.message ?: error.javaClass.simpleName}")
                 closeConnections()
@@ -342,6 +686,7 @@ class BluetoothPrivateCallRelay(
                     BufferedOutputStream(socket.mediaOutputStream(), BUFFER_BYTES),
                     identity,
                     capabilities,
+                    bmh3 = Bmh3Wiring.initiator(context, callee.announcement, Bmh3Policy.Layer.LINK),
                 )
             },
             verify = { session ->
@@ -363,12 +708,16 @@ class BluetoothPrivateCallRelay(
         identity: SigningIdentity,
         capabilities: NodeCapabilities,
         checkChild: (SecureBluetoothSession) -> Unit,
+        /** Experimental hidden identities (BMH3): the chain relay passes its context and the offer it relays; null = BMH2. */
+        bmh3Context: Context? = null,
+        selected: DiscoveryAnnouncement? = null,
     ): SecureBluetoothSession {
         val session = SecureBluetoothHandshake.initiate(
             BufferedInputStream(connection.input, BUFFER_BYTES),
             BufferedOutputStream(connection.output, BUFFER_BYTES),
             identity,
             capabilities,
+            bmh3 = bmh3Context?.let { Bmh3Wiring.initiator(it, selected, Bmh3Policy.Layer.LINK) },
         )
         try {
             require(session.peerCapabilities.transportMask and capabilities.transportMask != 0) {
@@ -485,6 +834,7 @@ class BluetoothPrivateCallRelay(
     )
 
     override fun close() {
+        cancelled = true
         if (!running.getAndSet(false)) return
         closeResources()
         worker?.interrupt()
@@ -544,6 +894,8 @@ class BluetoothPrivateCallRelay(
     private companion object {
         const val BUFFER_BYTES = 32 * 1024
         const val CONNECTION_CLOSE_DRAIN_MILLIS = 400L
+        const val SETUP_REPLY_GRACE_MS = 2_000
+        const val GUARD_POLL_MS = 1_000L
     }
 }
 

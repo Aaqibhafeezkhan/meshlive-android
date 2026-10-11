@@ -9,6 +9,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 
 /** The link opening `BDO1` over a real BMH2 link: negotiation by hello bit 3 and record order. */
@@ -22,6 +24,16 @@ class RotatingDiscoveryLinkTest {
     )
     private val withBit = base.copy(transportMask = base.transportMask or RotatingDiscoveryIds.LINK_HELLO_BIT)
     private val presenceKey = ByteArray(32) { (it * 7).toByte() }
+
+    @Before
+    fun fixTheClockOfTheEpochWindow() {
+        DiscoverySelectionCheck.unixSeconds = { 1_791_590_400L + 100L }
+    }
+
+    @After
+    fun restoreTheClock() {
+        DiscoverySelectionCheck.unixSeconds = { System.currentTimeMillis() / 1000L }
+    }
 
     @Test
     fun bothBitsExchangeOpeningsAndTheCallerVerifiesTheSelectedId() {

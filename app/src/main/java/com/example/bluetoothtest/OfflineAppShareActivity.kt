@@ -42,7 +42,7 @@ import java.net.NetworkInterface
 import java.util.concurrent.Executors
 
 /**
- * Experimental "Share app nearby" screen ([OfflineAppShareFeature], default off). Starts a Wi-Fi
+ * "Share app nearby" screen ([OfflineAppShareFeature]; the Help entry follows the Settings > Features switch). Starts a Wi-Fi
  * Direct group and [OfflineAppShareServer] when opened; stops both after
  * [OfflineAppSharePolicy.SHARE_TIMEOUT_MS], when the user leaves the screen, or when a live session
  * starts ([OfflineAppShareGate]). Nothing is stored: name, passphrase and URL token are new each time.
@@ -393,11 +393,25 @@ class OfflineAppShareActivity : AppCompatActivity() {
             band,
             info.apkSha256,
             info.signingCertSha256.joinToString("\n").ifEmpty { "unknown" },
-        )
+        ) + "\n\n" + deviceNameNotice()
         detailText.visibility = View.VISIBLE
         actionButton.setText(R.string.share_nearby_stop)
         actionButton.setOnClickListener { stopSharing("user_stop", getString(R.string.share_nearby_stopped)) }
         tick()
+    }
+
+    /**
+     * Wi-Fi Direct announces the phone's own device name (the group's probe responses carry it). An app cannot
+     * change it (WifiP2pManager.setDeviceName is a system API that needs NETWORK_SETTINGS), so the screen says
+     * what is visible and where to change it. The group name and password are random.
+     */
+    private fun deviceNameNotice(): String {
+        val name = runCatching { Settings.Global.getString(contentResolver, "device_name") }.getOrNull()
+        return if (name.isNullOrBlank()) {
+            getString(R.string.share_nearby_device_name_unknown)
+        } else {
+            getString(R.string.share_nearby_device_name, name)
+        }
     }
 
     private fun tick() {

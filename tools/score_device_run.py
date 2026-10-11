@@ -20,6 +20,7 @@ from pathlib import Path
 
 import acceptance_profiles as acceptance
 from benchmark_layout import original, output_path, resolve
+from evidence_relocation import logical
 import re
 import statistics
 
@@ -820,7 +821,7 @@ def main():
         args.thresholds = resolve(args.thresholds)
     args.logs = [resolve(path) for path in args.logs]
     manifest = json.loads(args.manifest.read_text(encoding="utf-8-sig")) if args.manifest else {
-        "expected_fps": args.fps, "logs": [{"path": str(path.resolve()), "device": path.stem,
+        "expected_fps": args.fps, "logs": [{"path": str(logical(path)), "device": path.stem,
                                             "pid": args.pid, "start": args.start, "end": args.end,
                                             "role": args.role} for path in args.logs]}
     if not manifest.get("logs"):

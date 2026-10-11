@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Features for stream viewers (FeatureCatalog group "viewer"; MainActivity.bindViewerFeatures).
+     The rows are generated from the catalog (FeatureSettingsBlock), so adding a feature needs no layout.
+     This card follows the connectivity card in the same "Features" section and so has no header of its own
+     (settings_features_calls.xml owns the header and the benchmark-launch note). -->
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/viewerFeaturesRoot"
+    style="@style/Widget.App.Card"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+    <LinearLayout
+        android:id="@+id/viewerFeaturesContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="@dimen/card_padding" />
+</com.google.android.material.card.MaterialCardView>

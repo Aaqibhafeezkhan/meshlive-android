@@ -198,7 +198,8 @@ internal fun classicUnresolvedPeerMessage(bondFree: Boolean): String = if (bondF
         "settings screen or the visibility prompt) and retry, pair the phones once, or use BLE GATT."
 } else {
     "This phone does not know the other phone's Classic address: Android reveals it only to paired " +
-        "phones. Pair the phones once in Android Bluetooth settings, or use BLE GATT."
+        "phones. Pair the phones once in Android Bluetooth settings, turn on Connect without pairing " +
+        "(Settings > Features) on both phones, or use BLE GATT."
 }
 
 /**

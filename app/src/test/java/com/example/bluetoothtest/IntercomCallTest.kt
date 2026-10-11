@@ -14,12 +14,11 @@ class IntercomCallTest {
     @Test
     fun benchmarkLaunchUsesOnlyItsExtrasAndIgnoresStoredChoices() {
         val stored = { _: String -> true }
-        val off = IntercomFeatureSettings.resolve(true, { false }, advancedSettings = true, stored = stored)
+        val off = IntercomFeatureSettings.resolve(true, { false }, stored = stored)
         assertEquals(IntercomFeatureSettings(), off)
         val on = IntercomFeatureSettings.resolve(
             true,
             { it == IntercomFeatureSettings.EXTRA_VOICE_CALLS || it == IntercomFeatureSettings.EXTRA_PTT_MODE },
-            advancedSettings = false,
             stored = { false },
         )
         assertTrue(on.voiceCalls)
@@ -29,20 +28,36 @@ class IntercomCallTest {
     }
 
     @Test
-    fun storedChoicesApplyOnlyWithAdvancedSettings() {
-        val stored = { key: String -> key == IntercomFeatureSettings.PREF_PUSH_TO_TALK }
-        assertEquals(
-            IntercomFeatureSettings(),
-            IntercomFeatureSettings.resolve(false, { true }, advancedSettings = false, stored = stored),
-        )
-        val advanced = IntercomFeatureSettings.resolve(false, { true }, advancedSettings = true, stored = stored)
-        assertFalse(advanced.voiceCalls)
-        assertTrue(advanced.pushToTalkButton)
-        assertFalse(advanced.pttMode)
+    fun userSessionFollowsTheExplicitVoiceChoiceOrTheShippedDefaultWithoutAdvancedSettings() {
+        // No dependence on the Manual settings toggle: the stored choice decides, else the default constant.
+        val on = IntercomFeatureSettings.resolve(false, { true }) { key ->
+            if (key == IntercomFeatureSettings.PREF_VOICE_CALLS) true else null
+        }
+        assertTrue(on.voiceCalls)
+        val off = IntercomFeatureSettings.resolve(false, { true }) { key ->
+            if (key == IntercomFeatureSettings.PREF_VOICE_CALLS) false else null
+        }
+        assertFalse(off.voiceCalls)
+        assertEquals(CallFeatureDefaults.VOICE_CALLS, IntercomFeatureSettings.resolve(false, { true }) { null }.voiceCalls)
     }
 
     @Test
-    fun everyFeatureIsOffByDefault() {
+    fun theTalkButtonAndPttModeAreLaunchExtrasOnly() {
+        // DECISIONS: push-to-talk is not a mode. A stored value (the old Advanced setting) or any user
+        // session never enables them.
+        val stored = { key: String ->
+            if (key == IntercomFeatureSettings.PREF_PUSH_TO_TALK || key == IntercomFeatureSettings.PREF_PTT_MODE) true else null
+        }
+        val session = IntercomFeatureSettings.resolve(false, { true }, stored)
+        assertFalse(session.pushToTalkButton)
+        assertFalse(session.pttMode)
+        val benchmark = IntercomFeatureSettings.resolve(true, { it == IntercomFeatureSettings.EXTRA_PUSH_TO_TALK }, { null })
+        assertTrue(benchmark.pushToTalkButton)
+        assertFalse(benchmark.pttMode)
+    }
+
+    @Test
+    fun theDataClassDefaultsAreOff() {
         val defaults = IntercomFeatureSettings()
         assertFalse(defaults.voiceCalls)
         assertFalse(defaults.pushToTalkButton)

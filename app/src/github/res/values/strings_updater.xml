@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Updates screen and one-time question (github flavour only; the shared strings are in main/strings_updates.xml). -->
+<resources>
+    <string name="update_title">Updates</string>
+    <string name="update_online_title">Update from the internet</string>
+    <string name="update_installed_line">Installed: %1$s (release %2$d)</string>
+    <string name="update_installed_line_dev">Installed: %1$s (not a numbered release)</string>
+    <string name="update_check_now">Check now</string>
+    <string name="update_checking">Asking GitHub for the newest version…</string>
+    <string name="update_up_to_date">You have the newest version (%1$s).</string>
+    <string name="update_available">Version %1$s is available.</string>
+    <string name="update_not_checked_yet">Not checked yet.</string>
+    <string name="update_too_soon">You checked a moment ago. Try again in %1$d minutes.</string>
+    <string name="update_offline">No internet connection, so nothing was checked.</string>
+    <string name="update_not_offered">This copy of MeshLive was not signed with the MeshLive release key (for example a test build or one from another store), so it cannot be updated from the release page. Update it where you got it.</string>
+    <string name="update_online_off_status">Update checks are off.</string>
+    <string name="update_online_off">Update checks are off. MeshLive makes no internet request until you turn them on.</string>
+    <string name="update_enable_checks">Turn on update checks</string>
+    <string name="update_download_plain">Download</string>
+    <string name="update_downloading_start">Starting the download…</string>
+    <string name="update_downloading">Downloading %1$s of %2$s…</string>
+    <string name="update_verifying">Checking the file…</string>
+    <string name="update_cancel">Cancel</string>
+    <string name="update_ready">Ready to install version %1$s.</string>
+    <string name="update_ready_detail">The file is signed with the MeshLive release key, matches the published checksum and is newer than your copy. Android will ask you to confirm.</string>
+    <string name="update_ready_detail_nearby">The file is signed by the same publisher as your copy and is newer. Android will ask you to confirm.</string>
+    <string name="update_install">Install</string>
+    <string name="update_installing">Waiting for Android to ask you to confirm…</string>
+    <string name="update_install_failed">Android did not install the update (%1$s).</string>
+    <string name="update_install_blocked_title">Allow installing from MeshLive?</string>
+    <string name="update_install_blocked_message">Android only lets an app install an update if you allow it in Settings. The next screen is Android\'s own. Turn on \"Allow from this source\" for MeshLive, then come back here and tap Install.</string>
+    <string name="update_open_settings">Open settings</string>
+
+    <string name="update_fail_offline">The download stopped because the connection was lost. Nothing was changed. Try again.</string>
+    <string name="update_fail_server">GitHub\'s answer could not be used. Nothing was changed. Try again later.</string>
+    <string name="update_fail_rate">GitHub asks for a pause. Try again later today.</string>
+    <string name="update_fail_no_file">The newest version has no file for your phone type.</string>
+    <string name="update_fail_no_hash">The release does not publish a checksum for this file, so MeshLive will not install it.</string>
+    <string name="update_fail_hash">The file does not match the checksum the release publishes, so it was deleted.</string>
+    <string name="update_fail_storage">The file could not be saved (is the phone out of space?).</string>
+    <string name="update_fail_cancelled">Cancelled. Nothing was changed.</string>
+    <string name="update_fail_unreadable">The file could not be read.</string>
+    <string name="update_refused_unreadable">This file is not a readable, signed app package.</string>
+    <string name="update_refused_package">This file is a different app, not MeshLive.</string>
+    <string name="update_refused_not_newer">This file is not newer than the version you have, so it will not be installed.</string>
+    <string name="update_refused_abi">This file is for another phone type (32-bit or 64-bit) than yours.</string>
+    <string name="update_refused_signers">This file is signed more than once or in an unexpected way, so it will not be installed.</string>
+    <string name="update_refused_signer_installed">This file is signed by a different publisher than your copy of MeshLive. Android would refuse it too, and it is not safe to install.</string>
+    <string name="update_refused_signer_pinned">This file is not signed with the MeshLive release key.</string>
+    <string name="update_refused_online_off">This copy of MeshLive cannot be updated from the release page.</string>
+
+    <string name="update_nearby_title">From a nearby phone</string>
+    <string name="update_nearby_intro">A phone you connected to says it runs release %1$d (yours is %2$d). That is only its claim: nothing has been checked or downloaded.</string>
+    <string name="update_nearby_steps">1. On that phone, open Help and tap Share app nearby (or share the app any other way you like).\n2. Receive the file on this phone.\n3. Come back here, tap Choose the file, and pick it. MeshLive checks it before offering to install it.\n\nDo not open the file from the browser or a file manager: they do not check it. If Android offers to Install a new app instead of Update this one, cancel. Nothing is installed without your confirmation.</string>
+    <string name="update_nearby_fingerprint">The MeshLive release key (SHA-256):\n%1$s</string>
+    <string name="update_choose_file">Choose the file</string>
+    <string name="update_nearby_ok">Ready to install version %1$s (release %2$d).</string>
+    <string name="update_hide_nearby">Hide this note for a week</string>
+    <string name="update_privacy_note">Update checks contact GitHub only (api.github.com, and github.com or its download servers for the file): GitHub sees your internet address and that you asked about MeshLive. Nothing else is sent, there is no account and no tracker. Files you receive from a nearby phone never touch the internet.</string>
+
+</resources>

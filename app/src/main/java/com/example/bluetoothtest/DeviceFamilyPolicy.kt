@@ -532,7 +532,7 @@ internal class ResolvedDevicePolicy(
 
 internal object DeviceFamilyPolicy {
     /** Bump when entries, matchers or effects change. */
-    const val REVISION = "2026-10-10.6"
+    const val REVISION = "2026-10-11.2"
 
     val entries: List<DevicePolicyEntry> get() = DevicePolicyRegistry.entries
 

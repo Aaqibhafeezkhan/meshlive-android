@@ -236,6 +236,17 @@ object DebugTunables {
         }
 
     /**
+     * Rotating discovery IDs (hardening 2026-10-11): connectable app advertising sets are non-discoverable on
+     * API 34+ while the rotating switch is on ([NonDiscoverableAdvertising]). DEBUG launch extra
+     * `test_adv_non_discoverable=false` is the control arm (the previous discoverable sets); release builds
+     * always follow the default.
+     */
+    @Volatile var advNonDiscoverable: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
      * Deferred GATT client close (GattClientTeardown): null = the stack-family default (deferred on
      * Android 11 and older, whose GattService ContextMap races an immediate close). DEBUG launch extra
      * `test_deferred_gatt_close=true|false` forces it on or off on any phone.
@@ -294,6 +305,29 @@ object DebugTunables {
         }
 
     /**
+     * Relay child stall guard (default on): a LE child link that delivers no inbound byte for 2 s before
+     * the end-to-end handshake finishes is closed, and before hop authentication it counts as an
+     * establishment failure ([RelayChildStallGuard]). DEBUG launch extra `test_relay_child_stall_guard=false`
+     * is the control arm (wait for the 5 s supervision timeout, not counted).
+     */
+    @Volatile var relayChildStallGuard: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default off): a central whose just-authenticated child can relay (`maxChildren > 0`)
+     * requests the Android 14+ DCK connection priority (30 ms by the AOSP default) on that link instead of
+     * HIGH (11.25-15 ms), so the relay's own HIGH child link has two events per parent event
+     * ([relayUpstreamPriority]). DEBUG launch extra `test_relay_upstream_dck=true` turns it on; an explicit
+     * `test_source_gatt_priority` still wins.
+     */
+    @Volatile var relayUpstreamDck: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
      * After a re-anchor-eligible link loss the child waits up to PREFERRED_PARENT_GRACE_MS (2 s) for
      * its previous relay's offer before reconnecting elsewhere (RelayChildReanchor.kt). Default on;
      * DEBUG launch extra `test_relay_recovery_grace=false` is the control arm (first offer heard wins).
@@ -311,6 +345,34 @@ object DebugTunables {
     @Volatile var relayParentTrickle: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * A relay's child writer skips its link pacer only when the next record is audio (default on,
+     * 2026-10-11). It used to skip it whenever any audio was queued anywhere, and the child queue is
+     * strictly ordered, so during a backlog (which always holds audio, 50 records/s) every record was
+     * written unpaced and the Android socket buffer took the excess instead of the app queue
+     * (relayfix-0725a213-diagM1: M31 -> ASUS CoC, 57-80 KB / 3.2-4.4 s in flight below the app).
+     * DEBUG launch extra `test_relay_pace_head=false` (benchmark tunable `relay_pace_head`) is the
+     * control arm restoring the wider test. Read when a child connects.
+     */
+    @Volatile var relayPaceHeadOnly: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (off): while a relay's child reports late media (its playout is pinned at the
+     * maximum and still late), the relay keeps at most [RELAY_PACE_LEAD_CAP_NS] (250 ms) of
+     * measured-rate link time ahead of the link instead of the 20% pace gain's unbounded surplus
+     * (LinkPacer.setLeadCapNs). Needs [linkPacing]. DEBUG launch extra `test_relay_pace_lead_cap=true`
+     * (benchmark tunable `relay_pace_lead_cap`). Tradeoff: with a train measurement that reads low
+     * the capped pace is lower than the gained one while the child is late; fewer stale frames
+     * reach the child, which sheds sooner. Read when a child connects.
+     */
+    @Volatile var relayPaceLeadCap: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
         }
 
     @Volatile var callCloseWaitsForPeer: Boolean = true
@@ -334,6 +396,30 @@ object DebugTunables {
      * is the control arm.
      */
     @Volatile var lePriorityRetry: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Viewer UI stability (ReceiverRecoveryNoticePolicy, receiverBrowserEmptyStatus): a repeating
+     * "Recovering video" cover is held through gaps under 1 s instead of flashing off and on, and the
+     * browser says when the only nearby stream is cooling down after a failed connection instead of
+     * "No nearby streams yet". DEBUG launch extra `test_receiver_ui_stability=false` is the control arm
+     * (cover follows the decoder flag one to one; the old browser line).
+     */
+    @Volatile var receiverUiStability: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * A GATT client setup that has not seen `onMtuChanged` sends one PHY read at 0.75 s and, if the
+     * platform answers it, keeps waiting up to 8 s (the MTU request is then only queued behind the
+     * stack's own service discovery) instead of cancelling that discovery at 3 s ([GattMtuWait]).
+     * No answer keeps the old 3 s verdict. DEBUG launch extra `test_gatt_mtu_probe=false` is the
+     * control arm (fixed 3 s).
+     */
+    @Volatile var gattMtuProbe: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
         }
@@ -721,12 +807,36 @@ object DebugTunables {
         }
 
     /**
+     * Experimental airtime-sized call video fragments (off by default; see CallFragmentAirtime). Needs
+     * [callVideoFragments]. The target link time per fragment in ms (the A/B arm uses 40): the sender
+     * sizes each fragment as measured link rate x this time instead of the fixed 2 KB, within
+     * 675..4096 bytes (framing and tags stay at or below 10%), so call audio waits about this long
+     * behind one video write at any link rate. 0 = off = the fixed 2 KB fragments. Capped at 250 ms.
+     * Launch extra `test_call_fragment_airtime_ms` (benchmark tunable `call_fragment_airtime_ms`);
+     * read when the call endpoint is created.
+     */
+    @Volatile var callFragmentAirtimeMs: Int = 0
+        set(value) {
+            field = if (BuildConfig.DEBUG) CallFragmentAirtime.clampTargetMs(value) else 0
+        }
+
+    /**
      * Experimental speech-led call playout (off by default; see CallPlayoutPolicy). On: late call
      * video may grow the shared call playout delay by at most 150 ms; late audio keeps the full call
      * range. Video beyond that plays late instead of delaying speech (every GATT call pinned the
      * shared delay at its 600 ms maximum, calls-noloss-*-51cc8028). Off: unchanged. Launch extra
      * `test_call_speech_led_playout` (benchmark tunable `call_speech_led_playout`).
      */
+    /**
+     * Promoted call policy (design decision 2026-10-11, DECISIONS "Call head-of-line A/B"): in user
+     * launches, direct calls whose endpoint transport is BLE GATT use video fragments plus
+     * speech-led playout by default (GATT audio queue age p95 -38..-69%, playout delay p50 about
+     * -100 ms; LE CoC showed no head-of-line wait, so CoC/Classic stay unchanged). Benchmark
+     * launches (any `test_` extra in a DEBUG build) never set this, so their arms stay extras-only:
+     * the control arm is a launch without the two extras. Release-reachable.
+     */
+    @Volatile var callGattSpeechDefaults: Boolean = false
+
     @Volatile var callSpeechLedPlayout: Boolean = false
         set(value) {
             field = value && BuildConfig.DEBUG
@@ -849,24 +959,34 @@ object DebugTunables {
         }
 
     /**
-     * Experimental native libopus call audio (off; README register "Native libopus call audio"):
+     * Native libopus call audio (README register "Native libopus call audio"; promoted to Settings >
+     * Features on 2026-10-11, default [ConnectivityFeatureDefaults.NATIVE_OPUS] until phone test T10):
      * calls encode with OPUS_APPLICATION_VOIP and in-band FEC, and decode with libopus PLC on a gap
      * plus FEC recovery from the next packet, instead of MediaCodec (c2.android.opus has neither).
-     * Same Opus bitstream; no wire change. DEBUG launch extra `test_call_native_opus` (benchmark
-     * tunable `call_native_opus`); read when a call's encoder or decoder starts. Streams unchanged.
+     * Same Opus bitstream; no wire change. Resolved by [NativeOpusSettings.resolveEnabled]: a DEBUG
+     * benchmark launch reads only `test_call_native_opus` (benchmark tunable `call_native_opus`),
+     * every other launch the user's Settings > Features choice or the default, in release builds too.
+     * Read when a call's encoder or decoder starts. Streams unchanged.
      */
     @Volatile var callNativeOpus: Boolean = false
+
+    /**
+     * Native call audio sub-switch (`test_call_native_opus_fec`, default on): in-band FEC. Only a DEBUG
+     * build can turn it off: now that the main switch is a release setting, a launch extra from
+     * another app must not change the codec.
+     */
+    @Volatile var callNativeOpusFec: Boolean = true
         set(value) {
-            field = value && BuildConfig.DEBUG
+            field = value || !BuildConfig.DEBUG
         }
 
-    /** Native call audio sub-switch (`test_call_native_opus_fec`, default on): in-band FEC. */
-    @Volatile var callNativeOpusFec: Boolean = true
-
-    /** Native call audio expected-loss hint in percent (`test_call_native_opus_loss_pct`, default 10). */
+    /**
+     * Native call audio expected-loss hint in percent (`test_call_native_opus_loss_pct`, default 10).
+     * Release builds always use the default, for the reason given at [callNativeOpusFec].
+     */
     @Volatile var callNativeOpusLossPercent: Int = NativeOpusSettings.DEFAULT_LOSS_PERCENT
         set(value) {
-            field = value.coerceIn(0, 100)
+            field = if (BuildConfig.DEBUG) value.coerceIn(0, 100) else NativeOpusSettings.DEFAULT_LOSS_PERCENT
         }
 
     /**

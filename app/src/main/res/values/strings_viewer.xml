@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Experimental viewer frame age (ViewerFeatures.kt, ViewerFrameAgeController.kt, phone test T11). -->
+<resources>
+    <string name="feat_viewer_frame_age">Show when the picture is out of date</string>
+    <string name="feat_viewer_frame_age_description">While you watch a stream, dim a frozen picture and say so when it stops updating or the connection to the sender is lost, instead of leaving it on screen as if it were live. A small label shows how long ago the picture last updated. That time is counted on this phone from the last picture it received; it is not the delay from the camera.</string>
+
+    <string name="viewer_signal_lost">Signal lost — reconnecting</string>
+    <string name="viewer_picture_stalled">Picture stalled — waiting</string>
+    <string name="viewer_last_picture">Last picture %1$s ago</string>
+    <string name="viewer_last_update">Last update %1$s ago</string>
+    <string name="watch_status_signal_lost">Signal lost</string>
+    <string name="watch_status_stalled">Picture stalled</string>
+</resources>

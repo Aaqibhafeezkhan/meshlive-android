@@ -52,6 +52,17 @@ class BenchmarkPlanTest(unittest.TestCase):
     def test_coc_coalesce_sdus_tunable_maps_to_its_debug_extra(self):
         self.assertEqual({"test_coc_coalesce_sdus": True}, runner.tunable_extras({"coc_coalesce_sdus": True}))
 
+    def test_call_fragment_airtime_tunable_maps_to_its_integer_extra(self):
+        # Fourth call head-of-line arm: fragments sized by link airtime (ms), 0/absent = fixed 2 KB.
+        self.assertEqual(
+            {"test_call_video_fragments": True, "test_call_fragment_airtime_ms": 40},
+            runner.tunable_extras({"call_video_fragments": True, "call_fragment_airtime_ms": 40}),
+        )
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"call_fragment_airtime_ms": True})
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"call_fragment_airtime_ms": "40"})
+
     def test_bounded_media_age_tunable_maps_to_its_debug_extra(self):
         # Experimental bounded media age A/B arms set this on every participant (app default off).
         self.assertEqual({"test_bounded_media_age": True}, runner.tunable_extras({"bounded_media_age": True}))
@@ -94,6 +105,20 @@ class BenchmarkPlanTest(unittest.TestCase):
         self.assertEqual({"test_relay_child_reanchor": False}, runner.tunable_extras({"relay_child_reanchor": False}))
         with self.assertRaises(ValueError):
             runner.tunable_extras({"relay_child_reanchor": 0})
+
+    def test_relay_pacing_tunables_map_to_their_debug_extras(self):
+        # relay_pace_head is a default-on fix (control arm false); relay_pace_lead_cap is an experiment.
+        self.assertEqual({"test_relay_pace_head": False, "test_relay_pace_lead_cap": True},
+                         runner.tunable_extras({"relay_pace_head": False, "relay_pace_lead_cap": True}))
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"relay_pace_head": 0})
+
+    def test_relay_dual_role_tunables_map_to_their_debug_extras(self):
+        # relay_child_stall_guard is a default-on fix (control arm false); relay_upstream_dck is an experiment.
+        self.assertEqual({"test_relay_child_stall_guard": False, "test_relay_upstream_dck": True},
+                         runner.tunable_extras({"relay_child_stall_guard": False, "relay_upstream_dck": True}))
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"relay_upstream_dck": 1})
 
     def test_call_audio_tunables_map_to_their_debug_extras(self):
         # Gap realignment is a default-on fix (control arm false); the other two are experiments.

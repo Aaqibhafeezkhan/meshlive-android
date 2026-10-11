@@ -12,18 +12,17 @@ class ClassicBondFreeTest {
     private val nodeB = "fedcba9876543210fedcba9876543210"
 
     @Test
-    fun benchmarkLaunchUsesOnlyItsExtrasAndTheUiSettingNeedsAdvancedMode() {
+    fun benchmarkLaunchUsesOnlyItsExtrasAndANormalLaunchUsesTheUsersChoiceOrTheDefault() {
         val stored = { _: String -> true }
         assertEquals(
             ClassicFeatureSettings(),
-            ClassicFeatureSettings.resolve(benchmarkLaunch = true, extra = { false }, advancedSettings = true, stored = stored),
+            ClassicFeatureSettings.resolve(benchmarkLaunch = true, extra = { false }, stored = stored),
         )
         assertEquals(
             ClassicFeatureSettings(bondFree = true, requestVisibility = false),
             ClassicFeatureSettings.resolve(
                 benchmarkLaunch = true,
                 extra = { it == ClassicFeatureSettings.EXTRA_BOND_FREE },
-                advancedSettings = false,
                 stored = { false },
             ),
         )
@@ -33,17 +32,22 @@ class ClassicBondFreeTest {
             ClassicFeatureSettings.resolve(
                 benchmarkLaunch = true,
                 extra = { it == ClassicFeatureSettings.EXTRA_REQUEST_VISIBILITY },
-                advancedSettings = false,
                 stored = { false },
             ),
         )
-        assertEquals(
-            ClassicFeatureSettings(),
-            ClassicFeatureSettings.resolve(benchmarkLaunch = false, extra = { true }, advancedSettings = false, stored = stored),
-        )
+        // A normal launch ignores the benchmark extras and needs no Manual-settings toggle.
         assertEquals(
             ClassicFeatureSettings(bondFree = true, requestVisibility = true),
-            ClassicFeatureSettings.resolve(benchmarkLaunch = false, extra = { false }, advancedSettings = true, stored = stored),
+            ClassicFeatureSettings.resolve(benchmarkLaunch = false, extra = { false }, stored = stored),
+        )
+        assertEquals(
+            ClassicFeatureSettings(),
+            ClassicFeatureSettings.resolve(benchmarkLaunch = false, extra = { true }, stored = { false }),
+        )
+        // Never decided: the shipped default (off until phone test T7).
+        assertEquals(
+            ConnectivityFeatureDefaults.CLASSIC_WITHOUT_PAIRING,
+            ClassicFeatureSettings.resolve(benchmarkLaunch = false, extra = { true }, stored = { null }).bondFree,
         )
     }
 
@@ -54,7 +58,6 @@ class ClassicBondFreeTest {
         val bounded = ClassicFeatureSettings.resolve(
             benchmarkLaunch = true,
             extra = { it == ClassicFeatureSettings.EXTRA_BOUNDED_CONNECT },
-            advancedSettings = false,
             stored = { false },
         )
         assertTrue(bounded.usesBoundedConnect)
@@ -150,5 +153,25 @@ class ClassicBondFreeTest {
         val other = privateCallConnectionFailureMessage(BluetoothTransportOption.CLASSIC_RFCOMM, IOException("read failed"))
         assertTrue(other.contains("read failed"))
         assertTrue(other.contains("Pair the phones"))
+    }
+
+    @Test
+    fun failureTextsNameTheSettingAndTheCurrentMode() {
+        val classic = BluetoothTransportOption.CLASSIC_RFCOMM
+        val off = privateCallConnectionFailureMessage(classic, "timed out", bondFree = false)
+        assertTrue(off, off.contains("Pair the phones") && off.contains("Connect without pairing"))
+        val on = privateCallConnectionFailureMessage(classic, "timed out", bondFree = true)
+        assertTrue(on, on.contains("Connect without pairing") && on.contains("visible"))
+        assertFalse(on, on.contains("Pair the phones"))
+        assertTrue(classicUnresolvedPeerMessage(bondFree = false).contains("Connect without pairing"))
+        // Other transports keep their own text.
+        assertEquals(
+            "Call could not connect: gone",
+            privateCallConnectionFailureMessage(BluetoothTransportOption.BLE_GATT, "gone", bondFree = true),
+        )
+        val streamOff = receiverStartupFailureNotice(classic, streamToken = 7, detail = "x", bondFree = false)
+        assertTrue(streamOff, streamOff.contains("Pair the phones") && streamOff.contains("Connect without pairing"))
+        val streamOn = receiverStartupFailureNotice(classic, streamToken = 7, detail = "x", bondFree = true)
+        assertTrue(streamOn, streamOn.contains("already met"))
     }
 }

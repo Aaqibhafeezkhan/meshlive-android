@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- F-Droid flavour only: what the "Newer version nearby" note says when this build cannot install updates itself. -->
+<resources>
+    <string name="update_fdroid_title">Newer version nearby</string>
+    <string name="update_fdroid_message">A phone you connected to says it runs a newer MeshLive. That is only its claim.\n\nUpdate through F-Droid when you have a connection. Without one, ask that phone\'s owner to open Help and tap Share app nearby (or to share the app another way). This version of MeshLive cannot check a file before you install it, so only install a file from a person you trust, and cancel if Android offers to Install a new app instead of Update this one. Android only accepts an update signed by the same publisher as your copy, so a copy from the MeshLive release page cannot update an F-Droid install.\n\nMeshLive itself downloads and installs nothing.</string>
+    <string name="update_fdroid_hide">Hide for a week</string>
+</resources>

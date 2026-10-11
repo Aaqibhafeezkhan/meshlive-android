@@ -57,7 +57,7 @@ An AI-written change has to clear every gate a human change does:
 3. **Narrow fix.** The smallest change that explains the failure, with the cause traced through the request,
    attempt, process and pipeline stage rather than guessed. When fixes circle, find the root cause instead of tuning
    constants.
-4. **Unit and host tests.** `./gradlew :app:testDebugUnitTest :app:assembleDebug` and `python -B -m pytest -q tools`.
+4. **Unit and host tests.** `./gradlew :app:testDebugUnitTest :app:assembleGithubDebug` and `python -B -m pytest -q tools`.
 5. **Frozen APK.** One build, identified by hash, installed and verified on each phone.
 6. **Same-settings comparison on real phones.** The same requested bitrate, frame rate, resolution, encoder,
    audio, transport and buffers before and after. An agent must never quietly change a requested setting to earn a

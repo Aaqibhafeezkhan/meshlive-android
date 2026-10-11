@@ -45,6 +45,12 @@ class AndroidVideoReceiver(
     private val debugDirectGattHeartbeat: Boolean = true,
     private val debugPresentationTiming: Boolean = false,
     private val debugReleaseAtPlayout: Boolean = true,
+    /**
+     * Experimental viewer frame age (Settings > Features, `test_viewer_frame_age`; null = off, and
+     * nothing below changes): told what this link receives and renders so the stale-picture state and
+     * the `viewer_frame_age` log can be computed (ViewerFrameAge.kt).
+     */
+    private val viewerFrameAge: ViewerFrameAgeMonitor? = null,
     private val onStopped: (String?) -> Unit,
 ) : Closeable {
     private val running = AtomicBoolean(false)
@@ -62,6 +68,17 @@ class AndroidVideoReceiver(
     @Volatile private var bleControlServer: BleL2capControlServer? = null
     @Volatile private var gattVideoServer: GattVideoServer? = null
     @Volatile private var classicViewerAdvertiser: BleDiscoveryAdvertiser? = null
+
+    /**
+     * Rotating IDs, phase 1b (RotatingDiscoveryFeature, default off): the selected offer was a version 5
+     * offer, so this viewer's request is version 5 too (it mirrors the offer) and the connecting parent
+     * must open the offer's RDI over its link BDO1 (role 1).
+     */
+    @Volatile private var expectedSourceRotating = false
+    @Volatile private var viewerRequestTransport: BluetoothTransportOption? = null
+    @Volatile private var viewerLogicalToken = 0
+    @Volatile private var viewerRecoveryRequested = false
+    private val viewerBoundaryListener: (Long) -> Unit = { _ -> reannounceViewerRequest() }
     private val debugStageTrace = DebugStageTrace.startIfRequested(debugTraceSessionName, "broadcast_receive")
 
     /** Why the last stream on this receiver ended; set before [onStopped] runs. */
@@ -84,8 +101,19 @@ class AndroidVideoReceiver(
         recoveryFromNodeIdPrefix: ByteArray? = null,
         phyPreference: BlePhyPreference = BlePhyPreference.TWO_M,
         ioConfig: VideoStreamIoConfig = VideoStreamIoConfig.DEFAULT,
+        /** Rotating IDs: the selected stream offer is version 5 (its announced bytes are an RDI). */
+        selectedOfferRotating: Boolean = false,
     ) {
         check(running.compareAndSet(false, true)) { "Receiver is already running" }
+        expectedSourceRotating = selectedOfferRotating && RotatingDiscoveryFeature.enabled &&
+            transport != BluetoothTransportOption.CLASSIC_RFCOMM && streamToken != 0
+        viewerRequestTransport = transport
+        viewerRecoveryRequested = recoveryFromNodeIdPrefix != null
+        viewerLogicalToken = if (expectedSourceRotating && expectedSourceNodeIdPrefix != null) {
+            StreamRouteToken.logicalFrom(streamToken, expectedSourceNodeIdPrefix)
+        } else {
+            0
+        }
         workerThread = thread(name = "BluetoothVideoReceiver") {
             var failureNotice: String? = null
             try {
@@ -131,23 +159,16 @@ class AndroidVideoReceiver(
                             context,
                             adapter,
                             activeServerSocket.psm,
-                            DiscoveryAnnouncement(
-                                nodeIdPrefix = identity.nodeId.toByteArray()
-                                    .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES),
-                                flags = DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS or
-                                    recoveryDiscoveryFlag(recoveryFromNodeIdPrefix),
-                                capabilitySummary = capabilities.decodeCodecMask,
-                                streamToken = streamToken,
-                                routeCost = routeCost,
-                                sequence = 0,
-                                streamBitrateKbps = streamBitrateKbps,
-                                recoveryFromNodeIdPrefix = recoveryFromNodeIdPrefix,
+                            viewerAnnouncement(
+                                identity, capabilities, 0, streamToken, routeCost, streamBitrateKbps,
+                                recoveryFromNodeIdPrefix,
                             ),
                             onStatus,
                             phyPreference,
                         )
                         bleControlServer = controlServer
                         controlServer.start()
+                        watchViewerBoundaries(identity, capabilities, 0, streamToken, routeCost, streamBitrateKbps, recoveryFromNodeIdPrefix)
                         onStatus(
                             "BLE receiver is advertising. On the other phone, choose BLE L2CAP CoC, " +
                                 "refresh receivers, and connect.",
@@ -188,6 +209,7 @@ class AndroidVideoReceiver(
                     }
                     if (transport == BluetoothTransportOption.BLE_L2CAP) {
                         bleControlServer?.stopAdvertising()
+                        RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_VIEWER_REQUEST)
                     }
                     clientSocket = socket
                     try {
@@ -279,6 +301,9 @@ class AndroidVideoReceiver(
                 }
             } finally {
                 running.set(false)
+                RotatingDiscovery.removeBoundaryListener(viewerBoundaryListener)
+                RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_VIEWER_REQUEST)
+                viewerInputs = null
                 closeSockets()
                 bleControlServer?.close()
                 bleControlServer = null
@@ -289,6 +314,127 @@ class AndroidVideoReceiver(
                 workerThread = null
                 surface.release()
                 onStopped(failureNotice)
+            }
+        }
+    }
+
+    /**
+     * The viewer request this phone advertises. Off, or a version 2 offer, or Classic: exactly the old
+     * announcement (fixed prefix; failed parent's prefix in the recovery bytes). A version 5 offer: the
+     * request mirrors it with the role-2 RDI, the offer's route token and, after a lost forwarder parent,
+     * the recovery hint (PROTOCOL Phase 1b items 2 and 5).
+     */
+    private fun viewerAnnouncement(
+        identity: SigningIdentity,
+        capabilities: NodeCapabilities,
+        transportFlags: Int,
+        streamToken: Int,
+        routeCost: Int,
+        streamBitrateKbps: Int,
+        recoveryFromNodeIdPrefix: ByteArray?,
+    ): DiscoveryAnnouncement {
+        val transport = viewerRequestTransport
+        if (transport != null && streamToken != 0 &&
+            RotatingStreamAnnouncements.viewerRequestRotates(RotatingDiscoveryFeature.enabled, transport, expectedSourceRotating)
+        ) {
+            val entry = RotatingDiscovery.advertise(RotatingDiscoveryIds.ROLE_VIEWER_REQUEST)
+            val hint = if (viewerRecoveryRequested) {
+                ViewerRecoveryMemory.hint(viewerLogicalToken, entry.rdi, streamToken)
+            } else {
+                null
+            }
+            val base = DiscoveryAnnouncement(
+                nodeIdPrefix = entry.rdi,
+                flags = DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS or transportFlags,
+                capabilitySummary = capabilities.decodeCodecMask,
+                streamToken = streamToken,
+                routeCost = routeCost,
+                sequence = 0,
+                streamBitrateKbps = streamBitrateKbps,
+                version = DiscoveryAnnouncement.ROTATING_VERSION,
+            )
+            return RotatingStreamAnnouncements.viewerRequest(base, entry, hint)
+        }
+        if (transport != null && streamToken != 0 && RotatingDiscoveryFeature.enabled &&
+            transport != BluetoothTransportOption.CLASSIC_RFCOMM
+        ) {
+            // Joining a version 2 offer: a version 2 source cannot decode version 5, so the request shows the
+            // fixed prefix (stated residual, PROTOCOL Phase 1b item 2).
+            Log.i(
+                "BluetoothVideo",
+                (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "rotid_downgrade: role=viewer | reason=selected_version_2",
+            )
+            onStatus("This source does not support private discovery. Your phone's fixed ID is visible while you join.")
+        }
+        return DiscoveryAnnouncement(
+            nodeIdPrefix = identity.nodeId.toByteArray()
+                .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES),
+            flags = DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS or transportFlags or
+                recoveryDiscoveryFlag(recoveryFromNodeIdPrefix),
+            capabilitySummary = capabilities.decodeCodecMask,
+            streamToken = streamToken,
+            routeCost = routeCost,
+            sequence = 0,
+            streamBitrateKbps = streamBitrateKbps,
+            recoveryFromNodeIdPrefix = recoveryFromNodeIdPrefix,
+        )
+    }
+
+    /** What a boundary re-announcement needs; set once the first request is on air. */
+    private class ViewerAnnouncementInputs(
+        val identity: SigningIdentity,
+        val capabilities: NodeCapabilities,
+        val transportFlags: Int,
+        val streamToken: Int,
+        val routeCost: Int,
+        val streamBitrateKbps: Int,
+        val recoveryFromNodeIdPrefix: ByteArray?,
+    )
+
+    @Volatile private var viewerInputs: ViewerAnnouncementInputs? = null
+
+    /**
+     * Rotating IDs: while this viewer still waits for its parent, a boundary restarts its request set on a
+     * new advertising set with the new role-2 RDI (RV6), after the usual silence. Only a version 5 request
+     * rotates; everything else is unchanged.
+     */
+    private fun watchViewerBoundaries(
+        identity: SigningIdentity,
+        capabilities: NodeCapabilities,
+        transportFlags: Int,
+        streamToken: Int,
+        routeCost: Int,
+        streamBitrateKbps: Int,
+        recoveryFromNodeIdPrefix: ByteArray?,
+    ) {
+        val transport = viewerRequestTransport ?: return
+        if (streamToken == 0 ||
+            !RotatingStreamAnnouncements.viewerRequestRotates(RotatingDiscoveryFeature.enabled, transport, expectedSourceRotating)
+        ) {
+            return
+        }
+        viewerInputs = ViewerAnnouncementInputs(
+            identity, capabilities, transportFlags, streamToken, routeCost, streamBitrateKbps, recoveryFromNodeIdPrefix,
+        )
+        RotatingDiscovery.addBoundaryListener(viewerBoundaryListener)
+    }
+
+    private fun reannounceViewerRequest() {
+        val inputs = viewerInputs ?: return
+        if (!running.get()) return
+        val control = bleControlServer
+        val gatt = gattVideoServer
+        if (control == null && gatt == null) return
+        thread(name = "ViewerIdRotation") {
+            val announcement = viewerAnnouncement(
+                inputs.identity, inputs.capabilities, inputs.transportFlags, inputs.streamToken, inputs.routeCost,
+                inputs.streamBitrateKbps, inputs.recoveryFromNodeIdPrefix,
+            )
+            val silenceMs = RotatingDiscovery.boundarySilenceMs()
+            control?.reannounce(announcement, silenceMs)
+            gatt?.reannounce(announcement, silenceMs)
+            if (BuildConfig.DEBUG) {
+                Log.i("BluetoothVideo", "BENCHMARK rotid_restart: role=viewer | silenceMs=$silenceMs")
             }
         }
     }
@@ -310,18 +456,9 @@ class AndroidVideoReceiver(
         val server = GattVideoServer(
             context,
             adapter,
-            DiscoveryAnnouncement(
-                nodeIdPrefix = identity.nodeId.toByteArray()
-                    .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES),
-                flags = DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS or
-                    DiscoveryAnnouncement.FLAG_GATT_TRANSPORT or
-                    recoveryDiscoveryFlag(recoveryFromNodeIdPrefix),
-                capabilitySummary = capabilities.decodeCodecMask,
-                streamToken = streamToken,
-                routeCost = routeCost,
-                sequence = 0,
-                streamBitrateKbps = streamBitrateKbps,
-                recoveryFromNodeIdPrefix = recoveryFromNodeIdPrefix,
+            viewerAnnouncement(
+                identity, capabilities, DiscoveryAnnouncement.FLAG_GATT_TRANSPORT, streamToken, routeCost,
+                streamBitrateKbps, recoveryFromNodeIdPrefix,
             ),
             phyPreference,
             onStatus,
@@ -329,12 +466,17 @@ class AndroidVideoReceiver(
         )
         gattVideoServer = server
         server.start()
+        watchViewerBoundaries(
+            identity, capabilities, DiscoveryAnnouncement.FLAG_GATT_TRANSPORT, streamToken, routeCost,
+            streamBitrateKbps, recoveryFromNodeIdPrefix,
+        )
         while (running.get()) {
             val connection = if (streamToken == 0) {
                 connections.take()
             } else {
                 connections.poll(CONNECTION_WAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS) ?: return
             }
+            RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_VIEWER_REQUEST)
             try {
                 receiveSecure(
                     context,
@@ -523,12 +665,13 @@ class AndroidVideoReceiver(
     ) {
         val linkLoad = NodeLinkLoad.open(transport, LinkDirection.RECEIVE)
         val input = linkLoad.countingInput(linkInput)
+        val linkCapabilities = StreamHopOpening.linkCapabilities(capabilities, RotatingDiscoveryFeature.enabled, transport)
         val session = try {
             SecureBluetoothHandshake.respond(
                 input,
                 output,
                 identity,
-                capabilities,
+                linkCapabilities,
             )
         } catch (error: Throwable) {
             linkLoad.close()
@@ -547,6 +690,17 @@ class AndroidVideoReceiver(
                 "Sender did not authenticate support for ${transport.shortLabel}"
             }
             onLinkAuthenticated(session)
+            // Rotating IDs, phase 1b: this listener sends its pinned role-2 entries and reads the connector's
+            // role-1 entries (both only when both link hellos carry bit 3).
+            val linkOpening = if (RotatingDiscoveryFeature.enabled && transport != BluetoothTransportOption.CLASSIC_RFCOMM) {
+                LinkOpeningExchange.exchange(
+                    session,
+                    linkCapabilities,
+                    RotatingDiscovery.pinned(RotatingDiscoveryIds.ROLE_VIEWER_REQUEST),
+                )
+            } else {
+                null
+            }
             // Experimental peer labels (default off): bit 5 in this endpoint hello only, never in
             // the link hello and never for the group (BGK1) harness.
             val labelsOn = PeerLabelFeature.enabled
@@ -558,11 +712,39 @@ class AndroidVideoReceiver(
             }
             val endpointSession = groupSession?.endpoint ?: requireNotNull(contentSession)
             if (expectedSourceNodeIdPrefix != null) {
-                require(
-                    endpointSession.peerNodeId.toByteArray()
-                        .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES)
-                        .contentEquals(expectedSourceNodeIdPrefix),
-                ) { "Stream source identity changed between discovery and connection" }
+                if (expectedSourceRotating) {
+                    // RV15: the check follows the selected version 5 offer: its RDI must open for the link
+                    // node (role 1), and the endpoint must be that same node.
+                    val selectedOffer = DiscoveryAnnouncement(
+                        nodeIdPrefix = expectedSourceNodeIdPrefix,
+                        flags = DiscoveryAnnouncement.FLAG_STREAM_AVAILABLE,
+                        capabilitySummary = 0,
+                        streamToken = streamToken,
+                        routeCost = routeCost,
+                        sequence = 0,
+                        version = DiscoveryAnnouncement.ROTATING_VERSION,
+                    )
+                    val result = StreamHopOpening.check(
+                        selectedOffer,
+                        RotatingDiscoveryIds.ROLE_STREAM_OFFER,
+                        session.peerNodeId,
+                        linkOpening,
+                        endpointSession.peerNodeId,
+                    )
+                    Log.i(
+                        "BluetoothVideo",
+                        (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "rotid_open: role=stream | result=$result",
+                    )
+                    require(result == DiscoverySelectionCheck.Result.PASS) {
+                        "Stream source identity changed between discovery and connection"
+                    }
+                } else {
+                    require(
+                        endpointSession.peerNodeId.toByteArray()
+                            .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES)
+                            .contentEquals(expectedSourceNodeIdPrefix),
+                    ) { "Stream source identity changed between discovery and connection" }
+                }
             }
             val forwardedGrant = if (endpointSession.peerCapabilities.maxChildren > 0) {
                 val wrapped = session.reader.read()
@@ -589,6 +771,15 @@ class AndroidVideoReceiver(
                     grant.key.fill(0)
                 }
             } ?: groupSession?.streamOpener ?: endpointSession.opener
+            if (RotatingDiscoveryFeature.enabled && viewerLogicalToken != 0) {
+                if (forwardedGrant != null) {
+                    // The key a source also holds for this forwarder (its sealer key): the base of the recovery
+                    // hint if this forwarder is lost (RV18). Memory only; a direct-source link clears it.
+                    ViewerRecoveryMemory.remember(session.peerNodeId, mediaOpener.copyKeyForForwarding(), viewerLogicalToken)
+                } else {
+                    ViewerRecoveryMemory.clear()
+                }
+            }
             val mediaSourceNodeId = forwardedGrant?.sourceNodeId ?: endpointSession.peerNodeId
             // The forwarder's own full fingerprint was checked in its handshake; the original source is
             // known only by the 128-bit node ID in the grant, compared with verified contacts here.
@@ -691,6 +882,7 @@ class AndroidVideoReceiver(
                 "This phone cannot decode stream codec ${header.codecId}"
             }
             onVideoFormat(header)
+            viewerFrameAge?.setFrameRate(header.fps)
             val receiverNodeHealthPolicy = ReceiverNodeHealthPolicy(header.fps)
             if (relayAllowed && streamBitrateKbps > 0) {
                 val relayLinkKbps = MeshBandwidthEstimator.perLinkKbps(streamBitrateKbps, header.fps)
@@ -786,6 +978,8 @@ class AndroidVideoReceiver(
                         debugGattConnectionPriority = debugForwarderGattPriority,
                         // Experimental peer labels: forward only labels verified here, byte for byte.
                         forwardLabels = if (labelsOn) streamLabels::verifiedEncoded else null,
+                        upstreamAnnouncedBytes = expectedSourceNodeIdPrefix?.takeIf { expectedSourceRotating },
+                        rotatingOffers = RotatingStreamAnnouncements.offerRotates(RotatingDiscoveryFeature.enabled, transport),
                     )
                 } catch (error: Exception) {
                     forwardingKey.fill(0)
@@ -814,10 +1008,16 @@ class AndroidVideoReceiver(
             streamReader.meshStreamId?.let {
                 onStatus("Receiving serialized mesh stream $it with authenticated source and TTL.")
             }
-            val playoutClock = playbackDelayProfile.newPlayoutClock(playbackDelayMs)
-            // Latency over stalls (user direction 2026-10-07): a viewer that may relay starts with
-            // room for the parent-link stall when its child joins.
-            if (streamForwarder != null) playoutClock.reserve(RELAY_JOIN_RESERVE_MS)
+            // A fresh clock for every link, at the base delay (ViewerLinkPlayout.kt). Latency over stalls
+            // (user direction 2026-10-07): a viewer that may relay starts with room for the
+            // parent-link stall when its child joins.
+            val playoutClock = newViewerLinkPlayoutClock(
+                playbackDelayProfile,
+                playbackDelayMs,
+                relaying = streamForwarder != null,
+                relayJoinReserveMs = RELAY_JOIN_RESERVE_MS,
+            )
+            viewerFrameAge?.playoutClockStarted(playoutClock.currentDelayMs)
             val videoConfig = mutableListOf<ByteArray>()
             val audioConfig = mutableListOf<ByteArray>()
             var firstAudioPresentationTimeUs: Long? = null
@@ -1106,6 +1306,7 @@ class AndroidVideoReceiver(
                     debugReleaseAtPlayout = debugReleaseAtPlayout,
                     onRecoveryStateChanged = onVideoRecovery,
                     debugTraceSession = debugTraceSessionName,
+                    onFrameRendered = viewerFrameAge?.let { monitor -> monitor::onFrameRendered },
                 )
             }
             decoder = activeDecoder
@@ -1147,6 +1348,10 @@ class AndroidVideoReceiver(
                 // Network arrival is the only point where video may grow the adaptive delay; the
                 // decoder feed and output release only look the target up (MediaPlayoutClock.targetFor).
                 val arrivalTiming = videoPacketPlayoutTiming(packet, playoutClock, System.nanoTime())
+                // Before the decoder gets it, so a rendered frame never trails the newest received one.
+                if (packet.flags and StreamProtocol.FLAG_CODEC_CONFIG == 0) {
+                    viewerFrameAge?.onVideoReceived(packet.presentationTimeUs, System.nanoTime())
+                }
                 inLocalMediaStage(LocalMediaStage.VIDEO_DECODER) { activeDecoder.offer(packet) }
                 if (packet.flags and StreamProtocol.FLAG_CODEC_CONFIG == 0) {
                     if (resumePending) {
@@ -1284,6 +1489,7 @@ class AndroidVideoReceiver(
                             )
                             windowLateMaxMs = 0L
                         }
+                        viewerFrameAge?.onPlayoutDelay(playoutClock.currentDelayMs)
                         lastReportedBytes = bytes
                         lastReportNs = nowNs
                     }
@@ -1374,9 +1580,16 @@ internal fun receiverStartupFailureNotice(
     transport: BluetoothTransportOption,
     streamToken: Int,
     detail: String,
+    bondFree: Boolean = ClassicFeatures.current.bondFree,
 ): String = if (transport == BluetoothTransportOption.CLASSIC_RFCOMM && streamToken != 0) {
     "Classic connection did not start: $detail. The sender may be busy/full or out of reach. " +
-        "Pair the phones if they are unpaired, or switch the broadcaster to BLE GATT."
+        if (bondFree) {
+            "Both phones need Connect without pairing turned on, and a stream reaches only a phone this one has " +
+                "already met. Or switch the broadcaster to BLE GATT."
+        } else {
+            "Pair the phones if they are unpaired, turn on Connect without pairing (Settings > Features) on both " +
+                "phones, or switch the broadcaster to BLE GATT."
+        }
 } else {
     "Receiver stopped: $detail"
 }

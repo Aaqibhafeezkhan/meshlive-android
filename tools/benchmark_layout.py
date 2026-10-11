@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 
 from debug_image_lifecycle import DebugImages
+from evidence_relocation import logical
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "benchmarks"
@@ -31,7 +32,7 @@ def _key(path):
 
 
 def _target(path, root):
-    physical = (root / path).resolve()
+    physical = logical(root / path, root)
     try:
         parts = physical.relative_to(root).parts
     except ValueError:
@@ -80,7 +81,7 @@ def _aliases(root):
 def resolve(path, base=None, root=ROOT):
     """Open an exact original locator at its canonical physical location."""
     root, path = Path(root).resolve(), Path(path)
-    candidate = (path if path.is_absolute() else Path(base if base is not None else root) / path).resolve()
+    candidate = logical(path if path.is_absolute() else Path(base if base is not None else root) / path, root)
     try:
         relative = candidate.relative_to(root)
     except ValueError:
@@ -93,7 +94,7 @@ def resolve(path, base=None, root=ROOT):
 def original(path, root=ROOT):
     """Recover a moved document's original location for its recorded relative references."""
     root, path = Path(root).resolve(), Path(path)
-    candidate = (path if path.is_absolute() else root / path).resolve()
+    candidate = logical(path if path.is_absolute() else root / path, root)
     try:
         relative = candidate.relative_to(root)
     except ValueError:
@@ -111,7 +112,7 @@ def output_path(path, group, root=ROOT):
     DebugImages._guard(candidate)
     if any(":" in part for part in candidate.parts[1:]):
         raise ValueError("Benchmark output cannot use an alternate data stream")
-    physical = candidate.resolve()
+    physical = logical(candidate, root)
     if physical.is_relative_to(root):
         expected = root / "benchmarks" / group
         if not physical.is_relative_to(expected) or physical == expected and group != "catalog":

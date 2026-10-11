@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Experimental public stream title (peer labels; naming design 3.7, R13/R15): a second legacy,
+ * Public stream title (peer labels; Settings > Features "Names and titles"; naming design 3.7, R13/R15): a second legacy,
  * non-connectable, scannable advertising set whose scan response carries [TitlePageCodec] pages.
  * Same service UUID as discovery (no new scan-filter slot), 250 ms interval, one page per 1 s
  * (at least 4 advertising events per page), rotated in place with setScanResponseData.
@@ -29,6 +29,12 @@ internal class TitleAdvertiser(
     private val adapter: BluetoothAdapter,
     routeToken: Int,
     title: String,
+    /**
+     * Rotating IDs: restart this set at epoch boundaries with the same pages. An owner that rebuilds the
+     * pages with a new route token at the boundary (stream sources and forwarders, phase 1b) passes false
+     * and recreates the advertiser instead.
+     */
+    selfRotate: Boolean = RotatingDiscoveryFeature.enabled,
 ) : Closeable {
     private val pages = TitlePageCodec.pages(routeToken, title)
     private val handler = Handler(Looper.getMainLooper())
@@ -57,7 +63,7 @@ internal class TitleAdvertiser(
      * boundary. The page set stops, stays silent 1-8 s and starts again as a new set (new address).
      */
     private val boundaryListener: (Long) -> Unit = { _ -> restartOnNewSet() }
-    private val rotateWithBoundaries = RotatingDiscoveryFeature.enabled
+    private val rotateWithBoundaries = selfRotate
     /** One restart at a time: a second notice during the silence is coalesced, never a second set. */
     private val restarting = AtomicBoolean(false)
 
@@ -65,6 +71,12 @@ internal class TitleAdvertiser(
     @SuppressLint("MissingPermission")
     fun start(timeoutSeconds: Long = 5): Int? {
         val advertiser = adapter.bluetoothLeAdvertiser ?: return null
+        // Device policy first (registry entry peer-label-title-advertising-set, off-switch included).
+        val policy = TitleAdvertisingDecision.decide(PeerLabelPolicy.titleSetAllowed(), freeSets = null)
+        if (policy is TitleAdvertisingDecision.Outcome.Skip) {
+            Log.i("BluetoothVideo", "BENCHMARK peer_labels title_pages: skipped (${policy.reason})")
+            return null
+        }
         // Headroom: start only when the probe saw at least MIN_FREE_SETS free sets, so one instance
         // stays free for the stream offer's own stop + restart (balanced fallback, re-advertise) and
         // for OS advertisers. Unprobed (e.g. a viewer-forwarder that never streamed): probe first.

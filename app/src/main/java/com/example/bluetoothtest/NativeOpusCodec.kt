@@ -5,7 +5,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Experimental native libopus call codec (DEBUG `test_call_native_opus`, default off; README register).
+ * Native libopus call codec (promoted to Settings > Features on 2026-10-11 as "Call audio with loss
+ * recovery"; default [ConnectivityFeatureDefaults.NATIVE_OPUS] until the phone A/B T10; DEBUG
+ * `test_call_native_opus` is the benchmark switch; README register).
  *
  * c2.android.opus hard-codes general-audio mode, no in-band FEC and no packet-loss concealment
  * (AOSP frameworks/av C2SoftOpusEnc.cpp / C2SoftOpusDec.cpp). WebRTC drives libopus with
@@ -28,6 +30,19 @@ internal data class NativeOpusSettings(
         get() = if (fec) lossPercent else -1
 
     companion object {
+        const val EXTRA_ENABLED = "test_call_native_opus"
+        const val PREF_ENABLED = "feature_native_opus"
+
+        /**
+         * The shared feature rule ([FeatureCatalog.resolve]) for the main switch. FEC, the loss hint and
+         * DTX are not user settings: DTX is DEBUG-only and stays off (it changes the packet cadence).
+         */
+        fun resolveEnabled(
+            benchmarkLaunch: Boolean,
+            extra: (String) -> Boolean,
+            stored: (String) -> Boolean?,
+        ): Boolean = FeatureCatalog.resolve(ConnectivityFeatures.nativeOpus, benchmarkLaunch, extra, stored)
+
         /**
          * Expected-loss hint while FEC is on. libopus spends LBRR bits only for a non-zero hint; there
          * is no loss feedback on the wire yet, so this is a fixed DEBUG-tunable value.

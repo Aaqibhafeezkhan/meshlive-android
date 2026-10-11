@@ -29,6 +29,12 @@ class BluetoothVideoBroadcaster(
     private val senders = ConcurrentHashMap<String, BluetoothVideoSender>()
     private val connectedPeers = ConcurrentHashMap.newKeySet<String>()
     @Volatile private var maximumSourceChildren = 0
+
+    /**
+     * Rotating IDs (phase 1b): the stream's logical token, set by the owner. A version 5 recovery request
+     * carries a hint over it (RecoveryMatching); 0 (unset, or the experiment off) never matches.
+     */
+    @Volatile var logicalStreamToken = 0
     /**
      * Experimental temporal layering (off by default): once frames prove the stream is layered,
      * admission plans further viewers at the measured base layer. Never fed while the experiment is off.
@@ -93,9 +99,7 @@ class BluetoothVideoBroadcaster(
                 ),
             )
         }
-        val disconnectedPreviousKeys = peers.mapNotNull { peer ->
-            peer.announcement.recoveryFromNodeIdPrefix?.let(::nodePrefixKey)
-        }.toSet()
+        val disconnectedPreviousKeys = peers.mapNotNull { recoveryKeyOf(it) }.toSet()
         val newPeers = peers.distinctBy(::peerIdentityKey)
             .filterNot { senders.containsKey(peerIdentityKey(it)) }
             .filterNot { peer ->
@@ -194,6 +198,7 @@ class BluetoothVideoBroadcaster(
                 proveVideoIntegrityForTest,
                 ioConfig,
                 debugTraceSession = debugTraceSession,
+                selectedRotatingRequest = peer.announcement.takeIf { it.rotating },
             ) {
                 handleAuthenticatedPeer(peer, peerKey, sender, maximumChildren)
             }
@@ -367,9 +372,8 @@ class BluetoothVideoBroadcaster(
         sender: BluetoothVideoSender,
         maximumChildren: Int,
     ) {
-        val previousKey = peer.announcement.recoveryFromNodeIdPrefix
-            ?.let(::nodePrefixKey)
-            ?.takeUnless { it == peerKey }
+        if (peer.announcement.rotating) replaceSameNode(peerKey, sender)
+        val previousKey = recoveryKeyOf(peer)?.takeUnless { it == peerKey }
         val previousSender = previousKey?.let(senders::get)
         if (previousKey == null || previousSender == null ||
             !previousSender.expectsPeriodicChildHeartbeat()
@@ -440,10 +444,52 @@ class BluetoothVideoBroadcaster(
         connectedPeers.mapNotNull(senders::get)
 
     private fun recoveryPreviousSenderKey(peer: BleL2capPeer): String? =
-        peer.announcement.recoveryFromNodeIdPrefix
-            ?.let(::nodePrefixKey)
+        recoveryKeyOf(peer)
             ?.takeUnless { it == peerIdentityKey(peer) }
             ?.takeIf(senders::containsKey)
+
+    /** The key of the child this request says it replaces: a version 2 prefix, or a matched version 5 hint. */
+    private fun recoveryKeyOf(peer: BleL2capPeer): String? =
+        if (peer.announcement.rotating) {
+            rotatingRecoveryKey(peer)
+        } else {
+            peer.announcement.recoveryFromNodeIdPrefix?.let(::nodePrefixKey)
+        }
+
+    /**
+     * Rotating IDs: the admission key of the connected child whose recovery hint equals this version 5
+     * request's (RV18). Only children this source holds an end-to-end key for can match; a request whose
+     * hint matches nobody is an ordinary request.
+     */
+    private fun rotatingRecoveryKey(peer: BleL2capPeer): String? {
+        val hint = peer.announcement.takeIf { it.rotating }?.recoveryFromNodeIdPrefix ?: return null
+        val logical = logicalStreamToken.takeIf { it != 0 } ?: return null
+        val children = senders.entries.mapNotNull { (key, child) ->
+            val node = child.authenticatedPeerNode() ?: return@mapNotNull null
+            val mediaKey = child.recoveryMediaKey() ?: return@mapNotNull null
+            RecoveryMatching.Child(key, node, mediaKey)
+        }
+        return RecoveryMatching.match(
+            hint, logical, peer.announcement.nodeIdPrefix, peer.announcement.streamToken, children,
+        )
+    }
+
+    /**
+     * Rotating IDs: one authenticated link per node. A second authenticated link from a node that already
+     * has one (its request rotated while the first link was dying) replaces the older sender.
+     */
+    private fun replaceSameNode(peerKey: String, sender: BluetoothVideoSender) {
+        val node = sender.authenticatedPeerNode() ?: return
+        senders.entries.toList().forEach { (key, other) ->
+            if (key != peerKey && other !== sender && other.authenticatedPeerNode() == node) {
+                if (senders.remove(key, other)) {
+                    connectedPeers.remove(key)
+                    other.close()
+                    onConnectionsChanged(connectedPeers.size)
+                }
+            }
+        }
+    }
 
     private companion object {
         const val ADMISSION_REFRESH_NS = 2_000_000_000L
@@ -455,8 +501,16 @@ class BluetoothVideoBroadcaster(
     }
 }
 
+/**
+ * Version 5 requests are keyed by their announced bytes and advertising address (RD3): a copy of someone
+ * else's advert from another address is a separate, failing attempt and cannot starve the real viewer.
+ */
 private fun peerIdentityKey(peer: BleL2capPeer): String =
-    nodePrefixKey(peer.announcement.nodeIdPrefix)
+    if (peer.announcement.rotating) {
+        "r:" + nodePrefixKey(peer.announcement.nodeIdPrefix) + "@" + peer.device.address
+    } else {
+        nodePrefixKey(peer.announcement.nodeIdPrefix)
+    }
 
 private fun nodePrefixKey(prefix: ByteArray): String =
     prefix.joinToString("") { "%02x".format(it) }

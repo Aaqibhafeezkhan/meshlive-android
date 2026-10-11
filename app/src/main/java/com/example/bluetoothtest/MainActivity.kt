@@ -227,26 +227,40 @@ class MainActivity : AppCompatActivity() {
     private lateinit var relayChildMediaAgeSwitch: MaterialSwitch
     private lateinit var relayChildMediaAgeDescriptionText: TextView
     private lateinit var experimentalTemporalLayersDescriptionText: TextView
-    private lateinit var experimentalVoiceCallsSwitch: MaterialSwitch
-    private lateinit var experimentalVoiceCallsDescriptionText: TextView
-    private lateinit var experimentalPushToTalkSwitch: MaterialSwitch
-    private lateinit var experimentalPttModeSwitch: MaterialSwitch
-    private lateinit var experimentalPushToTalkDescriptionText: TextView
-    private lateinit var experimentalStoreForwardSwitch: MaterialSwitch
-    private lateinit var experimentalPeerLabelsSwitch: MaterialSwitch
-    private lateinit var experimentalPeerLabelsDescriptionText: TextView
-    private lateinit var experimentalStoreForwardDescriptionText: TextView
-    private lateinit var experimentalCocAutoGattSwitch: MaterialSwitch
-    private lateinit var experimentalCocAutoGattDescriptionText: TextView
-    private lateinit var experimentalClassicBondFreeSwitch: MaterialSwitch
-    private lateinit var experimentalClassicBondFreeDescriptionText: TextView
-    private lateinit var experimentalCompactDiscoverySwitch: MaterialSwitch
     private lateinit var experimentalRotatingIdsSwitch: MaterialSwitch
     private lateinit var experimentalRotatingIdsDescriptionText: TextView
     private lateinit var rotatingIdsVisibleButton: com.google.android.material.button.MaterialButton
-    private lateinit var experimentalCompactDiscoveryDescriptionText: TextView
-    private lateinit var experimentalOfflineAppShareSwitch: MaterialSwitch
-    private lateinit var experimentalOfflineAppShareDescriptionText: TextView
+    private lateinit var rotatingIdsResetKeyButton: com.google.android.material.button.MaterialButton
+    private lateinit var rotatingIdsLegacyNoteText: TextView
+    private lateinit var neutralBluetoothNameSwitch: MaterialSwitch
+    private lateinit var neutralBluetoothNameDescriptionText: TextView
+    private lateinit var neutralBluetoothNameStatusText: TextView
+    private var neutralNameSwitchBinding = false
+    private var gapNameProbeStarted = false
+    private lateinit var experimentalRelayedCallsSwitch: MaterialSwitch
+    private lateinit var experimentalRelayedCallsDescriptionText: TextView
+    private lateinit var relayedCallsHelpSwitch: MaterialSwitch
+    private lateinit var relayedCallsConsentSwitch: MaterialSwitch
+    private lateinit var relayedCallsStatusText: TextView
+
+    /** Experimental relayed calls (RelayedCallsFeature, default off): exists only while the switch is on. */
+    private var relayedCalls: RelayedCallsController? = null
+    private var relayStopReceiverRegistered = false
+    private val relayStopReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: Intent) {
+            if (!RelayedCallsNotification.isAuthentic(intent.getStringExtra(RelayedCallsNotification.EXTRA_TOKEN))) return
+            runOnUiThread { privateCall?.preemptRelay() }
+        }
+    }
+    /** Settings > Features for connectivity (FeatureSettingsBlock over the FeatureCatalog's connectivity group). */
+    private var connectivityFeatureBlock: FeatureSettingsBlock? = null
+    /** Settings > Features for stream viewers (ViewerFeatures). */
+    private var viewerFeatureBlock: FeatureSettingsBlock? = null
+    /** Settings > Features for updates (UpdateFeatures) and the home update note (UpdatesHome). */
+    private var updateFeatureBlock: FeatureSettingsBlock? = null
+    private var updatesHome: UpdatesHome? = null
+    /** Experimental viewer frame age (default off; ViewerFrameAgeController.kt). Built when the Watch screen first opens. */
+    private var viewerFrameAge: ViewerFrameAgeController? = null
     /** Bond-free Classic asks Android for visibility at most once per process (system dialog). */
     private var classicVisibilityRequested = false
     private lateinit var videoBackButton: View
@@ -303,6 +317,8 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: android.content.Context, intent: Intent) {
             updateHomeReadiness()
             refreshCallReachability()
+            // A rename that could not be written while Bluetooth was off is applied once it is on (never per session).
+            if (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1) == BluetoothAdapter.STATE_ON) applyNeutralName()
         }
     }
     private val homePermissionRequest = registerForActivityResult(
@@ -448,6 +464,15 @@ class MainActivity : AppCompatActivity() {
     private var streamCapacityGeneration = 0
     private var streamAdvertisedFull = false
     private var streamRouteToken = 0
+
+    /**
+     * Rotating IDs, phase 1b (default off): the viewer-request tokens this source accepts (current plus the
+     * previous one for 60 s) and the boundary listener that restarts the stream offer on a new set. Off: the
+     * window holds the one route token and behaves as the old exact-token test.
+     */
+    private val streamRequestTokens = RouteTokenWindow()
+    private var streamBoundaryListening = false
+    private val streamBoundaryListener: (Long) -> Unit = { _ -> rotateStreamPresenceForBoundary() }
     private var streamPresenceStarting = false
     private var streamArmed = false
     private var streamPaused = false
@@ -459,7 +484,11 @@ class MainActivity : AppCompatActivity() {
     private var receiverJoinStartedAtNs = 0L
     private var receiverFirstSurfaceForJoinPending = false
     private var receiverPlaybackPaused = false
-    private val receiverRecoveryNoticePolicy = ReceiverRecoveryNoticePolicy()
+    private val receiverRecoveryNoticePolicy = ReceiverRecoveryNoticePolicy(
+        holdMs = { if (DebugTunables.receiverUiStability) ReceiverRecoveryNoticePolicy.REPEAT_HOLD_MS else 0L },
+    )
+    /** Releases a held "Recovering video" cover once a repeating recovery has stayed quiet. */
+    private var receiverRecoveryCoverRelease: Runnable? = null
     private var receiverRecoveryNoticeRunnable: Runnable? = null
     private var viewerDiscoveryContinuousLowLatency: Boolean? = null
     private var receiverContinuityTracker: RenderedFrameContinuityTracker? = null
@@ -713,6 +742,10 @@ class MainActivity : AppCompatActivity() {
             ?.takeIf { BuildConfig.DEBUG && it.matches(Regex("[0-9a-f]{12}")) }
     }
     /** DEBUG call relay: take only an offer at this route cost (0 = the callee, n = the n-th relay). */
+    /** DEBUG call relay with rotating IDs: the callee advertises version 5, so take the one rotating offer (no prefix to match). */
+    private val debugRelayCalleeRotating: Boolean by lazy {
+        BuildConfig.DEBUG && intent.getBooleanExtra("test_relay_callee_rotating", false)
+    }
     private val debugRelayRouteCost: Int? by lazy {
         intent.getIntExtra("test_relay_route_cost", -1).takeIf { BuildConfig.DEBUG && it >= 0 }
     }
@@ -918,8 +951,15 @@ class MainActivity : AppCompatActivity() {
         LinkCapacity.attach(this, bluetoothAdapter)
         DeviceTraits.attachBluetoothAdapter(bluetoothAdapter)
         DebugTunables.devicePolicyOff = parseDevicePolicySwitches(intent.getStringExtra("test_device_policy_off"))
+        // DEBUG harness for the rotating-ID phone tests (DebugContactControl): day-roll clock offset (cold start only).
+        DebugContactControl.applyDayOffset(this, intent)
+        // DEBUG harness: shorter rotating-ID epoch (test_rotid_epoch_s=60..900), set once before RotatingDiscovery.init.
+        DebugContactControl.applyEpochLength(this, intent)
         // Verified contacts are checked by every end-to-end handshake; this opens no key until one exists.
         IdentityVerification.attach(this)
+        // DEBUG harness: one-shot token-gated verify/forget of a contact; the identity line the harness reads.
+        DebugContactControl.handleIntent(this, intent)
+        DebugContactControl.logOwnIdentity(this)
         EmergencyWipe.registerSessionTerminator(emergencyWipeTerminator)
         runCatching { AppShare.cleanupExpired(this) } // Shared APK copies live at most AppSharePolicy.COPY_TTL_MS.
         runCatching { DozeWatchdog.attach(this) } // Observes and logs Doze/standby only (DozeWatchdog).
@@ -929,6 +969,7 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.encoderBitrateAdjuster = intent.getBooleanExtra("test_encoder_bitrate_adjuster", true)
         DebugTunables.encoderFramerateAdjuster = intent.getBooleanExtra("test_encoder_framerate_adjuster", false)
         DebugTunables.benchmarkLaunch = intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+        UpdateRuntime.readDebugExtras(intent)
         DebugTunables.linkPacing = intent.getBooleanExtra("test_link_pacing", true)
         DebugTunables.scanRecovery = intent.getBooleanExtra("test_scan_recovery", true)
         DebugTunables.linkPacerSeed = intent.getBooleanExtra("test_link_pacer_seed", true)
@@ -948,7 +989,6 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.deliveryReports = intent.getBooleanExtra("test_delivery_reports", true)
         DebugTunables.streamDeliveryReports = intent.getBooleanExtra("test_stream_delivery_reports", false)
         DebugTunables.startRateGuard = intent.getBooleanExtra("test_start_rate_guard", true)
-        DebugTunables.callNativeOpus = intent.getBooleanExtra("test_call_native_opus", false)
         DebugTunables.callNativeOpusFec = intent.getBooleanExtra("test_call_native_opus_fec", true)
         DebugTunables.callNativeOpusLossPercent =
             intent.getIntExtra("test_call_native_opus_loss_pct", NativeOpusSettings.DEFAULT_LOSS_PERCENT)
@@ -984,16 +1024,14 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.experimentalBoundedMediaAge = intent.getBooleanExtra("test_bounded_media_age", false)
         applyRelayChildMediaAge()
         DebugTunables.callVideoFragments = intent.getBooleanExtra("test_call_video_fragments", false)
+        DebugTunables.callFragmentAirtimeMs = intent.getIntExtra("test_call_fragment_airtime_ms", 0)
         DebugTunables.callSpeechLedPlayout = intent.getBooleanExtra("test_call_speech_led_playout", false)
+        DebugTunables.callGattSpeechDefaults = !(BuildConfig.DEBUG && DebugTunables.benchmarkLaunch)
         DebugTunables.callAudioHeadroom = intent.getBooleanExtra("test_call_audio_headroom", true)
         DebugTunables.callCodecFallback = intent.getBooleanExtra("test_call_codec_fallback", true)
         DebugTunables.callLegacyLowDelay = intent.getBooleanExtra("test_call_legacy_low_delay", false)
         DebugTunables.callLegacyRelief = intent.getBooleanExtra("test_call_legacy_relief", false)
-        DebugTunables.callLockScreen = intent.getBooleanExtra("test_call_lock_screen", false)
-        CallUx.settings = CallUxSettings.resolve(BuildConfig.DEBUG, DebugTunables.benchmarkLaunch) {
-            intent.getBooleanExtra(it, false)
-        }
-        DebugTunables.callAudioConceal = CallUx.settings.audioConcealment
+        applyCallUxFeatures()
         registerCallNotificationReceiver()
         NotificationPrivacy.debugPeerNames = if (intent.hasExtra("test_lock_screen_peer_names")) {
             intent.getBooleanExtra("test_lock_screen_peer_names", false)
@@ -1006,12 +1044,17 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.relayedCallMeasuredCap = intent.getBooleanExtra("test_relayed_call_measured_cap", false)
         DebugTunables.callCloseWaitsForPeer = intent.getBooleanExtra("test_call_close_wait_peer", true)
         DebugTunables.relayChildReanchor = intent.getBooleanExtra("test_relay_child_reanchor", true)
+        DebugTunables.relayChildStallGuard = intent.getBooleanExtra("test_relay_child_stall_guard", true)
+        DebugTunables.relayUpstreamDck = intent.getBooleanExtra("test_relay_upstream_dck", false)
         DebugTunables.relayRecoveryGrace = intent.getBooleanExtra("test_relay_recovery_grace", true)
         DebugTunables.relayParentTrickle = intent.getBooleanExtra("test_relay_parent_trickle", true)
+        DebugTunables.relayPaceHeadOnly = intent.getBooleanExtra("test_relay_pace_head", true)
+        DebugTunables.relayPaceLeadCap = intent.getBooleanExtra("test_relay_pace_lead_cap", false)
         if (BuildConfig.DEBUG) {
             Log.i(
                 "BluetoothVideo",
                 "BENCHMARK call_policy: videoFragments=${DebugTunables.callVideoFragments} | " +
+                    "fragmentAirtimeMs=${DebugTunables.callFragmentAirtimeMs} | " +
                     "speechLedPlayout=${DebugTunables.callSpeechLedPlayout} | " +
                     "audioHeadroom=${DebugTunables.callAudioHeadroom} | codecFallback=${DebugTunables.callCodecFallback} | " +
                     "legacyLowDelay=${DebugTunables.callLegacyLowDelay} | legacyRelief=${DebugTunables.callLegacyRelief} | " +
@@ -1031,6 +1074,7 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.keyFrameShaping = intent.getFloatExtra("test_keyframe_shaping", -1f)
             .takeIf { it > 0f && it < 1f }?.toDouble()
         DebugTunables.hardwareTemporalLayers = intent.getBooleanExtra("test_hardware_temporal_layers", false)
+        DualListeningFeature.inject = if (BuildConfig.DEBUG) intent.getStringExtra(DualListeningFeature.EXTRA_INJECT) else null
         DebugTunables.sharedCocListener = if (intent.hasExtra("test_coc_shared_listener")) {
             intent.getBooleanExtra("test_coc_shared_listener", false)
         } else {
@@ -1048,6 +1092,7 @@ class MainActivity : AppCompatActivity() {
             )
         }
         DebugTunables.stableAdvertisingAddress = intent.getBooleanExtra("test_stable_adv_address", true)
+        DebugTunables.advNonDiscoverable = intent.getBooleanExtra(NonDiscoverableAdvertising.EXTRA, true)
         DebugTunables.deferredGattClose = if (intent.hasExtra("test_deferred_gatt_close")) {
             intent.getBooleanExtra("test_deferred_gatt_close", false)
         } else {
@@ -1059,6 +1104,8 @@ class MainActivity : AppCompatActivity() {
             null
         }
         DebugTunables.cocSequencedPhy = intent.getBooleanExtra("test_coc_sequenced_phy", true)
+        DebugTunables.gattMtuProbe = intent.getBooleanExtra("test_gatt_mtu_probe", true)
+        DebugTunables.receiverUiStability = intent.getBooleanExtra("test_receiver_ui_stability", true)
         DebugTunables.cocPhyAfterConnect = intent.getBooleanExtra("test_coc_phy_after_connect", false)
         DebugTunables.cocSingleInitiator = intent.getBooleanExtra("test_coc_single_initiator", false)
         DebugTunables.peerAddressBook = intent.getBooleanExtra("test_peer_address_book", false)
@@ -1096,11 +1143,15 @@ class MainActivity : AppCompatActivity() {
                     "peerAddressBook=${DebugTunables.peerAddressBook} | " +
                     "cocCoalesceSdus=${DebugTunables.cocCoalesceSdus}(effective=${CocSduCoalescing.effective()}) | " +
                     "lePriorityRetry=${DebugTunables.lePriorityRetry} | " +
+                    "gattMtuProbe=${DebugTunables.gattMtuProbe} | " +
+                    "receiverUiStability=${DebugTunables.receiverUiStability} | " +
                     "adaptivePhy=${DebugTunables.adaptivePhy} | " +
                     "adaptivePhyMemory=${DebugTunables.adaptivePhyMemory} | " +
                     "phySetupStall=${DebugTunables.phySetupStallGuard} | " +
                     "relayOnePduMove=${DebugTunables.relayOnePduMove} | " +
                     "relayParentTrickle=${DebugTunables.relayParentTrickle} | " +
+                    "relayChildStallGuard=${DebugTunables.relayChildStallGuard} | " +
+                    "relayUpstreamDck=${DebugTunables.relayUpstreamDck} | " +
                     "cocSinglePduSdus=${DebugTunables.cocSinglePduSdus} | " +
                     "gattRequestMtu=${DebugTunables.gattRequestMtu ?: "default"} | " +
                     "gattAlignedWrites=${DebugTunables.experimentalAlignedGattWrites}",
@@ -1243,26 +1294,19 @@ class MainActivity : AppCompatActivity() {
         relayChildMediaAgeSwitch = findViewById(R.id.relayChildMediaAgeSwitch)
         relayChildMediaAgeDescriptionText = findViewById(R.id.relayChildMediaAgeDescriptionText)
         experimentalTemporalLayersDescriptionText = findViewById(R.id.experimentalTemporalLayersDescriptionText)
-        experimentalVoiceCallsSwitch = findViewById(R.id.experimentalVoiceCallsSwitch)
-        experimentalVoiceCallsDescriptionText = findViewById(R.id.experimentalVoiceCallsDescriptionText)
-        experimentalPushToTalkSwitch = findViewById(R.id.experimentalPushToTalkSwitch)
-        experimentalPttModeSwitch = findViewById(R.id.experimentalPttModeSwitch)
-        experimentalPushToTalkDescriptionText = findViewById(R.id.experimentalPushToTalkDescriptionText)
-        experimentalStoreForwardSwitch = findViewById(R.id.experimentalStoreForwardSwitch)
-        experimentalPeerLabelsSwitch = findViewById(R.id.experimentalPeerLabelsSwitch)
-        experimentalPeerLabelsDescriptionText = findViewById(R.id.experimentalPeerLabelsDescriptionText)
-        experimentalStoreForwardDescriptionText = findViewById(R.id.experimentalStoreForwardDescriptionText)
-        experimentalCocAutoGattSwitch = findViewById(R.id.experimentalCocAutoGattSwitch)
-        experimentalCocAutoGattDescriptionText = findViewById(R.id.experimentalCocAutoGattDescriptionText)
-        experimentalClassicBondFreeSwitch = findViewById(R.id.experimentalClassicBondFreeSwitch)
-        experimentalClassicBondFreeDescriptionText = findViewById(R.id.experimentalClassicBondFreeDescriptionText)
-        experimentalCompactDiscoverySwitch = findViewById(R.id.experimentalCompactDiscoverySwitch)
         experimentalRotatingIdsSwitch = findViewById(R.id.experimentalRotatingIdsSwitch)
         experimentalRotatingIdsDescriptionText = findViewById(R.id.experimentalRotatingIdsDescriptionText)
         rotatingIdsVisibleButton = findViewById(R.id.rotatingIdsVisibleButton)
-        experimentalCompactDiscoveryDescriptionText = findViewById(R.id.experimentalCompactDiscoveryDescriptionText)
-        experimentalOfflineAppShareSwitch = findViewById(R.id.experimentalOfflineAppShareSwitch)
-        experimentalOfflineAppShareDescriptionText = findViewById(R.id.experimentalOfflineAppShareDescriptionText)
+        rotatingIdsResetKeyButton = findViewById(R.id.rotatingIdsResetKeyButton)
+        rotatingIdsLegacyNoteText = findViewById(R.id.rotatingIdsLegacyNoteText)
+        neutralBluetoothNameSwitch = findViewById(R.id.neutralBluetoothNameSwitch)
+        neutralBluetoothNameDescriptionText = findViewById(R.id.neutralBluetoothNameDescriptionText)
+        neutralBluetoothNameStatusText = findViewById(R.id.neutralBluetoothNameStatusText)
+        experimentalRelayedCallsSwitch = findViewById(R.id.experimentalRelayedCallsSwitch)
+        experimentalRelayedCallsDescriptionText = findViewById(R.id.experimentalRelayedCallsDescriptionText)
+        relayedCallsHelpSwitch = findViewById(R.id.relayedCallsHelpSwitch)
+        relayedCallsConsentSwitch = findViewById(R.id.relayedCallsConsentSwitch)
+        relayedCallsStatusText = findViewById(R.id.relayedCallsStatusText)
         videoBackButton = findViewById(R.id.videoBackButton)
         receiverWaitingOverlay = findViewById(R.id.receiverWaitingOverlay)
         receiverWaitingProgress = findViewById(R.id.receiverWaitingProgress)
@@ -1304,14 +1348,19 @@ class MainActivity : AppCompatActivity() {
         applyExperimentalTemporalLayers()
         applyRelayChildMediaAge()
         applyIntercomFeatures()
+        bindCallFeatureSettings()
         CocRegistrations.install(this)
         applyCocAutoGatt()
         ClassicAddressBook.attach(this)
         applyClassicFeatures()
         applyCompactDiscovery()
         applyRotatingIds()
+        applyNeutralName()
+        applyRelayedCalls()
         applyCallReachability()
+        refreshFeatureCatalog()
         applyOfflineAppShare()
+        applyNativeOpus()
         applyCallResolutionLadder()
         applyVideoScaleMode()
         applyDeviceHealthOverlayVisibility()
@@ -1490,12 +1539,14 @@ class MainActivity : AppCompatActivity() {
             }
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
                 if (appScreen != AppScreen.PLAYBACK) return
+                viewerFrameAge?.onFramePresented()
                 val tracker = receiverContinuityTracker ?: return
                 val nowNs = System.nanoTime()
                 if (debugVideoPresentationTiming) receiver?.recordSurfaceUpdate(surface.timestamp, nowNs)
                 tracker.recordFrame(nowNs)
                 if (receiverWaitingOverlay.visibility == View.VISIBLE &&
-                    receiver != null && receiverWasActive && !receiverRecoveryNoticePolicy.recovering &&
+                    receiver != null && receiverWasActive &&
+                    !receiverRecoveryNoticePolicy.coverHeld(SystemClock.elapsedRealtime()) &&
                     !receiverPlaybackPaused && !receiverStreamEnded
                 ) hideReceiverOverlay()
                 if (receiverFirstSurfaceForJoinPending && receiverWasActive) {
@@ -1546,6 +1597,7 @@ class MainActivity : AppCompatActivity() {
                     if (callRemotePreview.alpha != 1f) callRemotePreview.alpha = 1f
                     callScreenController.onRemoteFrame(System.nanoTime())
                     if (intercomCallUi.onRemoteFrame()) onPrivateCallLayoutChanged("remote_frame")
+                    if (intercomCallUi.consumePeerLacksVoiceNotice()) showPeerLacksVoiceNotice()
                     val tracker = privateCallContinuityTracker ?: return
                     val nowNs = System.nanoTime()
                     tracker.recordFrame(nowNs)
@@ -2144,6 +2196,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openCallVerification() {
+        if (privateCall?.peerStillPseudonym == true) {
+            // BMH3 pseudonyms: nothing to verify until the callee answered and its identity was confirmed.
+            Toast.makeText(this, R.string.call_verify_after_reveal, Toast.LENGTH_LONG).show()
+            return
+        }
         val peer = privateCall?.endToEndPeerNodeId ?: return
         startActivity(VerifyContactActivity.intent(this, peer, privateCallPartyName, inCall = true))
     }
@@ -2157,6 +2214,56 @@ class MainActivity : AppCompatActivity() {
         callPartyPanel.visibility = View.VISIBLE
         // One name line and one state line, like a phone app: no extra status bubble.
         callStatusText.visibility = View.GONE
+    }
+
+    /**
+     * What the current call's screen names: the real name provider, and for an incoming call the label the
+     * subject and state line come from. Null when no call is on screen.
+     */
+    private var callRealName: (() -> String)? = null
+    private var callIncomingLabel: String? = null
+
+    /**
+     * Starts keeping the call screen's names in step with the lock state (Q16-A): the real name while the
+     * phone is unlocked, "Encrypted call" over a secure lock screen, and back again after an unlock or a
+     * relock. [incomingLabel] is the caller's 12-hex label for an incoming call, else null.
+     */
+    private fun watchCallPeerName(incomingLabel: String?, realName: () -> String) {
+        callRealName = realName
+        callIncomingLabel = incomingLabel
+        callLockScreen.watchLockState { applyCallPeerName() }
+        applyCallPeerName()
+    }
+
+    private fun applyCallPeerName() {
+        val real = callRealName ?: return
+        if (privateCall == null) return
+        val masked = callLockScreen.namesMasked()
+        val shown = if (masked) getString(R.string.call_name_hidden_locked) else real()
+        intercomCallUi.setPeerLabel(shown)
+        if (::callPartyPanel.isInitialized) {
+            privateCallPartyName = shown
+            callPartyName.text = shown
+        }
+        val incoming = callIncomingLabel
+        val ringing = privateCallPhase == null || privateCallPhase == PrivateCallPhase.INCOMING_RINGING
+        if (incoming != null && ringing && ::callPartyState.isInitialized) {
+            if (masked) {
+                callPartyState.setText(R.string.call_name_hidden_locked_hint)
+                showCallSubject(null)
+            } else {
+                callPartyState.text = incomingStateText(incoming, video = true)
+                showCallSubject(
+                    PeerLabels.forPeer(incoming.lowercase().take(12), null).callSubject
+                        ?.let { getString(R.string.call_subject_line, it) },
+                )
+            }
+        }
+    }
+
+    private fun clearCallPeerName() {
+        callRealName = null
+        callIncomingLabel = null
     }
 
     /** Naming design 3.4: the caller's optional signed subject, under the name while ringing. */
@@ -2216,6 +2323,8 @@ class MainActivity : AppCompatActivity() {
             LiveChipState.RELAY_WAITING -> getString(R.string.relay_status_off)
             LiveChipState.RELAYING -> getString(R.string.relay_status_on)
         }
+        // Viewer frame age: never "Watching ..." over a frozen picture.
+        if (sessionRole == SessionRole.RECEIVE) viewerFrameAge?.chipText()?.let { broadcastStatusText.text = it }
         setLiveDotBlinking(state == LiveChipState.LIVE)
         val chip = broadcastStatusText.parent as? View
         chip?.setBackgroundResource(
@@ -2276,6 +2385,7 @@ class MainActivity : AppCompatActivity() {
             EmergencyWipe.wipe(this, WipeReason.DEBUG_CONTROL)
             return
         }
+        DebugContactControl.handleIntent(this, intent)
         val control = intent.getStringExtra("test_control") ?: return
         val pendingControl = ++debugControlSequence to System.nanoTime()
         if (debugMediaTraceSession != null) Log.i("BluetoothVideo", "BENCHMARK lifecycle v1 " + JSONObject()
@@ -2635,6 +2745,7 @@ class MainActivity : AppCompatActivity() {
         updateHomeReadiness()
         updateHomeActions()
         updateRecentCalls()
+        updatesHome?.refreshNotice()
         refreshCallReachability(reachabilityDelayMs)
     }
 
@@ -2722,6 +2833,7 @@ class MainActivity : AppCompatActivity() {
         updateConnectionDot(0)
         videoBackButton.visibility = View.VISIBLE
         videoBackButton.contentDescription = "Back to nearby broadcasts"
+        viewerFrameAgeController().startViewing(FeatureCatalog.isEnabled(ViewerFeatures.frameAge.id))
         showReceiverOverlay("Connecting to stream", showProgress = true)
         settingsBackCallback.isEnabled = true
         updateSystemBars(visible = false)
@@ -2937,19 +3049,6 @@ class MainActivity : AppCompatActivity() {
             appPreferences.edit().putBoolean(PREF_RELAY_CHILD_MEDIA_AGE, enabled).apply()
             applyRelayChildMediaAge()
         }
-        listOf(
-            experimentalVoiceCallsSwitch to IntercomFeatureSettings.PREF_VOICE_CALLS,
-            experimentalPushToTalkSwitch to IntercomFeatureSettings.PREF_PUSH_TO_TALK,
-            experimentalPttModeSwitch to IntercomFeatureSettings.PREF_PTT_MODE,
-            experimentalStoreForwardSwitch to StoreForwardFeature.PREF,
-            experimentalPeerLabelsSwitch to PeerLabelFeature.PREF,
-        ).forEach { (switch, key) ->
-            switch.isChecked = appPreferences.getBoolean(key, false)
-            switch.setOnCheckedChangeListener { _, enabled ->
-                appPreferences.edit().putBoolean(key, enabled).apply()
-                applyIntercomFeatures()
-            }
-        }
         findViewById<MaterialSwitch>(R.id.reachableForCallsSwitch).apply {
             isChecked = appPreferences.getBoolean(PREF_REACHABLE_FOR_CALLS, true)
             setOnCheckedChangeListener { _, enabled ->
@@ -2958,24 +3057,11 @@ class MainActivity : AppCompatActivity() {
                 refreshCallReachability()
             }
         }
-        experimentalCocAutoGattSwitch.isChecked = appPreferences.getBoolean(CocAutoGattSettings.PREF_ENABLED, false)
-        experimentalCocAutoGattSwitch.setOnCheckedChangeListener { _, enabled ->
-            appPreferences.edit().putBoolean(CocAutoGattSettings.PREF_ENABLED, enabled).apply()
-            applyCocAutoGatt()
-        }
-        experimentalClassicBondFreeSwitch.isChecked =
-            appPreferences.getBoolean(ClassicFeatureSettings.PREF_BOND_FREE, false)
-        experimentalClassicBondFreeSwitch.setOnCheckedChangeListener { _, enabled ->
-            appPreferences.edit().putBoolean(ClassicFeatureSettings.PREF_BOND_FREE, enabled).apply()
-            applyClassicFeatures()
-        }
-        experimentalCompactDiscoverySwitch.isChecked = appPreferences.getBoolean(CompactDiscoveryFeature.PREF, false)
-        experimentalCompactDiscoverySwitch.setOnCheckedChangeListener { _, enabled ->
-            appPreferences.edit().putBoolean(CompactDiscoveryFeature.PREF, enabled).apply()
-            applyCompactDiscovery()
-        applyRotatingIds()
-        }
-        experimentalRotatingIdsSwitch.isChecked = appPreferences.getBoolean(RotatingDiscoveryFeature.PREF, false)
+        bindConnectivityFeatures()
+        bindViewerFeatures()
+        bindUpdateFeatures()
+        experimentalRotatingIdsSwitch.isChecked =
+            appPreferences.getBoolean(RotatingDiscoveryFeature.PREF, RotatingDiscoveryFeature.DEFAULT_ENABLED)
         experimentalRotatingIdsSwitch.setOnCheckedChangeListener { _, enabled ->
             appPreferences.edit().putBoolean(RotatingDiscoveryFeature.PREF, enabled).apply()
             applyRotatingIds()
@@ -2989,10 +3075,72 @@ class MainActivity : AppCompatActivity() {
             val time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(endsAt))
             Toast.makeText(this, getString(R.string.rotating_ids_visible_until, time), Toast.LENGTH_LONG).show()
         }
-        experimentalOfflineAppShareSwitch.isChecked = appPreferences.getBoolean(OfflineAppShareFeature.PREF, false)
-        experimentalOfflineAppShareSwitch.setOnCheckedChangeListener { _, enabled ->
-            appPreferences.edit().putBoolean(OfflineAppShareFeature.PREF, enabled).apply()
-            applyOfflineAppShare()
+        rotatingIdsResetKeyButton.setOnClickListener {
+            val vault = if (RotatingDiscoveryFeature.enabled) RotatingDiscovery.presenceVault() else null
+            if (vault == null) {
+                Toast.makeText(this, R.string.rotating_ids_reset_off, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setMessage(R.string.rotating_ids_reset_confirm)
+                .setPositiveButton(R.string.rotating_ids_reset_key) { _, _ ->
+                    Thread {
+                        runCatching { vault.resetKey() }
+                        RotatingDiscovery.requestRecognitionRebuild()
+                        runOnUiThread { Toast.makeText(this, R.string.rotating_ids_reset_done, Toast.LENGTH_SHORT).show() }
+                    }.start()
+                }
+                .setNegativeButton(R.string.action_cancel, null)
+                .show()
+        }
+        neutralNameSwitchBinding = true
+        neutralBluetoothNameSwitch.isChecked = appPreferences.getBoolean(NeutralNameOption.PREF, false)
+        neutralNameSwitchBinding = false
+        neutralBluetoothNameSwitch.setOnCheckedChangeListener { _, enabled ->
+            if (neutralNameSwitchBinding) return@setOnCheckedChangeListener
+            if (!enabled) {
+                appPreferences.edit().putBoolean(NeutralNameOption.PREF, false).apply()
+                applyNeutralName()
+                return@setOnCheckedChangeListener
+            }
+            // Ask first: this renames the phone for everything, not only for this app.
+            neutralNameSwitchBinding = true
+            neutralBluetoothNameSwitch.isChecked = false
+            neutralNameSwitchBinding = false
+            val name = NeutralBluetoothNameController.currentName(bluetoothAdapter)
+                ?: getString(R.string.neutral_bluetooth_name_unknown)
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setMessage(getString(R.string.neutral_bluetooth_name_confirm, name))
+                .setPositiveButton(R.string.neutral_bluetooth_name_turn_on) { _, _ ->
+                    appPreferences.edit().putBoolean(NeutralNameOption.PREF, true).apply()
+                    neutralNameSwitchBinding = true
+                    neutralBluetoothNameSwitch.isChecked = true
+                    neutralNameSwitchBinding = false
+                    applyNeutralName()
+                }
+                .setNegativeButton(R.string.action_cancel, null)
+                .show()
+        }
+        experimentalRelayedCallsSwitch.isChecked = appPreferences.getBoolean(RelayedCallsFeature.PREF, false)
+        experimentalRelayedCallsSwitch.setOnCheckedChangeListener { _, enabled ->
+            if (enabled && !appPreferences.getBoolean(RelayedCallsFeature.PREF_PROMPTED, false)) {
+                // Asked once, both choices preselected on (DECISIONS 2026-10-10, points 2 and 3).
+                experimentalRelayedCallsSwitch.isChecked = false
+                showRelayedCallsPrompt()
+                return@setOnCheckedChangeListener
+            }
+            appPreferences.edit().putBoolean(RelayedCallsFeature.PREF, enabled).apply()
+            applyRelayedCalls()
+        }
+        relayedCallsHelpSwitch.isChecked = appPreferences.getBoolean(RelayedCallsFeature.PREF_HELP, true)
+        relayedCallsHelpSwitch.setOnCheckedChangeListener { _, enabled ->
+            appPreferences.edit().putBoolean(RelayedCallsFeature.PREF_HELP, enabled).apply()
+            applyRelayedCalls()
+        }
+        relayedCallsConsentSwitch.isChecked = appPreferences.getBoolean(RelayedCallsFeature.PREF_CONSENT, true)
+        relayedCallsConsentSwitch.setOnCheckedChangeListener { _, enabled ->
+            appPreferences.edit().putBoolean(RelayedCallsFeature.PREF_CONSENT, enabled).apply()
+            applyRelayedCalls()
         }
         advancedSettingsSwitch.isChecked = advancedSettings
         applySettingsModeVisibility()
@@ -3003,11 +3151,8 @@ class MainActivity : AppCompatActivity() {
             applyExperimentalTemporalLayers()
             applyRelayChildMediaAge()
             applyIntercomFeatures()
-            applyCocAutoGatt()
-            applyClassicFeatures()
-            applyCompactDiscovery()
-        applyRotatingIds()
-            applyOfflineAppShare()
+            applyRotatingIds()
+            applyRelayedCalls()
             receiverPlaybackDelaySlider.value = receiverPlaybackDelay.sliderValue
             refreshRateControlPicker()
             applySettingsModeVisibility()
@@ -3150,22 +3295,104 @@ class MainActivity : AppCompatActivity() {
      * when the call endpoint is created and when a call's media starts.
      */
     private fun applyIntercomFeatures() {
-        val benchmarkLaunch = BuildConfig.DEBUG &&
-            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+        val benchmarkLaunch = callFeatureBenchmarkLaunch()
         val resolved = IntercomFeatureSettings.resolve(
             benchmarkLaunch,
             { intent.getBooleanExtra(it, false) },
-            advancedSettings,
-            { appPreferences.getBoolean(it, false) },
+            ::storedCallFeatureChoice,
         )
         if (resolved != IntercomFeatures.current && BuildConfig.DEBUG) {
             Log.i("BluetoothVideo", "BENCHMARK intercom_features: ${IntercomFeatures.label(resolved)}")
         }
         IntercomFeatures.current = resolved
+        applyCallUxFeatures()
         applyStoreForwardFeature(benchmarkLaunch)
         applyPeerLabelFeature(benchmarkLaunch)
         updateHomeActions()
+        callFeatureBinder?.refresh()
     }
+
+    /** A DEBUG build launched with any `test_` extra: features read only their extras (default off). */
+    private fun callFeatureBenchmarkLaunch(): Boolean =
+        BuildConfig.DEBUG && intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+
+    /** The user's explicit choice for a promoted feature switch, or null when never touched. */
+    private fun storedCallFeatureChoice(key: String): Boolean? = CallFeatureResolver.storedChoice(appPreferences, key)
+
+    /**
+     * Call UX switches (CallUx) and the lock-screen mirror used by the benchmark tunables: audio focus
+     * and the ringer policy, plus the promoted ringback, call-notification, lock-screen and ear-pause
+     * switches. Read again when a call starts, so a Settings change applies to the next call.
+     */
+    private fun applyCallUxFeatures() {
+        CallUx.settings = CallUxSettings.resolve(
+            BuildConfig.DEBUG,
+            DebugTunables.benchmarkLaunch,
+            ::storedCallFeatureChoice,
+        ) { intent.getBooleanExtra(it, false) }
+        DebugTunables.callLockScreen = CallUx.settings.lockScreen
+        DebugTunables.callAudioConceal = CallUx.settings.audioConcealment
+        // The Decline / Hang up buttons need their receiver: register it when the switch turns on at runtime.
+        registerCallNotificationReceiver()
+    }
+
+    private var callFeatureBinder: CallFeatureSettingsBinder? = null
+
+    /** Settings > Features (calls and messages): binds `settings_features_calls.xml`. */
+    private fun bindCallFeatureSettings() {
+        val root = findViewById<View>(R.id.callFeaturesRoot) ?: return
+        callFeatureBinder = CallFeatureSettingsBinder(
+            root,
+            appPreferences,
+            object : CallFeatureHost {
+                override val benchmarkLaunch: Boolean get() = callFeatureBenchmarkLaunch()
+
+                override fun onCallFeaturesChanged() {
+                    val before = callFeatureSet()
+                    applyIntercomFeatures()
+                    rebuildIdleCallEndpointForFeatures(before)
+                }
+
+                override fun requestNotificationPermission() {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) !=
+                        PackageManager.PERMISSION_GRANTED
+                    ) {
+                        callNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+            },
+            current = { callFeatureSet() },
+        ).also { it.bind() }
+    }
+
+    /**
+     * The call endpoint reads voice calls and the message hook when it is created. After a Settings change
+     * an idle endpoint (Home, waiting for calls) is rebuilt so the next call, in either direction, follows
+     * the switch; a ringing or connected call keeps its endpoint and the next one picks the change up.
+     */
+    private fun rebuildIdleCallEndpointForFeatures(before: CallFeatureSet) {
+        val now = callFeatureSet()
+        if (before.voiceCalls == now.voiceCalls && before.messages == now.messages) return
+        if (!privateCallEndpointIdle()) return
+        Log.i(
+            "BluetoothVideo",
+            "Call endpoint rebuilt for features: voiceCalls=${now.voiceCalls} | messages=${now.messages}",
+        )
+        stopPrivateCallEndpoint()
+        refreshCallReachability(delayMs = FEATURE_ENDPOINT_REBUILD_DELAY_MS)
+    }
+
+    private fun callFeatureSet(): CallFeatureSet = CallFeatureSet(
+        voiceCalls = IntercomFeatures.current.voiceCalls,
+        ringback = CallUx.settings.ringback,
+        earCameraPause = CallUx.settings.proximityCameraPause,
+        lockScreenCalls = CallUx.settings.lockScreen,
+        callNotifications = CallUx.settings.callStyleNotifications,
+        messages = StoreForwardFeature.enabled,
+        autoSync = StoreForwardAutoSyncFeature.enabled,
+        namesAndTitles = PeerLabelFeature.enabled,
+    )
 
     /**
      * Experimental peer labels (PeerLabelFeature, default off): same launch rule as the intercom
@@ -3177,13 +3404,18 @@ class MainActivity : AppCompatActivity() {
         val enabled = PeerLabelFeature.resolve(
             benchmarkLaunch,
             { intent.getBooleanExtra(it, false) },
-            advancedSettings,
-            { appPreferences.getBoolean(it, false) },
+            ::storedCallFeatureChoice,
         )
         if (enabled != PeerLabelFeature.enabled) {
             Log.i("BluetoothVideo", "BENCHMARK peer_labels_feature: enabled=$enabled")
         }
         PeerLabelFeature.enabled = enabled
+        PeerLabels.knownNames = { contactNames.values + listOfNotNull(PeerLabelFeature.localName) }
+        if (enabled) {
+            // The UTS #39 table (85 KB) loads once, off the main thread; names compare with the minimal table until then.
+            val appContext = applicationContext
+            Thread { Confusables.install(appContext) }.start()
+        }
         val storedName = if (benchmarkLaunch) {
             intent.getStringExtra("test_peer_label_name")
         } else {
@@ -3275,65 +3507,94 @@ class MainActivity : AppCompatActivity() {
         val enabled = StoreForwardFeature.resolve(
             benchmarkLaunch,
             { intent.getBooleanExtra(it, false) },
-            advancedSettings,
-            { appPreferences.getBoolean(it, false) },
+            ::storedCallFeatureChoice,
         )
         if (enabled != StoreForwardFeature.enabled && BuildConfig.DEBUG) {
             Log.i("BluetoothVideo", "BENCHMARK store_forward_feature: enabled=$enabled")
         }
         StoreForwardFeature.enabled = enabled
         findViewById<View>(R.id.homeMessagesButton)?.visibility = if (enabled) View.VISIBLE else View.GONE
-        // Experimental automatic sync: DEBUG launch extra `test_sf_auto_sync` only, on top of the above.
-        val auto = StoreForwardAutoSyncFeature.resolve(benchmarkLaunch, { intent.getBooleanExtra(it, false) }, enabled)
+        // Automatic sync (Settings > Features, or DEBUG `test_sf_auto_sync`), on top of the above.
+        val auto = StoreForwardAutoSyncFeature.resolve(
+            benchmarkLaunch,
+            { intent.getBooleanExtra(it, false) },
+            ::storedCallFeatureChoice,
+            enabled,
+        )
         if (auto != StoreForwardAutoSyncFeature.enabled && BuildConfig.DEBUG) {
             Log.i("BluetoothVideo", "BENCHMARK sf_sync auto=feature enabled=$auto")
         }
         StoreForwardAutoSyncFeature.enabled = auto
+        refreshMessagesUnread(notify = false)
     }
 
     /**
-     * Experimental automatic CoC -> GATT fallback (off by default; see CocAutoGattSettings). Same
-     * rule as the other experiments: a DEBUG benchmark launch uses only `test_coc_auto_gatt` and
-     * `test_coc_gatt_threshold`; otherwise the Advanced setting applies. Read when a call endpoint is
+     * Messages tile on Home: the unread count (messages received since the Messages screen was last
+     * left). With [notify], also a quiet notification when the app is not in front and Messages is
+     * not open (MessageNotifications). Counted off the main thread.
+     */
+    private fun refreshMessagesUnread(notify: Boolean) {
+        val tile = findViewById<com.google.android.material.button.MaterialButton>(R.id.homeMessagesButton) ?: return
+        if (!StoreForwardFeature.enabled) {
+            tile.setText(R.string.home_messages)
+            return
+        }
+        val context = applicationContext
+        Thread {
+            val count = runCatching {
+                val node = StoreForwardRuntime.node(context)
+                val seen = InboxSeenStore.forRoot(StoreForwardRuntime.root(context)).read()
+                UnreadMessages.count(node.archive.page(0, UNREAD_SCAN_LIMIT, MessageDirection.IN), seen)
+            }.getOrDefault(0)
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                tile.text = if (count > 0) getString(R.string.home_messages_unread, count) else getString(R.string.home_messages)
+                if (notify && MessageNotifications.shouldPost(count, MessagesScreenState.visible, activityResumed)) {
+                    MessageNotifications.post(context, count)
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * Automatic CoC -> GATT fallback (Settings > Features, see CocAutoGattSettings). A DEBUG benchmark
+     * launch uses only `test_coc_auto_gatt` and `test_coc_gatt_threshold`; every other launch the user's
+     * choice or the shipped default, with no dependence on Manual settings. Read when a call endpoint is
      * created.
      */
     private fun applyCocAutoGatt() {
-        val benchmarkLaunch = BuildConfig.DEBUG &&
-            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
         val resolved = CocAutoGattSettings.resolve(
-            benchmarkLaunch,
+            DebugTunables.benchmarkLaunch,
             intent.getBooleanExtra(CocAutoGattSettings.EXTRA_ENABLED, false),
             intent.getIntExtra(CocAutoGattSettings.EXTRA_THRESHOLD, CocAutoGattSettings.DEFAULT_THRESHOLD),
-            advancedSettings,
-            appPreferences.getBoolean(CocAutoGattSettings.PREF_ENABLED, false),
+            storedFeatureChoice(CocAutoGattSettings.PREF_ENABLED),
             appPreferences.getInt(CocAutoGattSettings.PREF_THRESHOLD, CocAutoGattSettings.DEFAULT_THRESHOLD),
+            DeviceFamilyPolicy.leCocServerLeaks(BluetoothStackFingerprint.current()),
         )
         if (resolved != CocAutoGatt.current) {
             Log.i(
                 "BluetoothVideo",
                 (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
-                    "coc_auto_gatt: enabled=${resolved.enabled} | threshold=${resolved.threshold}",
+                    "coc_auto_gatt: enabled=${resolved.enabled} | threshold=${resolved.threshold} | " +
+                    "thresholdActive=${resolved.thresholdActive}",
             )
         }
         CocAutoGatt.current = resolved
     }
 
     /**
-     * Experimental bond-free Classic (ClassicFeatureSettings, default off). Same launch rule as the
-     * other experiments: a DEBUG benchmark launch uses only `test_classic_bond_free` and
-     * `test_classic_request_visible`; otherwise the Advanced setting applies. DEBUG address overrides
+     * Bond-free Classic, "Connect without pairing" (ClassicFeatureSettings). A DEBUG benchmark launch
+     * uses only `test_classic_bond_free`, `test_classic_bounded_connect` and `test_classic_request_visible`;
+     * every other launch the user's choice or the shipped default. DEBUG address overrides
      * (`test_classic_addresses`, or `test_classic_address` + `test_classic_address_node`) let a run
      * supply each peer's Classic address read over adb; they are never stored. Read when a Classic
      * socket is created.
      */
     private fun applyClassicFeatures() {
-        val benchmarkLaunch = BuildConfig.DEBUG &&
-            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
         val resolved = ClassicFeatureSettings.resolve(
-            benchmarkLaunch,
+            DebugTunables.benchmarkLaunch,
             { intent.getBooleanExtra(it, false) },
-            advancedSettings,
-            { appPreferences.getBoolean(it, false) },
+            ::storedFeatureChoice,
         )
         if (resolved != ClassicFeatures.current) {
             Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "classic_features: ${ClassicFeatures.label(resolved)}")
@@ -3350,28 +3611,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Experimental iPhone compact discovery (CompactDiscoveryFeature, default off). Same launch rule
-     * as the other experiments: a DEBUG benchmark launch uses only `test_ios_compact_discovery`;
-     * otherwise the Advanced setting applies. Read when a discovery scan is created.
+     * iPhone compact discovery, "Find iPhones" (CompactDiscoveryFeature). A DEBUG benchmark launch uses
+     * only `test_ios_compact_discovery`; every other launch the user's choice or the shipped default.
+     * Read when a discovery scan is created.
      */
     private fun applyCompactDiscovery() {
-        val benchmarkLaunch = BuildConfig.DEBUG &&
-            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
         val enabled = CompactDiscoveryFeature.resolve(
-            benchmarkLaunch,
+            DebugTunables.benchmarkLaunch,
             { intent.getBooleanExtra(it, false) },
-            advancedSettings,
-            { appPreferences.getBoolean(it, false) },
+            ::storedFeatureChoice,
         )
         if (enabled != CompactDiscoveryFeature.enabled) {
             Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "compact_discovery: enabled=$enabled")
+            // Switching it on again is a new try: an earlier refused filter is forgotten.
+            if (enabled) CompactDiscoveryFeature.filterRejected = false
         }
         CompactDiscoveryFeature.enabled = enabled
     }
 
     /**
-     * Experimental rotating discovery IDs (RotatingDiscoveryFeature, default off). Same launch rule
-     * as the other experiments (DEBUG benchmark launch: only `test_rotating_ids`). Read when a call
+     * Rotating discovery IDs (RotatingDiscoveryFeature, default [RotatingDiscoveryFeature.DEFAULT_ENABLED] for
+     * user launches; a DEBUG benchmark launch reads only `test_rotating_ids`). Read when a call
      * endpoint or call scan is created. RV1: while on, the Bluetooth name is the neutral one; turning
      * it off restores the user's name (NeutralBluetoothNameController).
      */
@@ -3381,8 +3641,7 @@ class MainActivity : AppCompatActivity() {
         val enabled = RotatingDiscoveryFeature.resolve(
             benchmarkLaunch,
             { intent.getBooleanExtra(it, false) },
-            advancedSettings,
-            { appPreferences.getBoolean(it, false) },
+            ::storedFeatureChoice,
         )
         val changed = enabled != RotatingDiscoveryFeature.enabled
         if (changed) {
@@ -3394,13 +3653,113 @@ class MainActivity : AppCompatActivity() {
         if (enabled && benchmarkLaunch && intent.getBooleanExtra("test_rotating_visible_window", false)) {
             runCatching { RotatingDiscovery.startVisibleByHandle() }
         }
-        // RV1 neutral name. A DEBUG benchmark launch renames only with `test_rotating_neutral_name`:
-        // test phones keep their names, and the legacy Classic candidate
-        // plan, which matches bonded phones by name, never sees several phones called "Phone".
-        val renameAllowed = !benchmarkLaunch || intent.getBooleanExtra("test_rotating_neutral_name", false)
-        if (hasRequiredPermissions() && (renameAllowed || !enabled)) {
-            runCatching { NeutralBluetoothNameController.apply(this, bluetoothAdapter, enabled && renameAllowed) }
+        // Hardening 2026-10-11: no automatic rename. Connectable sets become non-discoverable on API 34+ (see
+        // NonDiscoverableAdvertising) and the neutral name is the explicit option of applyNeutralName().
+        if (enabled) runCatching { AdvertisingPrivacy.logOnce(bluetoothAdapter) }
+        refreshNeutralNameText()
+    }
+
+    /**
+     * The explicit option "Use a neutral Bluetooth name" (NeutralNameOption, default off, independent of the rotating
+     * switch). The name is written only when the option changes and when the app starts, gets its permissions or
+     * Bluetooth comes on; never per call, advertising session or epoch. A DEBUG benchmark launch changes the name only
+     * with `test_neutral_bluetooth_name` (alias `test_rotating_neutral_name`): test phones keep their names, and the
+     * legacy Classic candidate plan, which matches bonded phones by name, never sees several phones called "Phone".
+     * With the option off a name left by a build before 2026-10-11 (automatic rename) is restored once.
+     */
+    private fun applyNeutralName() {
+        val benchmarkLaunch = BuildConfig.DEBUG &&
+            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+        // Builds before 2026-10-11 renamed the phone automatically with the rotating switch. A normal launch keeps
+        // that name by turning the option on (nothing changes on the radio) and tells the user once; a DEBUG
+        // benchmark launch restores the test phone's own name instead (the option is off there).
+        if (!benchmarkLaunch && !appPreferences.contains(NeutralNameOption.PREF) &&
+            NeutralBluetoothNameController.savedOriginal(this) != null &&
+            NeutralBluetoothNameController.currentName(bluetoothAdapter) == NeutralBluetoothName.NEUTRAL
+        ) {
+            appPreferences.edit().putBoolean(NeutralNameOption.PREF, true).apply()
+            neutralNameSwitchBinding = true
+            if (::neutralBluetoothNameSwitch.isInitialized) neutralBluetoothNameSwitch.isChecked = true
+            neutralNameSwitchBinding = false
+            Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "rotid_name: migrated=kept")
+            showNeutralNameMigrationNotice()
         }
+        val optionOn = NeutralNameOption.resolve(
+            benchmarkLaunch,
+            { intent.getBooleanExtra(it, false) },
+            { appPreferences.getBoolean(it, false) },
+        )
+        if (hasRequiredPermissions() && bluetoothAdapter?.isEnabled == true) {
+            val outcome = runCatching {
+                NeutralBluetoothNameController.apply(this, bluetoothAdapter, optionOn, appPreferences.contains(NeutralNameOption.PREF))
+            }.getOrNull()
+            if (outcome?.paused == true && !benchmarkLaunch) {
+                // The user renamed the phone after the option was applied: their name wins; the option goes off.
+                appPreferences.edit().putBoolean(NeutralNameOption.PREF, false).apply()
+                neutralNameSwitchBinding = true
+                if (::neutralBluetoothNameSwitch.isInitialized) neutralBluetoothNameSwitch.isChecked = false
+                neutralNameSwitchBinding = false
+                Toast.makeText(this, R.string.neutral_bluetooth_name_paused, Toast.LENGTH_LONG).show()
+            }
+        }
+        refreshNeutralNameText(appPreferences.getBoolean(NeutralNameOption.PREF, false) || (benchmarkLaunch && optionOn))
+    }
+
+    /** Once, after an update from a build that renamed the phone automatically: the name stays, the choice is theirs. */
+    private fun showNeutralNameMigrationNotice() {
+        if (appPreferences.getBoolean(PREF_NEUTRAL_NAME_NOTICE_SHOWN, false)) return
+        appPreferences.edit().putBoolean(PREF_NEUTRAL_NAME_NOTICE_SHOWN, true).apply()
+        val saved = NeutralBluetoothNameController.savedOriginal(this) ?: return
+        runOnUiThread {
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setMessage(getString(R.string.neutral_bluetooth_name_migrated, saved))
+                .setPositiveButton(R.string.neutral_bluetooth_name_keep, null)
+                .setNegativeButton(R.string.neutral_bluetooth_name_restore) { _, _ ->
+                    appPreferences.edit().putBoolean(NeutralNameOption.PREF, false).apply()
+                    neutralNameSwitchBinding = true
+                    if (::neutralBluetoothNameSwitch.isInitialized) neutralBluetoothNameSwitch.isChecked = false
+                    neutralNameSwitchBinding = false
+                    applyNeutralName()
+                }
+                .show()
+        }
+    }
+
+    /** The advice and saved-name lines under the neutral-name switch, and the legacy-controller note. */
+    private fun refreshNeutralNameText(optionOn: Boolean = appPreferences.getBoolean(NeutralNameOption.PREF, false)) {
+        if (!::neutralBluetoothNameStatusText.isInitialized || !::rotatingIdsLegacyNoteText.isInitialized) return
+        val reuse = AdvertisingPrivacy.addressReuse(bluetoothAdapter)
+        val advice = AdvertisingPrivacy.neutralNameAdvice(
+            sdkInt = Build.VERSION.SDK_INT,
+            addressReuse = reuse,
+            classicInUse = outgoingTransport == BluetoothTransportOption.CLASSIC_RFCOMM || ClassicFeatures.current.bondFree,
+            nonDiscoverableActive = RotatingDiscoveryFeature.enabled && NonDiscoverableAdvertising.forNewSet(connectable = true),
+            stackRefused = NonDiscoverableAdvertising.rejected,
+        )
+        val adviceText = getString(
+            when (advice) {
+                AdvertisingPrivacy.NeutralNameAdvice.RECOMMENDED_OLD_ANDROID -> R.string.neutral_name_advice_old_android
+                AdvertisingPrivacy.NeutralNameAdvice.RECOMMENDED_LEGACY_CONTROLLER -> R.string.neutral_name_advice_legacy
+                AdvertisingPrivacy.NeutralNameAdvice.RECOMMENDED_CLASSIC_IN_USE -> R.string.neutral_name_advice_classic
+                AdvertisingPrivacy.NeutralNameAdvice.RECOMMENDED_STACK_REFUSED -> R.string.neutral_name_advice_refused
+                AdvertisingPrivacy.NeutralNameAdvice.RECOMMENDED_ROTATING_OFF -> R.string.neutral_name_advice_rotating_off
+                AdvertisingPrivacy.NeutralNameAdvice.NOT_NEEDED_FOR_LE -> R.string.neutral_name_advice_not_needed
+            },
+        )
+        val saved = NeutralBluetoothNameController.savedOriginal(this)
+        neutralBluetoothNameStatusText.text = buildString {
+            append(adviceText)
+            // Shown while a restore is pending too (switched off while Bluetooth was off), not only while it is on.
+            if (saved != null) {
+                append('\n')
+                append(getString(R.string.neutral_bluetooth_name_saved, saved))
+            } else if (optionOn) {
+                append('\n')
+                append(getString(R.string.neutral_bluetooth_name_no_saved))
+            }
+        }
+        rotatingIdsLegacyNoteText.visibility =
+            if (advancedSettings && reuse == AdvertisingPrivacy.AddressReuse.SUSPECTED) View.VISIBLE else View.GONE
     }
 
     /**
@@ -3421,6 +3780,191 @@ class MainActivity : AppCompatActivity() {
         )
         CallResolutionLadderFeature.enabled = enabled
         Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "call_resolution_ladder: enabled=$enabled")
+    }
+
+    /**
+     * Experimental relayed calls (RelayedCallsFeature, default off). Same launch rule as the other
+     * experiments: a DEBUG benchmark launch uses only its `test_relayed_calls*` extras, otherwise the
+     * Advanced setting applies. The controller (reach table, idle scan, reach pages) exists only while on.
+     */
+    private fun applyRelayedCalls() {
+        val benchmarkLaunch = BuildConfig.DEBUG &&
+            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+        val enabled = RelayedCallsFeature.resolve(
+            benchmarkLaunch,
+            { intent.getBooleanExtra(it, false) },
+            advancedSettings,
+            { appPreferences.getBoolean(it, false) },
+        )
+        val changed = enabled != RelayedCallsFeature.enabled
+        RelayedCallsFeature.enabled = enabled
+        RelayedCallsFeature.helpEnabled = if (benchmarkLaunch) {
+            intent.getBooleanExtra(RelayedCallsFeature.EXTRA_HELP, true)
+        } else {
+            appPreferences.getBoolean(RelayedCallsFeature.PREF_HELP, true)
+        }
+        RelayedCallsFeature.consentEnabled = if (benchmarkLaunch) {
+            intent.getBooleanExtra(RelayedCallsFeature.EXTRA_CONSENT, true)
+        } else {
+            appPreferences.getBoolean(RelayedCallsFeature.PREF_CONSENT, true)
+        }
+        RelayedCallsFeature.maxRelays =
+            RelayedCallsFeature.resolveMaxRelays(benchmarkLaunch, intent.getIntExtra(RelayedCallsFeature.EXTRA_MAX_RELAYS, 0))
+        // Rotating IDs + relayed calls work together (reach pages version 6); `test_relayed_rotating=false` restores the exclusion.
+        RelayedCallsFeature.rotatingCompat =
+            !benchmarkLaunch || intent.getBooleanExtra(RelayedCallsFeature.EXTRA_ROTATING_COMPAT, true)
+        RelayedCallsFeature.requireRelays = if (benchmarkLaunch) {
+            intent.getIntExtra(RelayedCallsFeature.EXTRA_REQUIRE, 0).coerceIn(0, PrivateCallRelayChain.MAX_RELAYS)
+        } else {
+            0
+        }
+        RelayedCallsFeature.noDirectSightings =
+            benchmarkLaunch && intent.getBooleanExtra(RelayedCallsFeature.EXTRA_NO_DIRECT, false)
+        if (changed || BuildConfig.DEBUG) {
+            Log.i(
+                "BluetoothVideo",
+                (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                    "relayed_calls: enabled=$enabled | help=${RelayedCallsFeature.helpEnabled} | " +
+                    "consent=${RelayedCallsFeature.consentEnabled} | maxRelays=${RelayedCallsFeature.maxRelays} | " +
+                    "require=${RelayedCallsFeature.requireRelays} | no_direct=${RelayedCallsFeature.noDirectSightings}",
+            )
+        }
+        // Switching the experiment or "Help calls nearby" off ends a relay in progress (the user's choice).
+        if (!RelayedCallsFeature.helperAllowed(RotatingDiscoveryFeature.enabled)) privateCall?.preemptRelay()
+        if (enabled && relayedCalls == null) {
+            relayedCalls = RelayedCallsController(
+                adapterProvider = { bluetoothAdapter },
+                deviceState = ::relayedCallsDeviceState,
+                onRelayNotification = ::updateRelayNotification,
+                onChanged = { runOnUiThread { updateRelayedCallsSettingsUi() } },
+                onOfferStale = { runOnUiThread { restartIdleCallEndpointForRelayedCalls() } },
+            ).also { it.start() }
+            if (!relayStopReceiverRegistered) {
+                ContextCompat.registerReceiver(
+                    this,
+                    relayStopReceiver,
+                    android.content.IntentFilter(RelayedCallsNotification.ACTION),
+                    ContextCompat.RECEIVER_NOT_EXPORTED,
+                )
+                relayStopReceiverRegistered = true
+            }
+        } else if (!enabled && relayedCalls != null) {
+            relayedCalls?.stop()
+            relayedCalls = null
+            if (relayStopReceiverRegistered) {
+                runCatching { unregisterReceiver(relayStopReceiver) }
+                relayStopReceiverRegistered = false
+            }
+        } else {
+            relayedCalls?.refresh()
+        }
+        updateRelayedCallsSettingsUi()
+        // The endpoint reads the switches when it is created: an idle one is rebuilt so the change applies.
+        if (changed && ::codecSpinner.isInitialized) restartIdleCallEndpointForRelayedCalls()
+    }
+
+    /** Rebuilds an idle call endpoint (no call, no exchange, no relay) so its offer and hello carry the current bits. */
+    private fun restartIdleCallEndpointForRelayedCalls() {
+        if (isFinishing || isDestroyed || !::codecSpinner.isInitialized) return
+        val endpoint = privateCall ?: return
+        if (!privateCallEndpointIdle() || endpoint.relayingNow || endpoint.messageSyncActive) return
+        stopPrivateCallEndpoint(keepService = true)
+        restartCallEndpointQuietly(RELAYED_CALLS_RESTART_MS)
+    }
+
+    /** Brings the call endpoint back for the screen the user is on, without toasts or screen changes. */
+    private fun restartCallEndpointQuietly(delayMs: Long) {
+        if (isFinishing || isDestroyed) return
+        when {
+            appScreen == AppScreen.CALL_BROWSER -> showPrivateCallBrowser(delayMs)
+            reachabilityScreen() == ReachabilityScreen.HOME -> refreshCallReachability(delayMs)
+            else -> Unit
+        }
+    }
+
+    private fun relayedCallsDeviceState(): HelperDeviceState {
+        val battery = getSystemService(BatteryManager::class.java)
+        val level = runCatching { battery?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) }.getOrNull() ?: -1
+        val ownActivity = privateCallPhase != null || sender != null || broadcaster != null || receiver != null ||
+            relay != null || privateCallRelay != null || cameraEncoder != null ||
+            appScreen == AppScreen.CAMERA || appScreen == AppScreen.RECEIVER_BROWSER ||
+            appScreen == AppScreen.PLAYBACK || appScreen == AppScreen.CALL ||
+            privateCall?.messageSyncActive == true
+        return HelperDeviceState(
+            bluetoothReady = callReachabilityReady(),
+            callReady = privateCall != null && privateCallAvailable,
+            transport = callEndpointTransport,
+            batteryPercent = level,
+            charging = battery?.isCharging == true,
+            batterySaver = runCatching { powerManager.isPowerSaveMode }.getOrDefault(false),
+            thermalSevere = thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE,
+            ownActivity = ownActivity,
+            screenOn = runCatching { powerManager.isInteractive }.getOrDefault(true),
+            rotatingIdsOn = RotatingDiscoveryFeature.enabled,
+        )
+    }
+
+    /** "Helping a call nearby" while relaying; the ordinary "reachable" text again afterwards. */
+    private fun updateRelayNotification(relaying: Boolean, relays: Int) {
+        if (isFinishing || isDestroyed) return
+        runCatching {
+            if (relaying) {
+                ActiveVideoSessionService.start(
+                    this,
+                    usesCamera = false,
+                    statusText = getString(R.string.relay_helping_text),
+                    relayStopAction = true,
+                )
+            } else if (ActiveVideoSessionService.holdsConnectedDevice()) {
+                ActiveVideoSessionService.start(this, usesCamera = false, statusText = getString(R.string.reachable_service_text))
+            }
+        }.onFailure { Log.w("BluetoothVideo", "Relay notification update failed", it) }
+    }
+
+    /** A relay duty ended: rebuild the call endpoint quietly (no toast, no screen change) and tidy up. */
+    private fun handleRelayDutyEnded(endpoint: AndroidPrivateVideoCall) {
+        Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "relayed_helper: relay_ended")
+        endpoint.close()
+        privateCall = null
+        privateCallAvailable = false
+        privateCallAvailabilityStarting = false
+        relayedCalls?.refresh()
+        restartCallEndpointQuietly(
+            if (callEndpointTransport == BluetoothTransportOption.BLE_GATT) GATT_CALL_RESTART_DELAY_MS else 0L,
+        )
+    }
+
+    /** First switch-on: what the experiment does, with both choices preselected on (user decisions 2 and 3). */
+    private fun showRelayedCallsPrompt() {
+        val checked = booleanArrayOf(true, true)
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(R.string.relayed_calls_prompt_title)
+            .setMessage(R.string.relayed_calls_prompt_body)
+            .setMultiChoiceItems(
+                arrayOf(getString(R.string.relayed_calls_help), getString(R.string.relayed_calls_consent)),
+                checked,
+            ) { _, which, isChecked -> checked[which] = isChecked }
+            .setPositiveButton(R.string.relayed_calls_prompt_ok) { _, _ ->
+                appPreferences.edit()
+                    .putBoolean(RelayedCallsFeature.PREF_PROMPTED, true)
+                    .putBoolean(RelayedCallsFeature.PREF_HELP, checked[0])
+                    .putBoolean(RelayedCallsFeature.PREF_CONSENT, checked[1])
+                    .apply()
+                relayedCallsHelpSwitch.isChecked = checked[0]
+                relayedCallsConsentSwitch.isChecked = checked[1]
+                experimentalRelayedCallsSwitch.isChecked = true
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun updateRelayedCallsSettingsUi() {
+        if (!::relayedCallsHelpSwitch.isInitialized) return
+        val subSettings = if (RelayedCallsFeature.enabled && advancedSettings) View.VISIBLE else View.GONE
+        relayedCallsHelpSwitch.visibility = subSettings
+        relayedCallsConsentSwitch.visibility = subSettings
+        relayedCallsStatusText.visibility = subSettings
+        relayedCallsStatusText.text = relayedCalls?.statusLine().orEmpty()
     }
 
     private fun applyCallReachability() {
@@ -3532,6 +4076,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         updateHomeReadiness()
+        relayedCalls?.refresh()
     }
 
     private val callReachabilityRefresh = Runnable { refreshCallReachability() }
@@ -3550,24 +4095,230 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Experimental "Share app nearby" (OfflineAppShareFeature, default off). Same launch rule as the
-     * other experiments: a DEBUG benchmark launch uses only `test_offline_app_share`; otherwise the
-     * Advanced setting applies. It only shows the Help button; nothing runs until that screen opens.
+     * "Share app nearby" (OfflineAppShareFeature). A DEBUG benchmark launch uses only
+     * `test_offline_app_share`; every other launch the user's choice or the shipped default. It only
+     * shows the Help button; nothing runs until that screen opens.
      */
     private fun applyOfflineAppShare() {
-        val benchmarkLaunch = BuildConfig.DEBUG &&
-            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
         val enabled = OfflineAppShareFeature.resolve(
-            benchmarkLaunch,
+            DebugTunables.benchmarkLaunch,
             { intent.getBooleanExtra(it, false) },
-            advancedSettings,
-            { appPreferences.getBoolean(it, false) },
+            ::storedFeatureChoice,
         )
         if (enabled != OfflineAppShareFeature.enabled) {
             Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "offline_app_share: enabled=$enabled")
         }
         OfflineAppShareFeature.enabled = enabled
         findViewById<View>(R.id.shareAppNearbyButton)?.visibility = if (enabled) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * Native libopus call audio, "Call audio with loss recovery" (NativeOpusSettings). A DEBUG benchmark
+     * launch uses only `test_call_native_opus`; every other launch the user's choice or the shipped
+     * default, in release builds too. Read when a call's audio encoder or decoder starts.
+     */
+    private fun applyNativeOpus() {
+        val enabled = NativeOpusSettings.resolveEnabled(
+            DebugTunables.benchmarkLaunch,
+            { intent.getBooleanExtra(it, false) },
+            ::storedFeatureChoice,
+        )
+        if (enabled != DebugTunables.callNativeOpus) {
+            Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "native_opus: enabled=$enabled")
+        }
+        DebugTunables.callNativeOpus = enabled
+    }
+
+    /** The user's explicit choice for a Settings > Features switch; null while the switch was never touched. */
+    private fun storedFeatureChoice(key: String): Boolean? =
+        if (appPreferences.contains(key)) appPreferences.getBoolean(key, false) else null
+
+    /** Registers the call and connectivity specs and re-resolves the whole catalog, logging a change once. */
+    private fun refreshFeatureCatalog() {
+        CallFeatureSpecs.registerAll()
+        ConnectivityFeatures.registerAll()
+        ViewerFeatures.registerAll()
+        UpdateFeatures.registerAll(BuildConfig.UPDATER_AVAILABLE)
+        val before = FeatureCatalog.current
+        val snapshot = FeatureCatalog.refresh(
+            DebugTunables.benchmarkLaunch,
+            { intent.getBooleanExtra(it, false) },
+            ::storedFeatureChoice,
+        )
+        if (snapshot != before) {
+            Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "features: ${snapshot.label()}")
+        }
+        // Hidden identities (BMH3): its sub-options exist only in a DEBUG benchmark launch.
+        val bmh3Debug = BuildConfig.DEBUG && DebugTunables.benchmarkLaunch
+        Bmh3Feature.configureDebug(
+            only = bmh3Debug && intent.getBooleanExtra(Bmh3Feature.EXTRA_ONLY, false),
+            contactsOnly = bmh3Debug && intent.getBooleanExtra(Bmh3Feature.EXTRA_CONTACTS_ONLY, false),
+            testLeaseHex = if (bmh3Debug) intent.getStringExtra(Bmh3Feature.EXTRA_TEST_LEASE) else null,
+        )
+    }
+
+    /** Builds the Settings > Features card for connectivity from the catalog. */
+    private fun bindConnectivityFeatures() {
+        refreshFeatureCatalog()
+        connectivityFeatureBlock = FeatureSettingsBlock(
+            findViewById(R.id.connFeaturesContainer),
+            ConnectivityFeatures.all,
+            appPreferences,
+            object : FeatureSettingsBlock.Host {
+                override val benchmarkLaunch: Boolean get() = DebugTunables.benchmarkLaunch
+
+                override fun extra(name: String): Boolean = intent.getBooleanExtra(name, false)
+
+                override fun confirmEnable(spec: FeatureSpec, proceed: () -> Unit): Boolean {
+                    if (spec != ConnectivityFeatures.classicWithoutPairing) return false
+                    com.google.android.material.dialog.MaterialAlertDialogBuilder(this@MainActivity)
+                        .setTitle(R.string.feat_classic_dialog_title)
+                        .setMessage(R.string.feat_classic_dialog_message)
+                        .setPositiveButton(R.string.feat_classic_dialog_confirm) { _, _ -> proceed() }
+                        .setNegativeButton(R.string.action_cancel, null)
+                        .show()
+                    return true
+                }
+
+                override fun onChanged(spec: FeatureSpec, enabled: Boolean) =
+                    onConnectivityFeatureChanged(spec, enabled)
+            },
+        ).also { it.bind() }
+    }
+
+    /** Builds the Settings > Features card for stream viewers from the catalog. */
+    private fun bindViewerFeatures() {
+        refreshFeatureCatalog()
+        viewerFeatureBlock = FeatureSettingsBlock(
+            findViewById(R.id.viewerFeaturesContainer),
+            ViewerFeatures.all,
+            appPreferences,
+            object : FeatureSettingsBlock.Host {
+                override val benchmarkLaunch: Boolean get() = DebugTunables.benchmarkLaunch
+
+                override fun extra(name: String): Boolean = intent.getBooleanExtra(name, false)
+
+                override fun onChanged(spec: FeatureSpec, enabled: Boolean) {
+                    // A viewer switch applies to the next viewing; the one on screen keeps its mode.
+                    refreshFeatureCatalog()
+                    Log.i(
+                        "BluetoothVideo",
+                        (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                            "feature_changed: id=${spec.id} | enabled=$enabled | explicit=true",
+                    )
+                }
+            },
+        ).also { it.bind() }
+    }
+
+    /** Builds the Settings > Features card for updates and starts the home update note (UpdatesHome). */
+    private fun bindUpdateFeatures() {
+        refreshFeatureCatalog()
+        val home = UpdatesHome(
+            this,
+            appPreferences,
+            findViewById(R.id.homeUpdateNotice),
+        ) { homeScreen.visibility == View.VISIBLE && !liveSessionBlocksAppShare() }
+        updatesHome = home
+        updateFeatureBlock = FeatureSettingsBlock(
+            findViewById(R.id.updateFeaturesContainer),
+            UpdateFeatures.all(BuildConfig.UPDATER_AVAILABLE),
+            appPreferences,
+            object : FeatureSettingsBlock.Host {
+                override val benchmarkLaunch: Boolean get() = DebugTunables.benchmarkLaunch
+
+                override fun extra(name: String): Boolean = intent.getBooleanExtra(name, false)
+
+                override fun confirmEnable(spec: FeatureSpec, proceed: () -> Unit): Boolean {
+                    // The same explanation as the one-time question: who is contacted and what they see.
+                    if (spec != UpdateFeatures.checkForUpdates) return false
+                    com.google.android.material.dialog.MaterialAlertDialogBuilder(this@MainActivity)
+                        .setTitle(R.string.update_ask_title)
+                        .setMessage(R.string.update_ask_message)
+                        .setPositiveButton(R.string.update_ask_yes) { _, _ -> proceed() }
+                        .setNegativeButton(R.string.action_cancel, null)
+                        .show()
+                    return true
+                }
+
+                override fun onChanged(spec: FeatureSpec, enabled: Boolean) {
+                    refreshFeatureCatalog()
+                    Log.i(
+                        "BluetoothVideo",
+                        (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                            "feature_changed: id=${spec.id} | enabled=$enabled | explicit=true",
+                    )
+                    home.onSettingChanged(spec)
+                }
+            },
+        ).also { it.bind() }
+        findViewById<View>(R.id.updateOpenButton).apply {
+            visibility = if (Updater.backend.available) View.VISIBLE else View.GONE
+            setOnClickListener { Updater.backend.open(this@MainActivity, 0) }
+        }
+        home.apply()
+    }
+
+    /**
+     * The stale-picture controller of the Watch screen (null-safe: built on first use, inert while the
+     * switch is off). Its views are in activity_main.xml next to the older waiting overlay.
+     */
+    private fun viewerFrameAgeController(): ViewerFrameAgeController =
+        viewerFrameAge ?: ViewerFrameAgeController(
+            sessionHandler,
+            ViewerFrameAgeController.Views(
+                scrim = findViewById(R.id.viewerStaleScrim),
+                badge = findViewById(R.id.viewerStaleBadge),
+                progress = findViewById(R.id.viewerStaleProgress),
+                title = findViewById(R.id.viewerStaleTitle),
+                detail = findViewById(R.id.viewerStaleDetail),
+                note = findViewById(R.id.viewerStaleNote),
+                label = findViewById(R.id.viewerFrameAgeLabel),
+            ),
+            object : ViewerFrameAgeController.Texts {
+                override fun signalLost() = getString(R.string.viewer_signal_lost)
+                override fun pictureStalled() = getString(R.string.viewer_picture_stalled)
+                override fun lastPicture(age: String) = getString(R.string.viewer_last_picture, age)
+                override fun lastUpdate(age: String) = getString(R.string.viewer_last_update, age)
+                override fun chipSignalLost() = getString(R.string.watch_status_signal_lost)
+                override fun chipStalled() = getString(R.string.watch_status_stalled)
+            },
+            isWatchScreen = { appScreen == AppScreen.PLAYBACK },
+            isForeground = { activityResumed },
+            onStateChanged = { updateBroadcastStatusChip() },
+            hideLegacyOverlay = { receiverWaitingOverlay.visibility = View.GONE },
+        ).also { viewerFrameAge = it }
+
+    /** A Settings > Features switch changed: apply it to the running app. */
+    private fun onConnectivityFeatureChanged(spec: FeatureSpec, enabled: Boolean) {
+        refreshFeatureCatalog()
+        when (spec) {
+            ConnectivityFeatures.cocAutoGatt -> applyCocAutoGatt()
+            ConnectivityFeatures.classicWithoutPairing -> {
+                applyClassicFeatures()
+                if (!enabled) ClassicAddressBook.clear()
+                // An idle Classic call listener was opened with the old socket security; rebuild it so
+                // the next call, in either direction, follows the switch.
+                if (currentCallTransport == BluetoothTransportOption.CLASSIC_RFCOMM) {
+                    restartIdleCallEndpointForRelayedCalls()
+                }
+            }
+            // An idle CoC endpoint was opened with the old switch (its second listener and offer bit); rebuild it.
+            ConnectivityFeatures.dualListening -> if (currentCallTransport == BluetoothTransportOption.BLE_L2CAP) {
+                restartIdleCallEndpointForRelayedCalls()
+            }
+            ConnectivityFeatures.iphoneDiscovery -> applyCompactDiscovery()
+            ConnectivityFeatures.shareAppNearby -> applyOfflineAppShare()
+            ConnectivityFeatures.nativeOpus -> applyNativeOpus()
+            // An idle call endpoint was opened with the old switch (its offer hint); rebuild it.
+            ConnectivityFeatures.bmh3 -> restartIdleCallEndpointForRelayedCalls()
+            // Read per connection (the epoch pseudonym is chosen when a connection is accepted): nothing to rebuild.
+            ConnectivityFeatures.bmh3Pseudonyms -> Unit
+        }
+        Log.i(
+            "BluetoothVideo",
+            (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "feature_changed: id=${spec.id} | enabled=$enabled | explicit=true",
+        )
     }
 
     private val classicVisibilityRequest = registerForActivityResult(
@@ -3623,27 +4374,17 @@ class MainActivity : AppCompatActivity() {
         experimentalTemporalLayersDescriptionText.visibility = manual
         relayChildMediaAgeSwitch.visibility = manual
         relayChildMediaAgeDescriptionText.visibility = manual
-        experimentalVoiceCallsSwitch.visibility = manual
-        experimentalVoiceCallsDescriptionText.visibility = manual
-        // Push-to-talk is not a user-facing mode (design decision 2026-10-10): extras only.
-        experimentalPushToTalkSwitch.visibility = View.GONE
-        experimentalPttModeSwitch.visibility = View.GONE
-        experimentalPushToTalkDescriptionText.visibility = manual
-        experimentalStoreForwardSwitch.visibility = manual
-        experimentalStoreForwardDescriptionText.visibility = manual
-        experimentalPeerLabelsSwitch.visibility = manual
-        experimentalPeerLabelsDescriptionText.visibility = manual
-        experimentalCocAutoGattSwitch.visibility = manual
-        experimentalCocAutoGattDescriptionText.visibility = manual
-        experimentalClassicBondFreeSwitch.visibility = manual
-        experimentalClassicBondFreeDescriptionText.visibility = manual
-        experimentalCompactDiscoverySwitch.visibility = manual
-        experimentalCompactDiscoveryDescriptionText.visibility = manual
         experimentalRotatingIdsSwitch.visibility = manual
         experimentalRotatingIdsDescriptionText.visibility = manual
         rotatingIdsVisibleButton.visibility = manual
-        experimentalOfflineAppShareSwitch.visibility = manual
-        experimentalOfflineAppShareDescriptionText.visibility = manual
+        rotatingIdsResetKeyButton.visibility = manual
+        neutralBluetoothNameSwitch.visibility = manual
+        neutralBluetoothNameDescriptionText.visibility = manual
+        neutralBluetoothNameStatusText.visibility = manual
+        refreshNeutralNameText()
+        experimentalRelayedCallsSwitch.visibility = manual
+        experimentalRelayedCallsDescriptionText.visibility = manual
+        updateRelayedCallsSettingsUi()
         applyExperimentsHint()
         advancedSettingsDescriptionText.text = if (advancedSettings) {
             "On: every technical value below is exactly what you choose; nothing adapts automatically."
@@ -4011,9 +4752,20 @@ class MainActivity : AppCompatActivity() {
     private fun selectedDeviceMode(): DeviceVideoMode? =
         deviceModes.getOrNull(resolutionSpinner.selectedItemPosition)
 
+    /**
+     * DEBUG phone test P7: the unpaired-central probe (GapNameProbe), once per process, only with its launch extra
+     * (any type). Asked from onResume as well as onPermissionsReady, because a launch that stays on Home never reaches
+     * the latter; a refusal is logged with its reason (`gap_name_probe: event=skipped`).
+     */
+    private fun maybeStartGapNameProbe(source: String) {
+        if (!BuildConfig.DEBUG || gapNameProbeStarted) return
+        if (GapNameProbe.maybeStart(this, bluetoothAdapter, intent.extras, source)) gapNameProbeStarted = true
+    }
+
     private fun onPermissionsReady() {
-        // RV1: the neutral name may have been skipped while permissions were missing; apply it
-        // before any rotating call presence starts.
+        // The explicit neutral-name option may have been skipped while permissions were missing.
+        applyNeutralName()
+        maybeStartGapNameProbe("permissions_ready")
         if (RotatingDiscoveryFeature.enabled) applyRotatingIds()
         when {
             requestedTransportExperiment != null -> {
@@ -4053,16 +4805,32 @@ class MainActivity : AppCompatActivity() {
         val activeTransport = outgoingTransport
         val activeCodec = codecs.getOrNull(codecSpinner.selectedItemPosition) ?: return
         val advertisedSettings = settings
+        // The epoch the offer's RDI belongs to (-1: version 2): a boundary during this start must not leave it on air.
+        val advertisedEpoch = LongArray(1) { -1L }
         thread(name = "BleStreamAdvertiser") {
             val result = runCatching {
                 val identity = AndroidNodeIdentityStore().getOrCreate()
-                val nodePrefix = identity.nodeId.toByteArray()
+                // Rotating IDs, phase 1b: a version 5 offer with the role-1 RDI (LE only; version 2 inside a
+                // Visible-by-handle window). Off: rotatingEntry is null and nothing below changes.
+                val rotatingEntry = if (RotatingStreamAnnouncements.offerRotates(RotatingDiscoveryFeature.enabled, activeTransport) &&
+                    !RotatingDiscovery.visibleByHandle()
+                ) {
+                    RotatingDiscovery.advertise(RotatingDiscoveryIds.ROLE_STREAM_OFFER).also { advertisedEpoch[0] = it.epoch }
+                } else {
+                    null
+                }
+                val nodePrefix = rotatingEntry?.rdi ?: identity.nodeId.toByteArray()
                     .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES)
                 val routeToken = StreamRouteToken.forAdvertiser(activeToken, nodePrefix)
                 BleDiscoveryAdvertiser(
                     adapter,
-                    DiscoveryAnnouncement(
+                    RotatingAdvertFields.forStreamOffer(DiscoveryAnnouncement(
                         nodeIdPrefix = nodePrefix,
+                        version = if (rotatingEntry != null) {
+                            DiscoveryAnnouncement.ROTATING_VERSION
+                        } else {
+                            DiscoveryAnnouncement.FIXED_PREFIX_VERSION
+                        },
                         flags = DiscoveryAnnouncement.FLAG_STREAM_AVAILABLE or
                             (if (streamPaused) DiscoveryAnnouncement.FLAG_STREAM_PAUSED else 0) or
                             when (activeTransport) {
@@ -4081,7 +4849,7 @@ class MainActivity : AppCompatActivity() {
                         streamHeight = advertisedSettings.resolution.height,
                         streamFps = advertisedSettings.fps,
                         streamBitrateKbps = advertisedSettings.bitRate / 1_000,
-                    ),
+                    )),
                     { message ->
                         if (streamPaused) {
                             setStatus("Broadcast paused. Connections remain available.")
@@ -4096,7 +4864,13 @@ class MainActivity : AppCompatActivity() {
             val titlePages = result.getOrNull()?.second?.let { routeToken ->
                 PeerLabelFeature.localStreamTitle?.takeIf { PeerLabelFeature.enabled }?.let { title ->
                     if (AdvertisingSetProbe.lastFree == null) runCatching { AdvertisingSetProbe.run(adapter) }
-                    runCatching { TitleAdvertiser(adapter, routeToken, title) }.getOrNull()?.takeIf {
+                    runCatching {
+                        TitleAdvertiser(
+                            adapter, routeToken, title,
+                            selfRotate = RotatingDiscoveryFeature.enabled &&
+                                !RotatingStreamAnnouncements.offerRotates(true, activeTransport),
+                        )
+                    }.getOrNull()?.takeIf {
                         it.start() == android.bluetooth.le.AdvertisingSetCallback.ADVERTISE_SUCCESS
                     }
                 }
@@ -4112,7 +4886,20 @@ class MainActivity : AppCompatActivity() {
                         streamAdvertiser = advertiser
                         streamAdvertisedFull = advertisedFull
                         streamRouteToken = routeToken
+                        streamRequestTokens.advance(activeToken, routeToken, SystemClock.elapsedRealtime())
+                        if (RotatingStreamAnnouncements.offerRotates(RotatingDiscoveryFeature.enabled, activeTransport) &&
+                            !streamBoundaryListening
+                        ) {
+                            streamBoundaryListening = true
+                            RotatingDiscovery.addBoundaryListener(streamBoundaryListener)
+                        }
                         startViewerRequestDiscovery()
+                        if (advertisedEpoch[0] >= 0L &&
+                            runCatching { RotatingDiscovery.currentEpoch() }.getOrDefault(advertisedEpoch[0]) != advertisedEpoch[0]
+                        ) {
+                            // A boundary passed while this set was starting (the listener did not exist yet).
+                            rotateStreamPresenceForBoundary()
+                        }
                     } else {
                         advertiser.close()
                         titlePages?.close()
@@ -4196,11 +4983,13 @@ class MainActivity : AppCompatActivity() {
                 }
             },
             { announcement ->
-                announcement.isViewerRequest(activeRouteToken) &&
+                announcement.flags and DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS != 0 &&
+                    streamRequestTokens.accepts(announcement.streamToken, SystemClock.elapsedRealtime()) &&
                     announcement.transportOption() == outgoingTransport
             },
             scanDurationMs = CONTINUOUS_SCAN_MS,
             reportDuplicates = true,
+            acceptRotating = RotatingDiscoveryFeature.enabled,
             continuousLowLatency = continuousLowLatency,
             startLowLatency = when (testScanMode) {
                 "balanced" -> false
@@ -4296,7 +5085,31 @@ class MainActivity : AppCompatActivity() {
         updateStartEnabled()
     }
 
+    /**
+     * Rotating IDs (RV6, RV12): a boundary (or a Visible-by-handle window change) stops the stream offer and
+     * its title pages, waits 1-8 s and starts them on new sets with the new role-1 RDI. Connected viewers keep
+     * their links; the token window keeps the previous token valid for 60 s.
+     */
+    private fun rotateStreamPresenceForBoundary() {
+        if (streamAdvertiser == null || appScreen != AppScreen.CAMERA || !streamArmed) return
+        RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_STREAM_OFFER)
+        streamAdvertiser?.close()
+        streamAdvertiser = null
+        streamTitleAdvertiser?.close()
+        streamTitleAdvertiser = null
+        streamPresenceStarting = false
+        val silenceMs = RotatingDiscovery.boundarySilenceMs()
+        discoveryHandler.postDelayed({ startStreamPresence() }, silenceMs)
+        if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK rotid_restart: role=stream | silenceMs=$silenceMs")
+    }
+
     private fun stopStreamPresence(resetToken: Boolean = true) {
+        // Rotating IDs: the stream offer leaves the air; its ID stays openable for 60 s only (OpeningPins).
+        RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_STREAM_OFFER)
+        if (streamBoundaryListening) {
+            streamBoundaryListening = false
+            RotatingDiscovery.removeBoundaryListener(streamBoundaryListener)
+        }
         discoveryHandler.removeCallbacksAndMessages(null)
         streamDiscovery?.close()
         streamDiscovery = null
@@ -4311,6 +5124,7 @@ class MainActivity : AppCompatActivity() {
             streamToken = 0
             streamCapacityGeneration = 0
             streamRouteToken = 0
+            streamRequestTokens.clear()
         }
         if (::connectionStatusDot.isInitialized) updateConnectionDot(0)
     }
@@ -4379,6 +5193,7 @@ class MainActivity : AppCompatActivity() {
             scanDurationMs = CONTINUOUS_SCAN_MS,
             reportDuplicates = true,
             continuousLowLatency = true,
+            acceptRotating = RotatingDiscoveryFeature.enabled,
         )
         nearbyStreamDiscovery = discovery
         discovery.start()
@@ -4427,7 +5242,14 @@ class MainActivity : AppCompatActivity() {
             SystemClock.elapsedRealtime() <= receiverBrowserNoticeDeadlineMs
         }
         receiverBrowserStatus.text = activeNotice ?: if (nearbyStreamPeers.isEmpty()) {
-            "No nearby streams yet. Scanning continues."
+            val coolingRetryMs = nearbyStreamsLastSeen.values.asSequence()
+                .mapNotNull { (peer, _) ->
+                    suppressedStreamRoutes.entries
+                        .filter { (route, _) -> route.matches(peer.announcement) }
+                        .minOfOrNull { (_, deadlineMs) -> deadlineMs - nowMs }
+                }
+                .minOrNull()
+            receiverBrowserEmptyStatus(coolingRetryMs, DebugTunables.receiverUiStability)
         } else {
             resources.getQuantityString(R.plurals.watch_live_count, nearbyStreamPeers.size, nearbyStreamPeers.size)
         }
@@ -4514,6 +5336,18 @@ class MainActivity : AppCompatActivity() {
             val title = when {
                 signedTitle != null -> getString(R.string.stream_row_title, signedTitle)
                 advertisedTitle != null -> getString(R.string.stream_title_unconfirmed, advertisedTitle)
+                peer.announcement.rotating -> {
+                    val hit = RotatingDiscovery.recognize(peer.announcement).singleOrNull()
+                    if (hit == null) {
+                        getString(R.string.stream_row_live_from_nearby)
+                    } else {
+                        val contact = hit.contact.toString().take(12)
+                        getString(
+                            R.string.stream_row_live_from_seen,
+                            PeerLabels.forPeer(contact, contactNames[contact]).listName(),
+                        )
+                    }
+                }
                 else -> getString(R.string.stream_row_live_from, label.listName())
             }
             ListRow(
@@ -4694,6 +5528,7 @@ class MainActivity : AppCompatActivity() {
                         ?: error("Call video surface is not ready")
                 },
                 playbackDelayProfile = receiverPlaybackDelay,
+                relayHelper = relayedCalls,
                 phyPreference = debugBlePhyPreference,
                 ioConfig = streamIoConfigFor(outgoingTransport),
                 supportedVideoModes = { activeCodec, bitRate ->
@@ -4716,7 +5551,8 @@ class MainActivity : AppCompatActivity() {
                     if (StoreForwardAutoSyncFeature.enabled) runOnUiThread { onAutoSyncExchangeResult(result) }
                     val opened = result.opened.size
                     if (opened > 0) runOnUiThread {
-                        Toast.makeText(this, "$opened new message${if (opened == 1) "" else "s"}", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, getString(R.string.messages_toast_new, opened), Toast.LENGTH_LONG).show()
+                        refreshMessagesUnread(notify = true)
                     }
                 },
                 onMessageSyncFailed = { detail ->
@@ -4752,17 +5588,12 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
                         if (privateCall !== endpoint) return@runOnUiThread
                         privateCallReturnHome = reachabilityScreen() == ReachabilityScreen.HOME
-                        showPrivateCallScreen(
-                            "Incoming encrypted call from ${incomingPeerName(peerLabel)}",
-                        )
-                        intercomCallUi.setPeerLabel(incomingPeerName(peerLabel))
+                        // Q16-A: over a secure lock screen the caller stays unnamed until the phone is unlocked.
+                        val shownName = callLockScreen.displayName(incomingPeerName(peerLabel))
+                        showPrivateCallScreen("Incoming encrypted call from $shownName")
                         privateCallDialledRelays = null
-                        showCallParty(incomingPeerName(peerLabel), R.string.call_incoming_video)
-                        callPartyState.text = incomingStateText(peerLabel, video = true)
-                        showCallSubject(
-                            PeerLabels.forPeer(peerLabel.lowercase().take(12), null).callSubject
-                                ?.let { getString(R.string.call_subject_line, it) },
-                        )
+                        showCallParty(shownName, R.string.call_incoming_video)
+                        watchCallPeerName(peerLabel) { incomingPeerName(peerLabel) }
                         incomingCallControls.visibility = View.VISIBLE
                         activeCallControls.visibility = View.GONE
                         cancelCallButton.visibility = View.GONE
@@ -4939,11 +5770,7 @@ class MainActivity : AppCompatActivity() {
                     // only with Accept, R1); refresh the shown name without changing the call state.
                     runOnUiThread {
                         if (privateCall !== endpoint || !::callPartyPanel.isInitialized) return@runOnUiThread
-                        if (callPartyPanel.visibility == View.VISIBLE) {
-                            val name = incomingPeerName(prefix)
-                            privateCallPartyName = name
-                            callPartyName.text = name
-                        }
+                        applyCallPeerName()
                     }
                 },
                 onCocConnectFailed = { detail ->
@@ -4960,6 +5787,12 @@ class MainActivity : AppCompatActivity() {
                     Log.i("BluetoothVideo", "Private call ended: $message")
                     runOnUiThread {
                         if (privateCall !== endpoint) return@runOnUiThread
+                        if (endpoint.endedFromRelayDuty) {
+                            // This endpoint relayed someone else's call (or refused a request): no call
+                            // screen, no toast; the endpoint is rebuilt quietly.
+                            handleRelayDutyEnded(endpoint)
+                            return@runOnUiThread
+                        }
                         val returnHome = privateCallReturnHome && CallReachabilityFeature.enabled
                         privateCallReturnHome = false
                         stopPrivateCallRinging()
@@ -5111,6 +5944,11 @@ class MainActivity : AppCompatActivity() {
                         "BluetoothVideo",
                         "BENCHMARK call discovered: node=$key | transport=${peer.announcement.transportOption().name}",
                     )
+                    if (BuildConfig.DEBUG && key !in privateCallPeersLastSeen) Log.i(
+                        "BluetoothVideo",
+                        "BENCHMARK dual_listening: event=seen | node=$key | hint=${DualListeningWire.hasHint(peer.announcement)} | " +
+                            "summary=0x${"%02x".format(peer.announcement.capabilitySummary)}",
+                    )
                     val observedAtMs = SystemClock.elapsedRealtime()
                     privateCallPeersLastSeen[key] = peer to observedAtMs
                     refreshPrivateCallPeers()
@@ -5156,9 +5994,9 @@ class MainActivity : AppCompatActivity() {
                     // Rotating IDs, phase 1: only direct LE version 5 offers can be verified (startOutgoing).
                     (!announcement.rotating || (announcement.routeCost == 0 &&
                         announcement.flags and DiscoveryAnnouncement.FLAG_CLASSIC_TRANSPORT == 0)) &&
-                    CocAutoGattSession.acceptsAdvertised(
+                    (CocAutoGattSession.acceptsAdvertised(
                         outgoingTransport, currentCallTransport, announcement.transportOption(), CocAutoGatt.current,
-                    ) &&
+                    ) || DualCallerPlan.listsHintedOffer(currentCallTransport, announcement, DualListeningFeature.enabled)) &&
                     !announcement.nodeIdPrefix.contentEquals(localPrefix)
             },
             scanDurationMs = CONTINUOUS_SCAN_MS,
@@ -5176,8 +6014,21 @@ class MainActivity : AppCompatActivity() {
         privateCallPeersLastSeen.entries.removeAll {
             !privateCallPeerIsFresh(it.value.second, nowMs)
         }
-        val updatedPeers = privateCallPeersLastSeen.values.map { it.first }
-            .sortedBy(BleL2capPeer::label)
+        val directPeers = privateCallPeersLastSeen.values.map { it.first }
+        // Experimental relayed calls: targets known only through helpers get a row of their own (a benchmark
+        // that requires a chain replaces the direct row, since a direct call would be a failed chain).
+        val relayedPeers = if (RelayedCallsFeature.enabled) RelayedCallsRuntime.relayedPeers(currentCallTransport) else emptyList()
+        val relayedKeys = relayedPeers.map { it.announcement.nodeIdPrefix.toHexKey() }.toSet()
+        val basePeers = if (RelayedCallsFeature.requireRelays > 0) {
+            directPeers.filterNot { it.announcement.nodeIdPrefix.toHexKey() in relayedKeys }
+        } else {
+            directPeers
+        }
+        val extraPeers = relayedPeers.filterNot { relayed ->
+            RelayedCallsFeature.requireRelays == 0 &&
+                directPeers.any { it.announcement.nodeIdPrefix.contentEquals(relayed.announcement.nodeIdPrefix) }
+        }
+        val updatedPeers = (basePeers + extraPeers).sortedBy(BleL2capPeer::label)
         val listChanged = privateCallPeers.size != updatedPeers.size ||
             privateCallPeers.zip(updatedPeers).any { (old, new) ->
                 old.label != new.label ||
@@ -5218,13 +6069,16 @@ class MainActivity : AppCompatActivity() {
                 // Rotating IDs (design 5.4): a stranger's 15-minute ID is never shown as a handle or
                 // matched to a contact before the handshake ("Nearby phone", no handle, no check mark).
                 name = if (peer.announcement.rotating) {
-                    getString(R.string.people_rotating_phone)
+                    rotatingPeerRowName(peer.announcement)
                 } else {
                     PeerLabels.forPeer(prefix, contactNames[prefix]).listName(fullHandle = prefix in colliding)
                 },
-                reach = when (relays) {
-                    0 -> getString(R.string.people_reach_nearby)
-                    1 -> getString(R.string.people_reach_via_one)
+                reach = when {
+                    // Found through helpers, not heard by this phone: said plainly, never as verified.
+                    peer.relayRoute != null && relays == 1 -> getString(R.string.people_reach_relayed_one)
+                    peer.relayRoute != null -> getString(R.string.people_reach_relayed, relays)
+                    relays == 0 -> getString(R.string.people_reach_nearby)
+                    relays == 1 -> getString(R.string.people_reach_via_one)
                     else -> getString(R.string.people_reach_via, relays)
                 },
                 relayed = relays > 0,
@@ -5286,6 +6140,18 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    /**
+     * Rotating IDs: "Nearby phone", or - when a lease-derived ID of exactly one contact matches (Phase 2) -
+     * that contact's own label with "seen nearby, unconfirmed". Never a check mark, never the handle of a
+     * stranger, and a match starts no connection (PROTOCOL "Recognition and presence leases").
+     */
+    private fun rotatingPeerRowName(announcement: DiscoveryAnnouncement): String {
+        val hit = RotatingDiscovery.recognize(announcement).singleOrNull()
+            ?: return getString(R.string.people_rotating_phone)
+        val prefix = hit.contact.toString().take(12)
+        return getString(R.string.people_seen_nearby, PeerLabels.forPeer(prefix, contactNames[prefix]).listName())
+    }
+
     /** One clean name for a discovered person (never raw hex). */
     private fun peerName(peer: BleL2capPeer): String {
         if (peer.announcement.rotating) return getString(R.string.people_rotating_phone)
@@ -5304,11 +6170,13 @@ class MainActivity : AppCompatActivity() {
         val prefix = label.lowercase().take(12)
         val peerLabel = PeerLabels.forPeer(prefix, contactNames[prefix])
         val state = getString(if (video) R.string.call_incoming_video else R.string.call_incoming_voice)
-        return if (peerLabel.nameKind == PeerLabel.NameKind.SELF_NAMED) {
+        val withHandle = if (peerLabel.nameKind == PeerLabel.NameKind.SELF_NAMED) {
             getString(R.string.call_incoming_with_handle, state, peerLabel.handle)
         } else {
             state
         }
+        // A self-claimed name that reads like one of your contacts (or you): say so before they answer.
+        return peerLabel.lookAlikeOf?.let { withHandle + "\n" + getString(R.string.call_incoming_lookalike, it) } ?: withHandle
     }
 
     // ----- Relay control (design decision 2026-10-10) -----
@@ -5339,6 +6207,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun recordRecentCall() {
         val endpoint = privateCall ?: return
+        if (endpoint.peerStillPseudonym) return // a throwaway key is no one to call back
         val prefix = endpoint.endToEndPeerNodeId?.take(12) ?: return
         if (isBenchmarkLaunch()) return // automated runs leave no history
         val call = RecentCall(prefix, endpoint.localCallType == CallType.VIDEO, System.currentTimeMillis())
@@ -5635,7 +6504,7 @@ class MainActivity : AppCompatActivity() {
         val options = buildList<Pair<String, () -> Unit>> {
             if (IntercomFeatures.current.voiceCalls) add("Voice call" to { startOutgoingPrivateCall(peer, CallType.VOICE) })
             add("Video call" to { startOutgoingPrivateCall(peer, CallType.VIDEO) })
-            add("Exchange messages (Experimental)" to { startOutgoingPrivateCall(peer, messageSync = true) })
+            add("Exchange messages" to { startOutgoingPrivateCall(peer, messageSync = true) })
         }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(name)
@@ -5652,6 +6521,23 @@ class MainActivity : AppCompatActivity() {
         auto: Boolean = false,
     ) {
         if (pendingPrivateCallPeerKey != null) return
+        if (discoveredPeer.relayRoute != null) {
+            // Experimental relayed calls: the row comes from the reach table, not from a fresh scan result,
+            // so use the freshest route to that target now instead of waiting for an address refresh.
+            val fresh = RelayedCallsRuntime.peerFor(
+                discoveredPeer.announcement.nodeIdPrefix,
+                currentCallTransport,
+                rotating = discoveredPeer.announcement.rotating,
+            )
+            if (fresh == null) {
+                callBrowserStatus.text = getString(R.string.relayed_route_gone)
+                return
+            }
+            pendingPrivateCallType = callType
+            pendingPrivateCallMessageSync = false
+            connectOutgoingPrivateCall(fresh)
+            return
+        }
         pendingPrivateCallType = callType
         pendingPrivateCallMessageSync = messageSync && StoreForwardFeature.enabled
         val key = discoveredPeer.announcement.nodeIdPrefix.toHexKey()
@@ -5694,6 +6580,24 @@ class MainActivity : AppCompatActivity() {
         }
         if (!ensureThermalReady()) return
         val endpoint = privateCall ?: return
+        // A benchmark that requires a chain never calls directly (direct fallback is a failed chain).
+        if (RelayedCallsFeature.enabled && RelayedCallsFeature.requireRelays > 0 && discoveredPeer.relayRoute == null) {
+            Log.i(
+                "BluetoothVideo",
+                (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                    "relayed_call: refused | reason=no_route_with_required_relays | require=${RelayedCallsFeature.requireRelays}",
+            )
+            callBrowserStatus.text = getString(R.string.relayed_chain_required)
+            return
+        }
+        // Experimental relayed calls: this phone's own call ends a relay in progress first (PLAN C5); the call
+        // starts as soon as the endpoint is available again (the same retry the CoC fallback uses).
+        if (endpoint.relayingNow) {
+            cocRetryPeer = discoveredPeer to pendingPrivateCallType
+            endpoint.preemptRelay()
+            callBrowserStatus.text = getString(R.string.relay_preempted)
+            return
+        }
         // Experimental CoC -> GATT fallback (default off): a peer that advertises GATT (it fell back)
         // is called over GATT, so this endpoint is rebuilt on GATT for this call.
         if (CocAutoGatt.current.enabled && discoveredPeer.announcement.transportOption() ==
@@ -5757,10 +6661,13 @@ class MainActivity : AppCompatActivity() {
         Log.i("BluetoothVideo", "Calling ${peer.label}")
         val peerName = peerName(peer)
         showPrivateCallScreen("Calling $peerName...")
-        intercomCallUi.setPeerLabel(peerName)
         privateCallDialledRelays = advertisedRelayCount(discoveredPeer.announcement.routeCost)
         val voice = endpoint.localCallType == CallType.VOICE
         if (!voice) showCallParty(peerName, R.string.call_outgoing)
+        val dialledPrefix = discoveredPeer.announcement.nodeIdPrefix.toHexKey()
+        watchCallPeerName(null) {
+            if (discoveredPeer.announcement.rotating) getString(R.string.people_rotating_phone) else incomingPeerName(dialledPrefix)
+        }
         if (voice) intercomCallUi.showPendingVoice(incoming = false)
         incomingCallControls.visibility = View.GONE
         activeCallControls.visibility = View.GONE
@@ -5776,6 +6683,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updatePrivateCallUi(callState: PrivateCallState) {
         privateCallPhase = callState.phase
+        VoiceNoteGate.callPhase = callState.phase.takeIf { it != PrivateCallPhase.ENDED }
         callLockScreen.apply(callState.phase.takeIf { it != PrivateCallPhase.ENDED })
         updatePrivateCallRingback(callState.phase)
         if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK call phase ${callState.phase.name}")
@@ -6068,7 +6976,20 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
-    /** Experimental voice calls: the ringing call's caller offered (or withdrew) a voice call. */
+    /**
+     * A voice call whose other phone answered with its camera and never signalled its camera state:
+     * its app has no voice calls (an older build, or the switch off). Said once per call; the call
+     * simply continues as a call where only the other person has video.
+     */
+    private fun showPeerLacksVoiceNotice() {
+        val name = privateCall?.endToEndPeerNodeId?.take(12)?.let { callLockScreen.displayName(incomingPeerName(it)) } ?: return
+        Log.i("BluetoothVideo", "Call voice: peer answered a voice call with video (no voice-call support)")
+        com.google.android.material.snackbar.Snackbar
+            .make(callScreen, getString(R.string.call_peer_no_voice, name), com.google.android.material.snackbar.Snackbar.LENGTH_LONG)
+            .show()
+    }
+
+    /** Voice calls: the ringing call's caller offered (or withdrew) a voice call. */
     private fun onIncomingPrivateCallType(type: CallType) {
         if (privateCallPhase != PrivateCallPhase.INCOMING_RINGING) return
         val acceptButton = findViewById<View>(R.id.acceptCallButton)
@@ -6095,23 +7016,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * While muted, press and hold Mute to talk; releasing mutes again (the existing mute path).
-     * Not used while the experimental push-to-talk button (launch extras) owns the microphone.
+     * While muted, press and hold Mute to talk; releasing mutes again (the existing mute path). Part of
+     * every call (no setting). Not used while the launch-extra push-to-talk button owns the microphone.
+     * Screen readers: "double tap and hold" reaches the touch listener as a real hold, and the custom
+     * action "Talk" starts and stops talking with two activations.
      */
+    private var holdToTalkGesture: HoldToTalkGesture? = null
+
     private fun bindHoldMuteToTalk() {
-        callMuteButton.setOnTouchListener(
-            HoldToTalkGesture(
-                canStart = { privateCallMuted && intercomCallUi.pushToTalk == null && privateCall != null },
-                onTalk = { talking ->
-                    val endpoint = privateCall ?: return@HoldToTalkGesture
-                    // While another call holds the microphone (audio focus hold) the call stays muted.
-                    endpoint.setMuted(privateCallFocusHold.onUserMuted(!talking))
-                    Log.i("BluetoothVideo", "Call hold-mute-to-talk: ${if (talking) "talking" else "muted"}")
-                    callMuteLabel.setText(if (talking) R.string.call_talking else R.string.call_unmute)
-                    callMuteButton.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-                },
-            ),
+        val gesture = HoldToTalkGesture(
+            canStart = { privateCallMuted && intercomCallUi.pushToTalk == null && privateCall != null },
+            onTalk = { talking ->
+                val endpoint = privateCall ?: return@HoldToTalkGesture
+                // While another call holds the microphone (audio focus hold) the call stays muted.
+                val effectiveMuted = privateCallFocusHold.onUserMuted(!talking)
+                endpoint.setMuted(effectiveMuted)
+                val open = talking && !effectiveMuted
+                Log.i(
+                    "BluetoothVideo",
+                    "Call hold-mute-to-talk: ${if (open) "talking" else if (talking) "blocked_by_focus_hold" else "muted"}",
+                )
+                callMuteLabel.setText(if (open) R.string.call_talking else R.string.call_unmute)
+                callMuteButton.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                if (talking && effectiveMuted) setCallStatus("On hold: another call is using the microphone")
+                // TalkBack reads a state change on the focused button.
+                androidx.core.view.ViewCompat.setStateDescription(
+                    callMuteButton,
+                    getString(if (open) R.string.call_talking else R.string.call_muted_again),
+                )
+            },
         )
+        holdToTalkGesture = gesture
+        callMuteButton.setOnTouchListener(gesture)
+        androidx.core.view.ViewCompat.addAccessibilityAction(callMuteButton, getString(R.string.call_talk_action)) { _, _ ->
+            if (privateCallMuted && intercomCallUi.pushToTalk == null && privateCall != null) {
+                gesture.toggleLatched()
+                true
+            } else {
+                false
+            }
+        }
     }
 
     /** The first time the user mutes, a one-line tip about holding Mute to talk. */
@@ -6156,6 +7100,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun togglePrivateCallCamera() {
         privateCallCameraEnabled = !privateCallCameraEnabled
+        // A call that began as a voice call runs a service without the camera type. Adding video must
+        // widen the service first (Android 14 refuses camera use from a service without the type once
+        // the app is in the background); removing video narrows it again.
+        if (privateCallCameraEnabled && privateCall?.localCallType == CallType.VOICE) {
+            ActiveVideoSessionService.start(
+                this,
+                usesCamera = true,
+                statusText = "Encrypted private video call",
+                ongoingCallStyle = CallUx.settings.callStyleNotifications,
+            )
+        }
         if (!privateCallCameraEnabled) {
             stopPrivateCallCamera()
             showPrivateCallLocalPreview()
@@ -6166,12 +7121,12 @@ class MainActivity : AppCompatActivity() {
             startPrivateCallCamera(codec, callSettings)
         }
         privateCall?.setCameraEnabled(privateCallCameraEnabled)
-        // Experimental voice calls: adding video to a voice call needs the camera service type.
-        if (privateCallCameraEnabled && privateCall?.localCallType == CallType.VOICE) {
+        if (!privateCallCameraEnabled && privateCall?.localCallType == CallType.VOICE) {
             ActiveVideoSessionService.start(
                 this,
-                usesCamera = true,
-                statusText = "Encrypted private video call",
+                usesCamera = false,
+                statusText = "Encrypted private voice call",
+                usesMicrophone = true,
                 ongoingCallStyle = CallUx.settings.callStyleNotifications,
             )
         }
@@ -6257,7 +7212,11 @@ class MainActivity : AppCompatActivity() {
         } else {
             "Sound plays from the ${output.label.lowercase()}. Tap to use the speaker."
         }
-        callMuteButton.contentDescription = if (privateCallMuted) "Unmute your microphone" else "Mute your microphone"
+        callMuteButton.contentDescription = if (privateCallMuted) {
+            getString(R.string.call_unmute_description)
+        } else {
+            getString(R.string.call_mute_description)
+        }
         callCameraButton.contentDescription = if (privateCallCameraEnabled) "Turn your video off" else "Turn your video on"
         callSwitchCameraButton.contentDescription = "Switch between front and back camera"
         // Experimental voice calls: the voice layout offers Add video and hides Flip.
@@ -6337,6 +7296,7 @@ class MainActivity : AppCompatActivity() {
         privateCallContinuityTracker = null
         privateCallMediaStartedAtNs = 0L
         privateCallContinuityLastReportNs = 0L
+        holdToTalkGesture?.reset() // A hold in progress belonged to this call.
         stopPrivateCallRinging()
         privateCallProximityPause?.stop()
         privateCallProximityPause = null
@@ -6387,6 +7347,8 @@ class MainActivity : AppCompatActivity() {
         privateCall?.close()
         privateCall = null
         privateCallPhase = null
+        VoiceNoteGate.callPhase = null
+        clearCallPeerName()
         privateCallAvailabilityStarting = false
         privateCallAvailable = false
         privateCallReturnHome = false
@@ -6417,10 +7379,10 @@ class MainActivity : AppCompatActivity() {
         callRinger.stopIncoming()
     }
 
-    /** Experimental ringback (test_call_ringback): the caller hears ringing while the callee rings. */
+    /** Ringback (Settings > Features, or test_call_ringback): the caller hears ringing while the callee rings. */
     private fun updatePrivateCallRingback(phase: PrivateCallPhase?) {
         if (CallUx.settings.ringback && phase == PrivateCallPhase.OUTGOING_RINGING) {
-            callRinger.startRingback()
+            callRinger.startRingback(RingbackPolicy.stream(privateCall?.localCallType))
         } else {
             callRinger.stopRingback()
         }
@@ -6629,6 +7591,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showReceiverOverlay(message: String, showProgress: Boolean, noticeAlpha: Float = 1f) {
+        // A stale-picture badge (viewer frame age) replaces this overlay and shows the message itself.
+        if (viewerFrameAge?.interceptOverlay(message) == true) return
         if (receiverWaitingOverlay.visibility != View.VISIBLE || receiverWaitingText.text.toString() != message ||
             (receiverWaitingProgress.visibility == View.VISIBLE) != showProgress
         ) {
@@ -6651,7 +7615,9 @@ class MainActivity : AppCompatActivity() {
     private fun resetReceiverRecoveryNotice() {
         receiverRecoveryNoticeRunnable?.let(sessionHandler::removeCallbacks)
         receiverRecoveryNoticeRunnable = null
-        receiverRecoveryNoticePolicy.update(false, SystemClock.elapsedRealtime())
+        receiverRecoveryCoverRelease?.let(sessionHandler::removeCallbacks)
+        receiverRecoveryCoverRelease = null
+        receiverRecoveryNoticePolicy.reset()
     }
 
     private fun updatePauseButton() {
@@ -6876,8 +7842,11 @@ class MainActivity : AppCompatActivity() {
             acceptAnnouncement = { announcement ->
                 (if (debugPrivateCallRelay) {
                     PrivateCallRelayChain.admitsOffer(announcement, localRelayPrefix, DebugTunables.callRelayChain) &&
-                        (debugRelayCalleePrefix == null ||
-                            announcement.nodeIdPrefix.toHexKey() == debugRelayCalleePrefix) &&
+                        (if (announcement.rotating) {
+                            debugRelayCalleeRotating
+                        } else {
+                            debugRelayCalleePrefix == null || announcement.nodeIdPrefix.toHexKey() == debugRelayCalleePrefix
+                        }) &&
                         (debugRelayRouteCost == null || announcement.routeCost == debugRelayRouteCost)
                 } else {
                     announcement.flags and DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS != 0 &&
@@ -6887,6 +7856,8 @@ class MainActivity : AppCompatActivity() {
                     (!debugRequireRelay ||
                         announcement.flags and DiscoveryAnnouncement.FLAG_RELAY_CAPABLE != 0)
             },
+            // The DEBUG call relay decodes version 5 offers (it mirrors them); the stream picker stays version 2.
+            acceptRotating = debugPrivateCallRelay && RotatingDiscoveryFeature.enabled,
         )
         bleDiscovery = discovery
         discovery.start()
@@ -7242,6 +8213,7 @@ class MainActivity : AppCompatActivity() {
             },
         )
         broadcaster = newBroadcaster
+        newBroadcaster.logicalStreamToken = streamToken
         updateStartEnabled()
         newBroadcaster.connect(
             this,
@@ -7462,17 +8434,20 @@ class MainActivity : AppCompatActivity() {
                     if (receiver !== newReceiver || appScreen != AppScreen.PLAYBACK) return@runOnUiThread
                     when (state) {
                         StreamLifecycleState.LIVE -> {
+                            viewerFrameAge?.onResumed()
                             receiverPlaybackPaused = false
                             receiverContinuityTracker?.setActive(true)
                             showReceiverOverlay("Resuming stream", showProgress = true)
                         }
                         StreamLifecycleState.PAUSED -> {
+                            viewerFrameAge?.onPaused()
                             receiverPlaybackPaused = true
                             resetReceiverRecoveryNotice()
                             receiverContinuityTracker?.setActive(false)
                             showReceiverOverlay("Paused by broadcaster", showProgress = false)
                         }
                         StreamLifecycleState.ENDED -> {
+                            viewerFrameAge?.onEnded()
                             resetReceiverRecoveryNotice()
                             receiverContinuityTracker?.setActive(false)
                             receiverStreamEnded = true
@@ -7492,6 +8467,7 @@ class MainActivity : AppCompatActivity() {
             debugForwarderGattPriority = debugForwarderGattPriority,
             debugDirectGattHeartbeat = debugDirectGattHeartbeat,
             debugTraceSessionName = debugMediaTraceSession,
+            viewerFrameAge = viewerFrameAge?.takeIf { it.enabled }?.monitor,
             forwardReceivedStreams = effectiveForwarding(selectedStreamPeer?.announcement?.streamToken ?: 0),
             expectedMediaSourceNodeId = activeStreamSourceNodeId,
             onMediaSourceAuthenticated = { sourceNodeId ->
@@ -7506,6 +8482,8 @@ class MainActivity : AppCompatActivity() {
                     }
                     receiverRecoveryNoticeRunnable?.let(sessionHandler::removeCallbacks)
                     receiverRecoveryNoticeRunnable = null
+                    receiverRecoveryCoverRelease?.let(sessionHandler::removeCallbacks)
+                    receiverRecoveryCoverRelease = null
                     val nowMs = SystemClock.elapsedRealtime()
                     receiverRecoveryNoticePolicy.update(recovering, nowMs)
                     Log.i(
@@ -7543,7 +8521,29 @@ class MainActivity : AppCompatActivity() {
                             receiverRecoveryNoticePolicy.noticeDelayRemainingMs(nowMs) ?: 0L,
                         )
                     } else if (receiverWaitingText.text.toString() in setOf("Recovering video", "")) {
-                        hideReceiverOverlay()
+                        val holdMs = receiverRecoveryNoticePolicy.holdRemainingMs(nowMs)
+                        if (holdMs > 0L) {
+                            // A repeating recovery: keep the cover through the gap so it does not flash
+                            // (ReceiverRecoveryNoticePolicy). An isolated one clears at once, as before.
+                            val release = object : Runnable {
+                                override fun run() {
+                                    if (receiverRecoveryCoverRelease !== this) return
+                                    receiverRecoveryCoverRelease = null
+                                    if (receiver === newReceiver && appScreen == AppScreen.PLAYBACK &&
+                                        !receiverRecoveryNoticePolicy.coverHeld(SystemClock.elapsedRealtime()) &&
+                                        receiverWaitingText.text.toString() in setOf("Recovering video", "")
+                                    ) {
+                                        Log.i("BluetoothVideo", "Receiver recovery UI: held cover released after $holdMs ms")
+                                        hideReceiverOverlay()
+                                    }
+                                }
+                            }
+                            receiverRecoveryCoverRelease = release
+                            sessionHandler.postDelayed(release, holdMs)
+                            Log.i("BluetoothVideo", "Receiver recovery UI: repeating episode, cover held for $holdMs ms")
+                        } else {
+                            hideReceiverOverlay()
+                        }
                     }
                 }
             },
@@ -7630,6 +8630,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 resetReceiverRecoveryNotice()
                 receiver = null
+                // The picture on screen is now frozen: say so before the older overlay is asked to draw.
+                if (!ended && !localMediaFailure && appScreen == AppScreen.PLAYBACK) viewerFrameAge?.onLinkLost()
                 stopForegroundSessionIfIdle()
                 updateStartEnabled()
                 if (appScreen == AppScreen.PLAYBACK) {
@@ -7650,6 +8652,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         receiver = newReceiver
+        viewerFrameAge?.onLinkStarted()
         updateStartEnabled()
         val streamPeer = selectedStreamPeer
         runCatching {
@@ -7664,6 +8667,7 @@ class MainActivity : AppCompatActivity() {
                 recoveryFromNodeIdPrefix = reconnectFromNodeIdPrefix,
                 phyPreference = debugBlePhyPreference,
                 ioConfig = streamIoConfigFor(activeTransport),
+                selectedOfferRotating = streamPeer?.announcement?.rotating == true,
             )
         }.onFailure { error ->
             if (receiver === newReceiver) {
@@ -7991,6 +8995,9 @@ class MainActivity : AppCompatActivity() {
             bluetoothStateReceiverRegistered = true
         }
         updateHomeReadiness()
+        refreshMessagesUnread(notify = false)
+        updatesHome?.onResume()
+        maybeStartGapNameProbe("resume")
         // Pick up link capacity measured since the picker was configured (workstream D).
         if (::bitrateSeekBar.isInitialized) {
             applyTransportBitrateLimit(persist = false)
@@ -7998,6 +9005,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (BuildConfig.DEBUG && privateCall != null) Log.i("BluetoothVideo", "BENCHMARK call lifecycle foreground applied")
         if (appScreen == AppScreen.PLAYBACK) receiverContinuityTracker?.setActive(true)
+        viewerFrameAge?.onForeground(true)
         if (appScreen == AppScreen.CALL && callRemoteCameraOff.visibility != View.VISIBLE) {
             debugPrivateCallSurfacePending = BuildConfig.DEBUG
             privateCallContinuityTracker?.setActive(true)
@@ -8040,6 +9048,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (BuildConfig.DEBUG && privateCall != null) Log.i("BluetoothVideo", "BENCHMARK call lifecycle background applied")
         if (appScreen == AppScreen.PLAYBACK) receiverContinuityTracker?.setActive(false)
+        viewerFrameAge?.onForeground(false)
         if (appScreen == AppScreen.CALL) privateCallContinuityTracker?.setActive(false)
         if (::callScreenController.isInitialized) callScreenController.setForeground(false)
         privateCallRawSelfView?.setPaused(true)
@@ -8603,6 +9612,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        updatesHome?.stop()
         if (callNotificationReceiverRegistered) {
             runCatching { unregisterReceiver(callNotificationReceiver) }
             callNotificationReceiverRegistered = false
@@ -8611,6 +9621,13 @@ class MainActivity : AppCompatActivity() {
             // onCreate stopped before any view, service or radio existed.
             super.onDestroy()
             return
+        }
+        callLockScreen.release()
+        relayedCalls?.stop()
+        relayedCalls = null
+        if (relayStopReceiverRegistered) {
+            runCatching { unregisterReceiver(relayStopReceiver) }
+            relayStopReceiverRegistered = false
         }
         ActiveVideoSessionService.outcomeListener = null
         ActiveVideoSessionService.heldTypesListener = null
@@ -8659,6 +9676,10 @@ class MainActivity : AppCompatActivity() {
     )
 
     private companion object {
+        /** Wait before an idle call endpoint is rebuilt after a feature switch (the listener must close first). */
+        const val FEATURE_ENDPOINT_REBUILD_DELAY_MS = 1_000L
+        /** How many received messages the Home Messages tile scans for its unread count. */
+        const val UNREAD_SCAN_LIMIT = 200
         /** Key of the single call link in its rate controller. */
         const val PRIVATE_CALL_RATE_LINK = "private-call"
         /** The call frame-rate ladder never goes below this (faces stay readable). */
@@ -8676,6 +9697,7 @@ class MainActivity : AppCompatActivity() {
         const val PREF_ENCODER_RATE_CONTROL = "encoder_rate_control"
         const val PREF_MANUAL_RATE_CONTROL = "manual_rate_control"
         const val PREF_ADVANCED_SETTINGS = "advanced_settings"
+        private const val PREF_NEUTRAL_NAME_NOTICE_SHOWN = "neutral_name_migration_notice_shown"
         const val PREF_EXPERIMENTAL_TEMPORAL_LAYERS = "experimental_temporal_layers"
         const val PREF_RELAY_CHILD_MEDIA_AGE = "relay_child_media_age"
         const val PREF_OUTGOING_TRANSPORT = "outgoing_transport"
@@ -8696,6 +9718,7 @@ class MainActivity : AppCompatActivity() {
         const val CONTINUOUS_SCAN_MS = 0L
         const val DISCOVERY_RESTART_MS = 500L
         const val GATT_CALL_RESTART_DELAY_MS = 1_500L
+        const val RELAYED_CALLS_RESTART_MS = 600L
         const val PRIVATE_CALL_SELECTION_REFRESH_TIMEOUT_MS = 3_000L
         /** Experimental automatic sync: how often one peer's sightings may query the message store. */
         const val AUTO_SYNC_EVAL_INTERVAL_MS = 5_000L

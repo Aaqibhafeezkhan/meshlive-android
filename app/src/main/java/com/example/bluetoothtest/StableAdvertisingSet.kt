@@ -6,6 +6,7 @@ import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertisingSet
 import android.bluetooth.le.AdvertisingSetCallback
 import android.bluetooth.le.AdvertisingSetParameters
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import java.io.IOException
@@ -36,6 +37,13 @@ import java.util.concurrent.TimeUnit
  * the race is the app's own stop/restart, not a stack regression. The same set still rotates its
  * address on the stack's privacy timer, so "same address" holds only until the next rotation.
  * DEBUG `test_stable_adv_address=false` always uses stop + restart (control arm).
+ *
+ * Rotating discovery IDs (PROTOCOL "Pre-handshake exposure"): a connectable set made while the switch is on
+ * is non-discoverable on API 34+ ([NonDiscoverableAdvertising]); the in-place balanced step keeps the same
+ * value, because the stack re-reads `discoverable` whenever parameters are set. A stack that refuses such a
+ * start (feature unsupported, internal error, or an exception) gets the set started discoverable again,
+ * visibly and logged, so a privacy flag never costs reachability; a refusal that is not an internal error is
+ * remembered for the process.
  */
 internal class StableAdvertisingSet(
     private val adapter: BluetoothAdapter,
@@ -50,9 +58,17 @@ internal class StableAdvertisingSet(
      * advertising state and may start again.
      */
     private val onLost: (String) -> Unit,
+    /** Decided once per set object (one per epoch while rotating): non-discoverable on API 34+ with the switch on. */
+    private val nonDiscoverable: Boolean = false,
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var current: SetCallback? = null
+
+    /** The value the parameters carry now: the decision, unless this process saw a stack refuse it. */
+    private fun discoverableOff(): Boolean = nonDiscoverable && !NonDiscoverableAdvertising.rejected && !discoverableFallback
+
+    /** This set object's own start was refused once (a transient code): it stays discoverable. */
+    @Volatile private var discoverableFallback = false
 
     /**
      * Starts a new set and waits for the stack (call off the main thread). Returns the start status
@@ -60,13 +76,36 @@ internal class StableAdvertisingSet(
      */
     @SuppressLint("MissingPermission")
     fun start(lowLatency: Boolean, timeoutSeconds: Long): Int? {
+        if (!discoverableOff()) return startOnce(lowLatency, timeoutSeconds)
+        val outcome = runCatching { startOnce(lowLatency, timeoutSeconds) }
+        val error = outcome.exceptionOrNull()
+        if (error is IOException) throw error
+        val status = outcome.getOrNull()
+        if (!NonDiscoverableAdvertising.refusedBy(status, error != null)) return outcome.getOrThrow()
+        // The stack refused the non-discoverable parameters: this set starts discoverable, and a refusal that is
+        // not transient (unsupported feature, an exception) is remembered for the process.
+        discoverableFallback = true
+        if (status != AdvertisingSetCallback.ADVERTISE_FAILED_INTERNAL_ERROR) NonDiscoverableAdvertising.rejected = true
+        android.util.Log.w(
+            "BluetoothVideo",
+            (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "rotid_adv: event=rejected | label=$label | " +
+                "code=${status ?: error?.javaClass?.simpleName} | remembered=${NonDiscoverableAdvertising.rejected} | action=discoverable",
+        )
+        onStatus("$label advertising: this phone's Bluetooth refused a hidden name; starting with the normal advertisement")
+        return startOnce(lowLatency, timeoutSeconds)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startOnce(lowLatency: Boolean, timeoutSeconds: Long): Int? {
         val advertiser = adapter.bluetoothLeAdvertiser ?: throw IOException("BLE advertising is unavailable")
-        val callback = SetCallback()
+        // The value is fixed for this set's life: the in-place step must pass the same one (a refusal by another set
+        // in between must not flip a running set).
+        val callback = SetCallback(nonDiscoverable = discoverableOff())
         synchronized(this) {
             stopLocked()
             current = callback
         }
-        advertiser.startAdvertisingSet(parameters(lowLatency), data, scanResponse, null, null, callback)
+        advertiser.startAdvertisingSet(parameters(lowLatency, callback.nonDiscoverable), data, scanResponse, null, null, callback)
         if (!callback.started.await(timeoutSeconds, TimeUnit.SECONDS)) {
             stop()
             logChurn("start_timeout", callback)
@@ -116,7 +155,7 @@ internal class StableAdvertisingSet(
             "BluetoothVideo",
             "BENCHMARK adv_set_churn: label=$label | event=$event | set=${Integer.toHexString(System.identityHashCode(callback))} | " +
                 "replacement=${callback.replacement} | elapsedMs=${android.os.SystemClock.elapsedRealtime()} | " +
-                "wallMs=${System.currentTimeMillis()}",
+                "wallMs=${System.currentTimeMillis()} | nonDiscoverable=${callback.nonDiscoverable}",
         )
     }
 
@@ -132,12 +171,12 @@ internal class StableAdvertisingSet(
             lost("BLE advertising is unavailable")
             return
         }
-        val replacement = SetCallback(replacement = true)
+        val replacement = SetCallback(replacement = true, nonDiscoverable = discoverableOff())
         current = replacement
         // Bounded: no start callback within the timeout counts as a failed replacement.
         handler.postDelayed({ onReplacementResult(replacement, null) }, REPLACEMENT_TIMEOUT_MS)
         runCatching {
-            advertiser.startAdvertisingSet(parameters(false), data, scanResponse, null, null, replacement)
+            advertiser.startAdvertisingSet(parameters(false, replacement.nonDiscoverable), data, scanResponse, null, null, replacement)
         }.onFailure { onReplacementResult(replacement, START_THREW) }
     }
 
@@ -160,7 +199,7 @@ internal class StableAdvertisingSet(
         handler.post { onLost(reason) }
     }
 
-    private fun parameters(lowLatency: Boolean): AdvertisingSetParameters =
+    private fun parameters(lowLatency: Boolean, hidden: Boolean): AdvertisingSetParameters =
         AdvertisingSetParameters.Builder()
             .setLegacyMode(true)
             .setConnectable(connectable)
@@ -171,9 +210,15 @@ internal class StableAdvertisingSet(
             .setTxPowerLevel(
                 if (lowLatency) AdvertisingSetParameters.TX_POWER_HIGH else AdvertisingSetParameters.TX_POWER_MEDIUM,
             )
+            .also { builder ->
+                // Only a set that rotating IDs made non-discoverable sets the flag; off, the default stands.
+                if (hidden && Build.VERSION.SDK_INT >= NonDiscoverableAdvertising.MIN_SDK) {
+                    builder.setDiscoverable(false)
+                }
+            }
             .build()
 
-    private inner class SetCallback(val replacement: Boolean = false) : AdvertisingSetCallback() {
+    private inner class SetCallback(val replacement: Boolean = false, val nonDiscoverable: Boolean = false) : AdvertisingSetCallback() {
         val started = CountDownLatch(1)
         @Volatile var status: Int = -1
         @Volatile var set: AdvertisingSet? = null
@@ -217,7 +262,7 @@ internal class StableAdvertisingSet(
         @SuppressLint("MissingPermission")
         private fun act(action: BalancedSwitchSteps.Action, advertisingSet: AdvertisingSet?, detail: String) {
             when (action) {
-                BalancedSwitchSteps.Action.SET_PARAMETERS -> advertisingSet?.setAdvertisingParameters(parameters(false))
+                BalancedSwitchSteps.Action.SET_PARAMETERS -> advertisingSet?.setAdvertisingParameters(parameters(false, nonDiscoverable))
                 BalancedSwitchSteps.Action.ENABLE -> advertisingSet?.enableAdvertising(true, 0, 0)
                 BalancedSwitchSteps.Action.DONE ->
                     onStatus("$label advertising is balanced (same advertising set and address)")

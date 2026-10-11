@@ -30,6 +30,14 @@ enum class SecureRecordType(val wireValue: Int) {
      * carry transport bit 3; a reader rejects it as unknown unless [SecureRecordReader.acceptDiscoveryOpening].
      */
     DISCOVERY_OPENING(13),
+
+    /**
+     * Experimental relayed calls: the `BRS1` relay setup (SETUP/READY/FAIL, PROTOCOL "Experimental
+     * relayed calls and multi-hop discovery"). Sent only as the first hop record on a link whose hellos
+     * both carry link transport bit 4, and then as the READY/FAIL reply; a reader rejects it as unknown
+     * unless [SecureRecordReader.acceptRelaySetup], so every existing reader is unchanged.
+     */
+    RELAY_SETUP(12),
 }
 
 data class SecureRecord(val type: SecureRecordType, val payload: ByteArray)
@@ -81,6 +89,9 @@ class SecureRecordReader internal constructor(
     /** Set only for the single first record of a link whose hellos both carry bit 3 (rotating IDs). */
     @Volatile var acceptDiscoveryOpening = false
 
+    /** Set only by the experimental relayed-call path for the setup exchange it owns (hop type 12). */
+    @Volatile var acceptRelaySetup = false
+
     /** This link's recently delivered capacity, measured from large incoming records (kbps). */
     fun arrivalCapacityKbps(): Int? = arrival.estimateKbps()
 
@@ -91,7 +102,7 @@ class SecureRecordReader internal constructor(
     fun read(): SecureRecord {
         arrival.beginRecord()
         val header = ByteArray(SecureRecordProtocol.HEADER_BYTES).also(input::readFully)
-        val decoded = SecureRecordProtocol.decodeHeader(header, acceptStoreForward, acceptDiscoveryOpening)
+        val decoded = SecureRecordProtocol.decodeHeader(header, acceptStoreForward, acceptDiscoveryOpening, acceptRelaySetup)
         require(decoded.sequence == nextSequence) {
             "Unexpected secure record sequence ${decoded.sequence}; expected $nextSequence"
         }
@@ -137,6 +148,7 @@ private object SecureRecordProtocol {
         bytes: ByteArray,
         acceptStoreForward: Boolean = false,
         acceptDiscoveryOpening: Boolean = false,
+        acceptRelaySetup: Boolean = false,
     ): SecureRecordHeader {
         require(bytes.size == HEADER_BYTES) { "Invalid secure record header" }
         val input = DataInputStream(ByteArrayInputStream(bytes))
@@ -145,7 +157,8 @@ private object SecureRecordProtocol {
         val typeValue = input.readUnsignedByte()
         val type = SecureRecordType.entries.firstOrNull {
             it.wireValue == typeValue && (it != SecureRecordType.STORE_FORWARD || acceptStoreForward) &&
-                (it != SecureRecordType.DISCOVERY_OPENING || acceptDiscoveryOpening)
+                (it != SecureRecordType.DISCOVERY_OPENING || acceptDiscoveryOpening) &&
+                (it != SecureRecordType.RELAY_SETUP || acceptRelaySetup)
         } ?: error("Unknown secure record type $typeValue")
         val sequence = input.readLong()
         require(sequence >= 0) { "Invalid secure record sequence" }
@@ -159,9 +172,16 @@ private object SecureRecordProtocol {
 
 data class SecureBluetoothSession(
     val peerNodeId: NodeId,
+    /** The peer's signed capabilities with link-hello bit 7 (the build tag) removed: see [BuildTag]. */
     val peerCapabilities: NodeCapabilities,
     val reader: SecureRecordReader,
     val writer: SecureRecordWriter,
+    /** The peer's build tag from its verified link hello, or null (older build, switch off, not a release). */
+    val peerBuildTag: BuildTag? = null,
+    /** BMH3 pseudonyms: the peer's key is a declared throwaway (never admit, pin or show it as an identity). */
+    val peerPseudonymous: Boolean = false,
+    /** BMH3 pseudonyms: this phone presented a throwaway key in this handshake. */
+    val ownPseudonymous: Boolean = false,
 ) : Closeable {
     override fun close() {
         reader.close()
@@ -172,37 +192,60 @@ data class SecureBluetoothSession(
 object SecureBluetoothHandshake {
     private const val MAX_HELLO_BYTES = 2_048
 
+    /**
+     * [bmh3] null (default): BMH2, exactly as before. Non-null: the experimental BMH3 handshake (PROTOCOL
+     * "Experimental BMH3 identity-hiding link handshake"); the caller chose it before sending a byte.
+     */
     fun initiate(
         input: InputStream,
         output: OutputStream,
         identity: SigningIdentity,
         capabilities: NodeCapabilities,
+        buildTag: BuildTag? = LinkBuildTags.local,
+        bmh3: Bmh3InitiatorOptions? = null,
     ): SecureBluetoothSession {
-        val pending = MeshHandshake.start(identity, HandshakeRole.INITIATOR, capabilities)
+        if (bmh3 != null) return Bmh3LinkHandshake.initiate(input, output, identity, capabilities, bmh3, buildTag)
+        val pending = MeshHandshake.start(identity, HandshakeRole.INITIATOR, capabilities, buildTag = buildTag)
         writeHello(output, pending.hello)
         val remote = readHello(input)
         val keys = MeshHandshake.finish(pending, remote)
-        return session(input, output, remote, keys)
+        return session(input, output, remote, keys, initiator = true)
     }
 
     /**
      * [beforeHello] runs after the initiator's hello verified and before this side's hello is sent
      * (experimental rotating IDs: the stranger tarpit, RV8). Default: nothing, exactly as before.
+     * [bmh3] null (default): BMH2 only, a BMH3 first frame is rejected as an invalid handshake message exactly
+     * as by an old build. Non-null: the first frame's magic selects BMH3 or (when allowed) BMH2.
      */
     fun respond(
         input: InputStream,
         output: OutputStream,
         identity: SigningIdentity,
         capabilities: NodeCapabilities,
+        buildTag: BuildTag? = LinkBuildTags.local,
+        bmh3: Bmh3ResponderOptions? = null,
         beforeHello: (NodeId) -> Unit = {},
     ): SecureBluetoothSession {
-        val remote = readHello(input)
+        val remote = if (bmh3 == null) {
+            readHello(input)
+        } else {
+            val frame = Bmh3LinkChannel.receiveFrame(DataInputStream(input))
+            if (Bmh3Wire.isBmh3(frame)) {
+                return Bmh3LinkHandshake.respond(input, output, frame, identity, capabilities, bmh3, buildTag)
+            }
+            if (!bmh3.acceptBmh2) {
+                bmh3.log("bmh3: event=refused_bmh2 | layer=link")
+                throw Bmh3Failure("bmh2 refused")
+            }
+            HandshakeHelloCodec.decode(frame)
+        }
         require(remote.role == HandshakeRole.INITIATOR) { "Expected an initiator handshake" }
-        val pending = MeshHandshake.start(identity, HandshakeRole.RESPONDER, capabilities)
+        val pending = MeshHandshake.start(identity, HandshakeRole.RESPONDER, capabilities, buildTag = buildTag)
         val keys = MeshHandshake.finish(pending, remote)
         beforeHello(keys.peerNodeId)
         writeHello(output, pending.hello)
-        return session(input, output, remote, keys)
+        return session(input, output, remote, keys, initiator = false)
     }
 
     private fun session(
@@ -210,14 +253,27 @@ object SecureBluetoothHandshake {
         output: OutputStream,
         remote: SignedHandshakeHello,
         keys: MeshSessionKeys,
-    ): SecureBluetoothSession = SecureBluetoothSession(
-        peerNodeId = keys.peerNodeId,
-        peerCapabilities = remote.capabilities,
-        reader = SecureRecordReader(input, keys.receiveKey),
-        writer = SecureRecordWriter(output, keys.sendKey),
-    ).also {
-        keys.sendKey.fill(0)
-        keys.receiveKey.fill(0)
+        initiator: Boolean,
+    ): SecureBluetoothSession {
+        // Only a verified hello reaches here (MeshHandshake.finish checked its signature). Bit 7 belongs to
+        // this layer: no other code ever sees the bit in peerCapabilities. The tag reaches the notice only from a
+        // link THIS phone opened (the user chose to call, join or relay with that phone): a stranger who connects
+        // to our listener cannot plant a "newer version" note (security review F2).
+        val tag = BuildTag.readFrom(remote)
+        val visible = remote.capabilities.copy(
+            transportMask = remote.capabilities.transportMask and BuildTag.LINK_HELLO_BIT.inv(),
+        )
+        if (initiator) tag?.let(LinkBuildTags::report)
+        return SecureBluetoothSession(
+            peerNodeId = keys.peerNodeId,
+            peerCapabilities = visible,
+            reader = SecureRecordReader(input, keys.receiveKey),
+            writer = SecureRecordWriter(output, keys.sendKey),
+            peerBuildTag = tag,
+        ).also {
+            keys.sendKey.fill(0)
+            keys.receiveKey.fill(0)
+        }
     }
 
     private fun writeHello(output: OutputStream, hello: SignedHandshakeHello) {

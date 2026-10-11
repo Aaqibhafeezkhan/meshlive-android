@@ -56,6 +56,11 @@ data class BleL2capPeer(
     val announcement: DiscoveryAnnouncement,
     /** The phone's Bluetooth name when Android reports one (unauthenticated, display only). */
     val advertisedName: String? = null,
+    /**
+     * Experimental relayed calls: set only on a row built from the reach table. [device] is then the
+     * first helper's, [announcement] names the target at the route cost, and the call sends SETUP.
+     */
+    val relayRoute: RelayRoute? = null,
 )
 
 class BleL2capDiscovery(
@@ -74,14 +79,22 @@ class BleL2capDiscovery(
      * keep false, so they never see or mirror a rotating ID (phase 1).
      */
     private val acceptRotating: Boolean = false,
+    /**
+     * Experimental relayed calls: a continuous scan for an idle relay-helper uses Android's low-power
+     * mode (screen off, not charging) instead of balanced. Ignored when [startLowLatency] is set.
+     */
+    private val lowPower: Boolean = false,
 ) : Closeable {
     private val handler = Handler(Looper.getMainLooper())
     private val running = AtomicBoolean(false)
     private val seenAddresses = linkedSetOf<String>()
     private val deviceNames = mutableMapOf<String, String>()
     private var activeScanMode = ScanSettings.SCAN_MODE_LOW_LATENCY
-    /** Experimental iPhone compact discovery, fixed for this scanner's lifetime. */
-    private val compactDiscovery = CompactDiscoveryFeature.enabled
+    /**
+     * iPhone compact discovery ("Find iPhones"): fixed at creation, except that a refused filter turns it
+     * off for this scanner and the rest of the process ([CompactFilterGuard]).
+     */
+    @Volatile private var compactDiscovery = CompactDiscoveryFeature.filterActive()
     private val stats = ScanStats(Integer.toHexString(System.identityHashCode(this)), compactDiscovery)
     private val backoff = ScanRecoveryBackoff()
     private var failureCode: Int? = null
@@ -141,6 +154,8 @@ class BleL2capDiscovery(
         }
         activeScanMode = if (startLowLatency) {
             ScanSettings.SCAN_MODE_LOW_LATENCY
+        } else if (lowPower) {
+            ScanSettings.SCAN_MODE_LOW_POWER
         } else {
             ScanSettings.SCAN_MODE_BALANCED
         }
@@ -154,6 +169,12 @@ class BleL2capDiscovery(
         backoff.reset()
         failureCode = null
         stats.reset()
+        if (compactDiscovery) {
+            android.util.Log.i(
+                "BluetoothVideo",
+                "compact_filter: event=started | scanner=${stats.scanner} | filters=${scanFilters().size} | mode=$activeScanMode",
+            )
+        }
         if (BuildConfig.DEBUG) handler.postDelayed(::logScanStats, SCAN_STATS_INTERVAL_MS)
         if (scanDurationMs > 0) {
             handler.postDelayed({ stop(notify = true) }, scanDurationMs)
@@ -190,6 +211,21 @@ class BleL2capDiscovery(
      * scan-start gate (le-scan-start-quota); with that entry off nothing limits them but the back-off.
      */
     private fun onScanFailure(errorCode: Int) {
+        if (compactDiscovery && CompactFilterGuard.refusesFilter(errorCode)) {
+            // The masked iPhone filter is the likely cause: keep the app's own filter and restart at once.
+            compactDiscovery = false
+            CompactDiscoveryFeature.filterRejected = true
+            android.util.Log.w(
+                "BluetoothVideo",
+                "compact_filter: event=dropped | scanner=${stats.scanner} | code=$errorCode | " +
+                    "name=${ScanFailurePolicy.name(errorCode)} | action=restart_without_compact_filter",
+            )
+            failureCode = errorCode
+            handler.removeCallbacks(retryScan)
+            runCatching { adapter.bluetoothLeScanner?.stopScan(callback) }
+            handler.post(retryScan)
+            return
+        }
         val now = SystemClock.elapsedRealtime()
         if (failureCode == null) firstFailureMs = now
         failureCode = errorCode
@@ -295,6 +331,13 @@ class BleL2capDiscovery(
         backoff.reset()
         val announcementBytes = result.scanRecord
             ?.getManufacturerSpecificData(BleL2capControlProtocol.MESH_MANUFACTURER_ID)
+        // Experimental relayed calls: version-4 reach pages feed the reach table, before the per-address
+        // duplicate filter (every rotated page is seen). Off: they fall through and are rejected as before.
+        if (announcementBytes != null && RelayedCallsFeature.enabled &&
+            RelayedCallsRuntime.onScanPage(announcementBytes, result.device.address)
+        ) {
+            return
+        }
         // Experimental peer labels: version-3 title pages take their own path here, before the
         // per-address dedup, so every rotated page is seen (R15). Off: they fall through and are
         // rejected exactly as before.
@@ -336,6 +379,11 @@ class BleL2capDiscovery(
         stats.accepted++
         val device = result.device
         logAddressChurn(announcement, device.address)
+        // Experimental relayed calls: every sighting of a cost-0 call offer refreshes the reach table
+        // (before the duplicate filter, like PeerAddressBook). Off: nothing runs.
+        if (RelayedCallsFeature.enabled && announcement.routeCost == 0 && announcement.isPrivateCallOffer()) {
+            RelayedCallsRuntime.onScanOffer(BleL2capPeer(device, "", announcement), device.address, result.rssi)
+        }
         // Experimental test_peer_address_book: every sighting (before the per-address dedup) refreshes its node.
         if (PeerAddressBook.enabled()) {
             PeerAddressBook.shared.record(PeerAddressBook.prefixKey(announcement.nodeIdPrefix), device.address, announcement.routeCost)
@@ -370,10 +418,24 @@ class BleL2capDiscovery(
      * address on each phone and when the stack's own timer rotates it.
      */
     private val lastAddressByNode = HashMap<String, String>()
+    private val lastNodeByAddress = HashMap<String, String>()
 
     private fun logAddressChurn(announcement: DiscoveryAnnouncement, address: String) {
         if (!BuildConfig.DEBUG) return
         val node = announcement.nodeIdPrefix.joinToString("") { "%02x".format(it) }
+        // Hardening: a new rotating ID under an address that announced another one is the legacy-controller defect
+        // (the address survived the restart); tools/rotid_tracker.py counts it per phone from the same sightings.
+        if (announcement.rotating) {
+            if (lastNodeByAddress.size > 2_000) lastNodeByAddress.clear()
+            val before = lastNodeByAddress.put(address, node)
+            if (before != null && before != node) {
+                android.util.Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK rotid_address_reuse: event=observed | scanner=${stats.scanner} | address=$address | node=$node | " +
+                        "previousNode=$before | wallMs=${System.currentTimeMillis()}",
+                )
+            }
+        }
         val previous = lastAddressByNode.put(node, address)
         if (previous == address) return
         android.util.Log.i(
@@ -565,7 +627,9 @@ class BleL2capControlServer(
     @Volatile private var advertising = false
 
     /** Keeps its random address through the low-latency -> balanced step (StableAdvertisingSet). */
-    private val advertisement = StableAdvertisingSet(
+    @Volatile private var advertisement = newAdvertisement(announcement)
+
+    private fun newAdvertisement(value: DiscoveryAnnouncement) = StableAdvertisingSet(
         adapter,
         connectable = true,
         data = AdvertiseData.Builder()
@@ -574,13 +638,40 @@ class BleL2capControlServer(
         scanResponse = AdvertiseData.Builder()
             .addManufacturerData(
                 BleL2capControlProtocol.MESH_MANUFACTURER_ID,
-                DiscoveryAnnouncementCodec.encode(announcement),
+                DiscoveryAnnouncementCodec.encode(value),
             )
             .build(),
         label = "BLE control",
         onStatus = onLinkStatus,
         onLost = ::onAdvertisingLost,
+        nonDiscoverable = NonDiscoverableAdvertising.forNewSet(connectable = true),
     )
+
+    /**
+     * Rotating IDs (RV6): while this server still advertises, stop the set, stay silent for [silenceMs]
+     * and advertise [next] on a new set (new address). The GATT service and PSM stay. A server whose
+     * advertising already stopped (a connection was accepted) only remembers [next] for a later start.
+     */
+    @SuppressLint("MissingPermission")
+    fun reannounce(next: DiscoveryAnnouncement, silenceMs: Long) {
+        if (closed.get()) return
+        val wasAdvertising = synchronized(this) {
+            val advertisingNow = advertising
+            if (advertisingNow) stopAdvertising()
+            advertisement = newAdvertisement(next)
+            advertisingNow
+        }
+        if (!wasAdvertising) return
+        try {
+            Thread.sleep(silenceMs)
+        } catch (_: InterruptedException) {
+            return
+        }
+        if (closed.get()) return
+        runCatching { startAdvertising(lowLatency = false) }
+            .onFailure { onLinkStatus("BLE control could not advertise the new ID: ${it.message}") }
+    }
+
     @Volatile var phySummary: String = "PHY pending"
         private set
 
@@ -780,9 +871,15 @@ class BleL2capControlConnection internal constructor(
     private val phyPreference: BlePhyPreference = BlePhyPreference.TWO_M,
     /** test_coc_phy_after_connect: setup requested no PHY; [requestPhyAfterConnect] does. */
     private val phyDeferred: Boolean = false,
+    /** The setup's priority keeper, so a later request keeps the failed-update retry (test_relay_upstream_dck). */
+    private val priorityRequest: ((BleConnectionPriority) -> Boolean)? = null,
 ) : Closeable {
     val phySummary: String
         get() = phyStatus.summary
+
+    /** Requests [priority] again on this control link (false when the setup kept no keeper or it is closed). */
+    internal fun requestConnectionPriority(priority: BleConnectionPriority): Boolean =
+        attempt.active && priorityRequest?.invoke(priority) == true
 
     private val deferredPhyRequested = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -1198,7 +1295,10 @@ object BleL2capPsmReader {
             }
             error.get()?.let { throw IOException(it) }
             val psm = result.get() ?: throw IOException("Receiver returned no BLE video channel")
-            return BleL2capControlConnection(psm, gatt, phyStatus, attempt, adaptivePhy(gatt), phyPreference, phyDeferred)
+            return BleL2capControlConnection(
+                psm, gatt, phyStatus, attempt, adaptivePhy(gatt), phyPreference, phyDeferred,
+                priorityRequest = { priority -> priorityKeeper.request(priority) },
+            )
         } catch (error: Exception) {
             // Expired attempt: cancelled before teardown so a deferred close cannot overlap the retry.
             attempt.disconnectAndClose(gatt, "ble-control-setup")

@@ -44,7 +44,7 @@ Steps:
 3. Build and run the unit tests:
 
    ```
-   ./gradlew :app:testDebugUnitTest :app:assembleDebug
+   ./gradlew :app:testDebugUnitTest :app:assembleGithubDebug
    ```
 
    On Windows use `gradlew.bat`. Gradle verifies every dependency against `gradle/verification-metadata.xml` and the
@@ -192,7 +192,7 @@ issue instead.
 
 - [ ] The problem is described, with evidence that it is real.
 - [ ] The change is narrow, and a focused regression covers it.
-- [ ] `./gradlew :app:testDebugUnitTest :app:assembleDebug` and `python -B -m pytest -q tools` pass.
+- [ ] `./gradlew :app:testDebugUnitTest :app:assembleGithubDebug` and `python -B -m pytest -q tools` pass.
 - [ ] Streaming-related changes name the phones, the frozen APK hash and the same-settings comparison.
 - [ ] New behaviour is default off, labelled Experimental, and registered in docs/ARCHITECTURE.md.
 - [ ] Protocol or security changes link to a reviewed design in docs/PROTOCOL.md.

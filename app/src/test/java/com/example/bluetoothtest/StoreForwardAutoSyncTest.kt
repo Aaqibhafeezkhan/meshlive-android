@@ -28,10 +28,16 @@ class StoreForwardAutoSyncTest {
 
     @Test
     fun featureNeedsBenchmarkExtraAndStoreForward() {
-        assertFalse(StoreForwardAutoSyncFeature.resolve(false, { true }, true))
-        assertFalse(StoreForwardAutoSyncFeature.resolve(true, { true }, false))
-        assertFalse(StoreForwardAutoSyncFeature.resolve(true, { false }, true))
-        assertTrue(StoreForwardAutoSyncFeature.resolve(true, { it == StoreForwardAutoSyncFeature.EXTRA }, true))
+        val none = { _: String -> null as Boolean? }
+        // A benchmark launch: only its own extra, and only with store-and-forward on.
+        assertFalse(StoreForwardAutoSyncFeature.resolve(true, { true }, none, storeForward = false))
+        assertFalse(StoreForwardAutoSyncFeature.resolve(true, { false }, { true }, storeForward = true))
+        assertTrue(StoreForwardAutoSyncFeature.resolve(true, { it == StoreForwardAutoSyncFeature.EXTRA }, none, storeForward = true))
+        // A user session: the explicit Settings choice (a visible switch), else the default; never without Messages.
+        val chosen = { key: String -> if (key == StoreForwardAutoSyncFeature.PREF) true else null }
+        assertTrue(StoreForwardAutoSyncFeature.resolve(false, { false }, chosen, storeForward = true))
+        assertFalse(StoreForwardAutoSyncFeature.resolve(false, { false }, chosen, storeForward = false))
+        assertEquals(CallFeatureDefaults.AUTO_SYNC, StoreForwardAutoSyncFeature.resolve(false, { true }, none, storeForward = true))
         assertEquals("test_sf_auto_sync", StoreForwardAutoSyncFeature.EXTRA)
     }
 

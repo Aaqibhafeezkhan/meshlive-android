@@ -9,8 +9,9 @@ import android.os.Build
 import android.util.Log
 
 /**
- * Experimental automatic LE CoC -> GATT fallback for private calls (user question Q4, recommendation
- * A, 2026-10-09). Default off; with the flag off nothing in this file changes any behaviour.
+ * Automatic LE CoC -> GATT fallback for private calls (user question Q4, recommendation A, 2026-10-09;
+ * promoted to Settings > Features on 2026-10-11, default [ConnectivityFeatureDefaults.COC_AUTO_GATT]
+ * until phone test T6 passes). With the feature off nothing in this file changes any behaviour.
  *
  * Evidence: the A15s Bluetooth stack stops accepting LE CoC listens and connects after about 15
  * registrations per Bluetooth process, and closing sockets does not free the slots
@@ -34,10 +35,18 @@ enum class CocFallbackReason(val label: String) {
     PEER_GATT("peer_advertises_gatt"),
 }
 
-/** Effective experimental switches. Threshold is the registration count that makes GATT preferred. */
+/**
+ * Effective switches. [threshold] is the registration count that makes GATT preferred, and
+ * [thresholdActive] says whether the count alone may do so. A benchmark launch always counts (the
+ * experiment as measured). Every other launch counts only on a stack that leaks registrations
+ * (DeviceFamilyPolicy.leCocServerLeaks, Android 10): on a healthy stack the count grows with
+ * ordinary use and says nothing about the limit, so only a real listen or connect failure moves a
+ * session to GATT there.
+ */
 data class CocAutoGattSettings(
     val enabled: Boolean = false,
     val threshold: Int = DEFAULT_THRESHOLD,
+    val thresholdActive: Boolean = true,
 ) {
     companion object {
         const val DEFAULT_THRESHOLD = 12
@@ -51,21 +60,30 @@ data class CocAutoGattSettings(
         fun clampThreshold(value: Int) = value.coerceIn(MIN_THRESHOLD, MAX_THRESHOLD)
 
         /**
-         * Same rule as the other experiments: a DEBUG benchmark launch (any `test_` extra) uses only
-         * its own extras, default off, so a stored UI choice never leaks into a measured case.
-         * Otherwise the persisted Advanced setting applies, and only while Advanced settings are on.
+         * The shared feature rule ([FeatureCatalog.resolve]): a DEBUG benchmark launch (any `test_`
+         * extra) uses only its own extras, default off, so a stored choice never leaks into a measured
+         * case. Every other launch uses the user's explicit choice ([storedEnabled], null when never
+         * touched) or the shipped default, with no dependence on Manual settings or the build type.
          */
         fun resolve(
             benchmarkLaunch: Boolean,
             extraEnabled: Boolean,
             extraThreshold: Int,
-            advancedSettings: Boolean,
-            storedEnabled: Boolean,
+            storedEnabled: Boolean?,
             storedThreshold: Int,
-        ): CocAutoGattSettings = when {
-            benchmarkLaunch -> CocAutoGattSettings(extraEnabled, clampThreshold(extraThreshold))
-            advancedSettings -> CocAutoGattSettings(storedEnabled, clampThreshold(storedThreshold))
-            else -> CocAutoGattSettings()
+            leakyStack: Boolean,
+        ): CocAutoGattSettings {
+            val enabled = FeatureCatalog.resolve(
+                ConnectivityFeatures.cocAutoGatt,
+                benchmarkLaunch,
+                { extraEnabled },
+                { storedEnabled },
+            )
+            return if (benchmarkLaunch) {
+                CocAutoGattSettings(enabled, clampThreshold(extraThreshold))
+            } else {
+                CocAutoGattSettings(enabled, clampThreshold(storedThreshold), thresholdActive = leakyStack)
+            }
         }
     }
 }
@@ -106,6 +124,8 @@ data class CocTransportChoice(
     val registrations: Int,
     val threshold: Int,
     val autoGattEnabled: Boolean,
+    /** Whether the registration count alone could move this session (see [CocAutoGattSettings.thresholdActive]). */
+    val thresholdActive: Boolean = true,
 ) {
     val automatic: Boolean get() = effective != requested
 
@@ -114,16 +134,17 @@ data class CocTransportChoice(
         get() = when {
             !automatic -> null
             reason == CocFallbackReason.THRESHOLD ->
-                "Using BLE GATT: L2CAP registrations near the Bluetooth limit ($registrations of $threshold)"
+                "Using BLE GATT: this phone's Bluetooth has used $registrations of $threshold L2CAP " +
+                    "connections. Turning Bluetooth off and on restores L2CAP"
             reason == CocFallbackReason.PEER_GATT -> "Using BLE GATT: the other phone uses GATT"
-            else -> "Using BLE GATT: L2CAP unavailable"
+            else -> "Using BLE GATT: L2CAP unavailable. Turning Bluetooth off and on may restore it"
         }
 
     /** The BENCHMARK/log line body: requested and effective are always both stated. */
     fun logLine(): String =
         "requested=${requested.name} | effective=${effective.name} | automatic=$automatic | " +
             "reason=${reason.label} | cocRegistrations=$registrations | threshold=$threshold | " +
-            "coc_auto_gatt=$autoGattEnabled"
+            "coc_auto_gatt=$autoGattEnabled | thresholdActive=$thresholdActive"
 }
 
 /**
@@ -139,14 +160,23 @@ class CocAutoGattSession(private val ledger: CocRegistrationLedger) {
     fun choose(requested: BluetoothTransportOption, settings: CocAutoGattSettings): CocTransportChoice {
         val count = ledger.count
         if (!settings.enabled || requested != BluetoothTransportOption.BLE_L2CAP) {
-            return CocTransportChoice(requested, requested, CocFallbackReason.NONE, count, settings.threshold, settings.enabled)
+            return CocTransportChoice(
+                requested, requested, CocFallbackReason.NONE, count, settings.threshold, settings.enabled,
+                settings.thresholdActive,
+            )
         }
         val reason = forced?.takeIf { forcedGeneration == ledger.generation }
-            ?: CocFallbackReason.THRESHOLD.takeIf { count >= settings.threshold }
+            ?: CocFallbackReason.THRESHOLD.takeIf { settings.thresholdActive && count >= settings.threshold }
         return if (reason != null) {
-            CocTransportChoice(requested, BluetoothTransportOption.BLE_GATT, reason, count, settings.threshold, true)
+            CocTransportChoice(
+                requested, BluetoothTransportOption.BLE_GATT, reason, count, settings.threshold, true,
+                settings.thresholdActive,
+            )
         } else {
-            CocTransportChoice(requested, requested, CocFallbackReason.NONE, count, settings.threshold, true)
+            CocTransportChoice(
+                requested, requested, CocFallbackReason.NONE, count, settings.threshold, true,
+                settings.thresholdActive,
+            )
         }
     }
 
@@ -225,7 +255,8 @@ object CocRegistrations {
         Log.i(
             "BluetoothVideo",
             "LE CoC registration: kind=$kind | owner=$owner | count=$count | " +
-                "threshold=${settings.threshold} | coc_auto_gatt=${settings.enabled}",
+                "threshold=${settings.threshold} | thresholdActive=${settings.thresholdActive} | " +
+                "coc_auto_gatt=${settings.enabled}",
         )
         return count
     }

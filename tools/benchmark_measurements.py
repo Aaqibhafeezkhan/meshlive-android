@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 from benchmark_layout import original, resolve as resolve_input
+from evidence_relocation import logical
 
 ADAPTERS = {"visual_markers": "score_visual_markers", "audio_sync": "score_audio_sync",
             "screen_geometry": "score_screen_geometry", "pipeline": "score_pipeline_trace",
@@ -400,7 +401,7 @@ def analyze(path, manifest_path, manifest, output):
             result["adapters"].append({"id": entry["id"], "kind": kind, "scope": scope,
                 "measurement_status": scored.get("measurement_status", "UNMEASURED"),
                 "actual_media_overlap": scored.get("diagnostics", {}).get("actual_media_overlap") if kind == "pipeline" else None,
-                "evidence": str(destination.resolve())})
+                "evidence": str(logical(destination))})
             for row in scored.get("measurements", []):
                 row = dict(row)
                 if row.get("status") == "MEASURED":
@@ -411,7 +412,7 @@ def analyze(path, manifest_path, manifest, output):
                 if row.get("status") not in {"PASS", "FAIL", "UNMEASURED"}:
                     raise ValueError("Adapter reported an unknown verdict")
                 result["measurements"].append({**row, "device": device, "source": source,
-                    "adapter": entry["id"], "execution_scope": measured_scope, "evidence": str(destination.resolve())})
+                    "adapter": entry["id"], "execution_scope": measured_scope, "evidence": str(logical(destination))})
         except (ValueError, OSError, KeyError, TypeError, AttributeError, ImportError) as error:
             result["errors"].append({"adapter": entry.get("id"), "kind": kind, "reason": str(error)})
             result["measurements"].append({"name": "adapter_validity", "family": family, "status": "UNMEASURED",

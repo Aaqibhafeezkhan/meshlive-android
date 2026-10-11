@@ -14,6 +14,23 @@ if(NOT BTV_OPUS_HOST_TEST)
     add_compile_options(-O3)
 endif()
 
+# Reproducible builds (tools/check_reproducible_build.py): assert/__FILE__ strings in libopus embedded the
+# absolute checkout path, so two builds in different directories differed. -ffile-prefix-map rewrites every
+# source, generated-file and build-directory prefix to a fixed /btv/<name> before it reaches an object file.
+# Both the logical (junction/symlink kept) and the resolved path are mapped. Applies to the directory scope,
+# so it must be called before the add_subdirectory() of the tree it covers.
+function(btv_map_source_prefix dir name)
+    get_filename_component(abs_dir "${dir}" ABSOLUTE)
+    get_filename_component(real_dir "${dir}" REALPATH)
+    foreach(prefix IN ITEMS "${abs_dir}" "${real_dir}")
+        add_compile_options("-ffile-prefix-map=${prefix}=/btv/${name}")
+    endforeach()
+endfunction()
+if(NOT BTV_OPUS_HOST_TEST)
+    btv_map_source_prefix("${CMAKE_CURRENT_LIST_DIR}" app)
+    btv_map_source_prefix("${CMAKE_BINARY_DIR}" build)
+endif()
+
 # Experimental native call audio (DEBUG test_call_native_opus, default off): libopus 1.5.2, the
 # official release tarball https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
 # (SHA-256 65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1, xiph SHA256SUMS.txt)
@@ -37,6 +54,9 @@ set(OPUS_OSCE OFF CACHE BOOL "" FORCE)
 set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+if(NOT BTV_OPUS_HOST_TEST)
+    btv_map_source_prefix("${OPUS_SOURCE_DIR}" libopus)
+endif()
 add_subdirectory("${OPUS_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/libopus" EXCLUDE_FROM_ALL)
 
 if(BTV_OPUS_HOST_TEST)
@@ -70,6 +90,7 @@ set(ENABLE_TOOLS 0 CACHE BOOL "" FORCE)
 set(CONFIG_WEBM_IO 0 CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS 0 CACHE BOOL "" FORCE)
 
+btv_map_source_prefix("${AOM_SOURCE_DIR}" libaom)
 add_subdirectory("${AOM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/libaom" EXCLUDE_FROM_ALL)
 
 add_library(bluetooth_video_native SHARED native_aom_encoder.cpp native_opus_codec.cpp)

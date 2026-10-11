@@ -17,9 +17,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from android_tools import default_adb  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from android_tools import default_adb  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = os.environ.get("MESHLIVE_APP_ID", "io.github.meshlive.app")
-DEFAULT_APK = ROOT / "app/build/outputs/apk/debug/app-debug.apk"
+DEFAULT_APK = ROOT / "app/build/outputs/apk/github/debug/app-github-debug.apk"
 
 
 def sha256(path):

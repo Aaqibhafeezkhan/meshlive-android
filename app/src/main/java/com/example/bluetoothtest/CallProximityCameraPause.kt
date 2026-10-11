@@ -8,8 +8,9 @@ import android.hardware.SensorManager
 import android.util.Log
 
 /**
- * Experimental camera pause at the ear (off by default, 2026-10-10; DEBUG
- * `test_call_proximity_camera_pause`, benchmark tunable `call_proximity_camera_pause`).
+ * Camera pause at the ear (Settings > Features "Pause video at the ear", promoted 2026-10-11, shipped
+ * default [CallFeatureDefaults.EAR_CAMERA_PAUSE]; DEBUG `test_call_proximity_camera_pause`, benchmark
+ * tunable `call_proximity_camera_pause`).
  *
  * The proximity screen-off lock (PrivateCallAudioSession, README) already turns the screen off
  * while call audio is on the earpiece and the phone is near. During a video call the camera kept

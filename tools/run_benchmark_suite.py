@@ -18,6 +18,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from android_tools import default_adb  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from android_tools import default_adb  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from run_device_benchmark import PACKAGE, Runner, replay_fixture_metadata, validate_case
@@ -29,6 +32,7 @@ from score_media_delivery import score_phase_delivery
 from score_motion_timing import score_motion
 from benchmark_case_state import PRIORITY, request_key, select_remaining, verify_result
 from debug_image_lifecycle import DebugImages
+from evidence_relocation import logical as project_path
 from benchmark_layout import resolve as locate, original, output_path, CATALOG
 import benchmark_measurements
 import hci_snoop
@@ -79,6 +83,11 @@ def digest(path):
 
 def resolve(path, base=None):
     return locate(path, base=base, root=ROOT)
+
+
+def located(path):
+    """Resolved project location; a finished run moved behind a declared junction keeps its project path."""
+    return project_path(path, ROOT)
 
 
 def status(items):
@@ -597,7 +606,7 @@ def family_for(name):
 
 
 def analyze(manifest_path, output, required=FAMILIES, measurement_contract=None, profile=None):
-    if resolve(manifest_path).is_relative_to(Path(output).resolve()):
+    if resolve(manifest_path).is_relative_to(located(output)):
         raise ValueError("Analysis output cannot contain original input evidence")
     with DebugImages(output):
         return _analyze(manifest_path, output, required, measurement_contract, profile)
@@ -673,7 +682,7 @@ def _analyze(manifest_path, output, required, measurement_contract=None, profile
         motion = score_motion(manifest, score, manifest_base)
         write(output / "motion-timing.json", motion)
         families["smoothness"]["motion_detail"] = {"status": motion["timing_state"],
-            "capture_state": motion["capture_state"], "evidence": str((output / "motion-timing.json").resolve())}
+            "capture_state": motion["capture_state"], "evidence": str(located(output / "motion-timing.json"))}
         directions = [(manifest["scenario"]["source"], node["phone"]) for node in manifest["scenario"]["receivers"]]
     voice = manifest.get("mode") == "private_call" and intercom.is_voice(manifest["scenario"])
     if voice:
@@ -692,7 +701,7 @@ def _analyze(manifest_path, output, required, measurement_contract=None, profile
             measurements["picture"].append(decides({"device": receiver, "source": source, "name": "reference_validity",
                 "status": "PASS" if result.get("measurement_status") == "MEASURED" else "UNMEASURED",
                 "reason": "; ".join(result.get("reasons", [])) or "Requires every verified finalized active raw-input phase",
-                "evidence": str((destination / "delivery-result.json").resolve())}))
+                "evidence": str(located(destination / "delivery-result.json"))}))
             for name, limit in (("vmaf", "min_vmaf"), ("ssim", "min_ssim"), ("psnr_db", "min_psnr_db")):
                 measured = gate(quality.get(name), DEFAULT_THRESHOLDS[limit], "min")
                 if name == "psnr_db" and quality.get("psnr_perfect") is True:
@@ -700,7 +709,7 @@ def _analyze(manifest_path, output, required, measurement_contract=None, profile
                                 "limit": DEFAULT_THRESHOLDS[limit], "reason": "Zero pixel error; PSNR is infinite"}
                 measurements["picture"].append(decides({"device": receiver, "source": source, "name": name,
                     **measured,
-                    "evidence": str((destination / "delivery-result.json").resolve())}))
+                    "evidence": str(located(destination / "delivery-result.json"))}))
         except Exception as error:
             errors.append({"stage": "picture", "source": source, "receiver": receiver, "reason": str(error)})
             measurements["picture"].append(decides({"device": receiver, "source": source,
@@ -804,7 +813,7 @@ def _execute(job, devices, adb, expected_hash, output, leases):
                   **({"cleanup_status": "UNCONFIRMED"} if cleanup_unconfirmed else {}),
                   "families": {name: dict(UNKNOWN) for name in acceptance.families_for(job.get("acceptance_profile"))}}
         if (output / "physical/manifest.json").is_file():
-            result["manifest"] = str((output / "physical/manifest.json").resolve())
+            result["manifest"] = str(located(output / "physical/manifest.json"))
         if (output / "hci-snoop.json").is_file():
             result["hci_snoop"] = "hci-snoop.json"
         write(output / "attempt.json", result)
@@ -892,7 +901,7 @@ def artifact_path(output, name):
         raise ValueError("Artifact review needs an exact relative path inside its output")
     path = output / name
     DebugImages._guard(path)
-    path.resolve().relative_to(output)
+    located(path).relative_to(output)
     return path
 
 
@@ -928,14 +937,14 @@ def finalize_artifacts(output):
     core = {output / name for name in ("suite-result.json", "report.html", "coverage.json",
                                       "selection.json", "execution.json", "plan.json")}
     for item in payload["results"]:
-        if item.get("manifest") and Path(item["manifest"]).resolve().is_relative_to(output):
-            core.add(Path(item["manifest"]).resolve())
+        if item.get("manifest") and located(item["manifest"]).is_relative_to(output):
+            core.add(located(item["manifest"]))
         if item.get("evidence_directory"):
-            directory = Path(item["evidence_directory"]).resolve()
+            directory = located(item["evidence_directory"])
             if directory.is_relative_to(output):
                 core.update(directory / name for name in ("preflight.json", "attempt.json", "cleanup.json", "physical/score.json"))
         if item.get("analysis_directory"):
-            directory = Path(item["analysis_directory"]).resolve()
+            directory = located(item["analysis_directory"])
             if directory.is_relative_to(output):
                 core.update(directory / name for name in ("analysis.json", "computed-score.json", "motion-timing.json"))
     files = artifact_inventory(output)
@@ -974,7 +983,7 @@ def artifact_dependencies(output, files, roots):
                 try:
                     requested = Path(value)
                     for candidate in (requested,) if requested.is_absolute() else (base / requested, output / requested, ROOT / requested):
-                        target = candidate.resolve()
+                        target = located(candidate)
                         if target in files:
                             reference_cache[key] = target
                             break
@@ -1485,7 +1494,7 @@ def main(argv=None):
         for item in results:
             manifest = Path(item.get("evidence_directory", output / "absent")) / "physical/manifest.json"
             if item["status"] == "INTERRUPTED" and manifest.is_file():
-                item.update(manifest=str(manifest.resolve()), manifest_sha256=digest(manifest))
+                item.update(manifest=str(located(manifest)), manifest_sha256=digest(manifest))
         report(output, results, baseline)
         if any(item["status"] == DEFERRED for item in results):
             if any(row.get("cleanup_status") == "UNCONFIRMED" for row in results):

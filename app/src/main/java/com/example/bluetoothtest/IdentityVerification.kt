@@ -660,7 +660,14 @@ class IdentityVerification internal constructor(
 
     fun verifiedContacts(): List<VerifiedContact> = store.all()
 
-    fun forget(fingerprint: IdentityFingerprint): Boolean = store.forget(fingerprint)
+    fun forget(fingerprint: IdentityFingerprint): Boolean = store.forget(fingerprint).also { forgotten ->
+        // Rotating IDs, phase 2: a forgotten contact stops being a lease holder and, if it received a lease,
+        // this phone starts a new presence key (RD1). Inert while the experiment is off.
+        if (forgotten && RotatingDiscoveryFeature.enabled) RotatingDiscovery.presenceVault()?.let { vault ->
+            runCatching { vault.forget(fingerprint.nodeId) }
+            RotatingDiscovery.requestRecognitionRebuild()
+        }
+    }
 
     fun storeUnreadable(): Boolean = store.isUnreadable()
 
@@ -673,7 +680,12 @@ class IdentityVerification internal constructor(
         PeerIdentityGate.removeStoreUnreadableListener(listener)
 
     /** Deletes all verified contacts (the recovery for an unreadable store). False if the file stays. */
-    fun resetVerifiedContacts(): Boolean = store.reset()
+    fun resetVerifiedContacts(): Boolean = store.reset().also { removed ->
+        if (removed && RotatingDiscoveryFeature.enabled) RotatingDiscovery.presenceVault()?.let { vault ->
+            runCatching { vault.resetContacts() }
+            RotatingDiscovery.requestRecognitionRebuild()
+        }
+    }
 
     fun setMismatchPolicy(policy: MismatchPolicy) {
         PeerIdentityGate.policy = policy
@@ -714,6 +726,9 @@ class IdentityVerification internal constructor(
             synchronized(this) { instance = null }
             PeerIdentityGate.clearForWipe()
         }
+
+        /** The verified-contacts at-rest cipher, shared with the rotating-ID presence store (same Keystore key). */
+        internal fun atRestCipher(): AtRestCipher = AesGcmAtRestCipher { verificationAtRestKey() }
 
         private fun verificationAtRestKey(): SecretKey {
             WipeGuard.check("verification key")

@@ -67,15 +67,23 @@ internal object CallVideoFragments {
         var offset = 0
         while (offset < packetPlaintext.size) {
             val length = minOf(chunkBytes, packetPlaintext.size - offset)
-            fragments += ByteBuffer.allocate(HEADER_BYTES + length)
-                .order(ByteOrder.BIG_ENDIAN)
-                .putInt(packetPlaintext.size)
-                .putInt(offset)
-                .put(packetPlaintext, offset, length)
-                .array()
+            fragments += fragmentAt(packetPlaintext, offset, length)
             offset += length
         }
         return fragments
+    }
+
+    /** One fragment payload: big-endian total length, offset, then [length] bytes from [offset]. */
+    fun fragmentAt(packetPlaintext: ByteArray, offset: Int, length: Int): ByteArray {
+        require(offset >= 0 && length > 0 && offset + length <= packetPlaintext.size) {
+            "Invalid fragment range $offset+$length of ${packetPlaintext.size}"
+        }
+        return ByteBuffer.allocate(HEADER_BYTES + length)
+            .order(ByteOrder.BIG_ENDIAN)
+            .putInt(packetPlaintext.size)
+            .putInt(offset)
+            .put(packetPlaintext, offset, length)
+            .array()
     }
 }
 

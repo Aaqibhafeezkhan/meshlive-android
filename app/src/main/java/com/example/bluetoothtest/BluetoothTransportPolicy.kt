@@ -256,6 +256,62 @@ internal object BluetoothTransportPolicy {
         fallback = "Setup failures are classified by status.",
     )
 
+    val EXYNOS9611_DUAL_ROLE_EQUAL_INTERVAL = DevicePolicyEntry(
+        id = "exynos9611-dual-role-equal-interval-child-starvation",
+        title = "Exynos 9611 relay: a central child link at the parent's interval can get no events at all",
+        matcher = DeviceMatcher(hardware = setOf("exynos9611")),
+        effects = emptyList(),
+        behaviour = "Proposal (diagnostic): a relay on this controller (peripheral to its parent, central to its child, " +
+            "both HIGH = 15 ms) loses its child link in about half of the attempts: 22 of 55 never established (HCI 0x3E), " +
+            "9 went silent for 5.0-5.1 s after the update to 15 ms (0x08; in the four diag cases the last completed packet " +
+            "came 77-92 ms after the update), the rest ran starved or healthy. Every M31 15 ms stage with the child anchor " +
+            "11.3-13.7 ms after the parent anchor was dead or starved (8 of 8); every one at 3.7-10.3 ms was healthy " +
+            "except two CoC stages without a data-length update (6.1/6.6 ms, 17-29 kbps). The generic mitigations (relay_child_stall_guard, relay_child_reanchor, " +
+            "relay_establish_fallback) apply to every phone; this entry only records the family so a later A/B " +
+            "(test_relay_upstream_dck, test_gatt_request_mtu) can promote a family-specific rule, for example " +
+            "a 30 ms parent link or a smaller data length for a relay child on this controller.",
+        sources = listOf(
+            PolicySource(AOSP_SOURCE,
+                "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/745ee92b87ed/system/stack/l2cap/l2c_ble_conn_params.cc",
+                "the stack locks 7.5 ms connection parameters while GATT service discovery runs and applies the app's " +
+                    "pending request when it ends; every central here shows 45 -> 7.5 -> 15 ms (the HIGH range 11.25-15 ms " +
+                    "resolves to 15 ms on the Exynos, Qualcomm and S24 controllers seen)"),
+            PolicySource(AOSP_SOURCE,
+                "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/745ee92b87ed/android/app/res/values/config.xml",
+                "gatt_high_priority_min/max_interval 9/12 (11.25-15 ms), gatt_balanced 24/40 (30-50 ms), " +
+                    "gatt_dck_priority 24/24 (30 ms); the app cannot ask for another interval (hidden " +
+                    "BluetoothGatt.requestLeConnectionUpdate throws NoSuchMethodException, relaylink-arms2r1)"),
+            PolicySource(API_REFERENCE,
+                "https://developer.android.com/reference/android/bluetooth/BluetoothGatt#requestConnectionPriority(int)",
+                "the public API offers BALANCED, HIGH, LOW_POWER and (API 34) DCK only"),
+            PolicySource(VENDOR_DOC,
+                "https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrfxlib/softdevice_controller/doc/scheduling.html",
+                "Nordic's controller (a different vendor): peripheral link timing is dictated by the peer central and may " +
+                    "collide with any running event; central link events are placed relative to other central links only; " +
+                    "a lower-priority event is blocked and rescheduled, and a peripheral connection about to time out gets " +
+                    "the highest priority. The Exynos 9611 controller shows no such rescue (0x08 after 5.0 s of silence)"),
+            PolicySource(BLUETOOTH_SPEC,
+                "https://www.bluetooth.com/specifications/specs/core-specification-5-4/",
+                "Core Vol 6 Part B 4.5 (connection state: events, supervision timer) and 5.1.1 (connection update: transmit " +
+                    "window): two connections' overlapping events are left to the controller; no Samsung or Exynos document " +
+                    "describes its scheduler"),
+        ),
+        sourceStatus = PARTIAL,
+        evidence = listOf(
+            "benchmarks/runs/relayfix-0725a213-diagM1 (0001: 2 deaths at 11.35/11.51 ms phase; 0002 CoC healthy at 10.28)",
+            "benchmarks/runs/relayfix-0725a213-diagP1 (healthy 10.21 and 3.71), diagP2 (0001: four 0x3E; 0003: 2 deaths at 11.38/11.63)",
+            "benchmarks/runs/mesh4ab-52681dbf-loop14b-1 (0002/0011/0012 deaths and starved stages at 11.98-13.73; 0001 healthy at 9.4)",
+            "the ASUS (Qualcomm SM8150) as the dual-role relay: 29 child attempts, 5 x 0x3E, no 0x08",
+        ),
+        confidence = LOW,
+        reviewed = "2026-10-11",
+        origin = "Root-cause analysis 2026-10-11 of the M31 relay child link (HCI snoops, M31 + ASUS); one Exynos phone.",
+        proposed = true,
+        area = PolicyArea.BLUETOOTH_TRANSPORT,
+        validation = PolicyValidation.LOCALLY_REPRODUCED,
+        fallback = "Relay child links use HIGH like every other pair; the generic guards recover (0.3 s for 0x3E, about 3 s for a stall).",
+    )
+
     val entries: List<DevicePolicyEntry> = listOf(
         LE_SCAN_QUOTA,
         GATT_MTU_FIXED_517,
@@ -265,6 +321,7 @@ internal object BluetoothTransportPolicy {
         SAMSUNG_DIRECT_CONNECT_TIMEOUT,
         ANDROID15_COC_STALL,
         ANDROID12_DISCONNECT_STATUS_ZERO,
+        EXYNOS9611_DUAL_ROLE_EQUAL_INTERVAL,
     )
 
     private fun policy(): ResolvedDevicePolicy = DeviceFamilyPolicy.current()

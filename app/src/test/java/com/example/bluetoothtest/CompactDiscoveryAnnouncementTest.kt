@@ -205,12 +205,18 @@ class CompactDiscoveryAnnouncementTest {
     }
 
     @Test
-    fun featureIsOffUnlessTheLaunchOrAdvancedSettingAsks() {
+    fun featureFollowsTheSharedRuleAndIsOffByDefault() {
         val stored = { _: String -> true }
-        assertFalse(CompactDiscoveryFeature.resolve(false, { true }, advancedSettings = false, stored))
-        assertTrue(CompactDiscoveryFeature.resolve(false, { false }, advancedSettings = true, stored))
-        assertFalse(CompactDiscoveryFeature.resolve(true, { false }, advancedSettings = true, stored))
-        assertTrue(CompactDiscoveryFeature.resolve(true, { it == CompactDiscoveryFeature.EXTRA }, advancedSettings = false, { false }))
+        // Normal launch: the user's explicit choice, else the default (off until phone test T8); extras are ignored.
+        assertFalse(CompactDiscoveryFeature.resolve(false, { true }, { false }))
+        assertTrue(CompactDiscoveryFeature.resolve(false, { false }, stored))
+        assertEquals(
+            ConnectivityFeatureDefaults.IPHONE_DISCOVERY,
+            CompactDiscoveryFeature.resolve(false, { true }, { null }),
+        )
+        // Benchmark launch: only the extra.
+        assertFalse(CompactDiscoveryFeature.resolve(true, { false }, stored))
+        assertTrue(CompactDiscoveryFeature.resolve(true, { it == CompactDiscoveryFeature.EXTRA }, { false }))
     }
 
     @Test

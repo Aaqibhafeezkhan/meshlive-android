@@ -9,8 +9,10 @@ import java.security.MessageDigest
 import java.util.UUID
 
 /**
- * Experimental peer labels (`test_peer_labels`; Advanced setting "Experimental: names and titles"),
- * off by default. Naming design phase 1 with review fixes R1-R10 (PROTOCOL "Experimental peer labels").
+ * Peer labels: optional names, call subjects and stream titles. Promoted 2026-10-11 to the Settings >
+ * Features switch "Names and titles"; the shipped default is [CallFeatureDefaults.NAMES_AND_TITLES]. A
+ * DEBUG benchmark launch uses only `test_peer_labels`. Naming design phase 1 with review fixes R1-R10
+ * (PROTOCOL "Peer labels").
  *
  * Off: no hello bit, no `LABELS` record, no title pages; every byte on air and on the link is
  * unchanged. On: the end-to-end hello sets transport-mask bit 5 and, only when both endpoint hellos
@@ -36,16 +38,11 @@ object PeerLabelFeature {
     /** Title of the stream this phone is broadcasting (fixed for the stream's lifetime). */
     @Volatile var localStreamTitle: String? = null
 
-    fun resolve(
+    internal fun resolve(
         benchmarkLaunch: Boolean,
         extra: (String) -> Boolean,
-        advancedSettings: Boolean,
-        stored: (String) -> Boolean,
-    ): Boolean = when {
-        benchmarkLaunch -> extra(EXTRA)
-        advancedSettings -> stored(PREF)
-        else -> false
-    }
+        stored: (String) -> Boolean?,
+    ): Boolean = CallFeatureResolver.enabled(CallFeature.NAMES_AND_TITLES, benchmarkLaunch, extra, stored)
 
     fun advertise(capabilities: NodeCapabilities, enabled: Boolean = this.enabled): NodeCapabilities =
         if (enabled) capabilities.copy(transportMask = capabilities.transportMask or CAPABILITY_BIT) else capabilities

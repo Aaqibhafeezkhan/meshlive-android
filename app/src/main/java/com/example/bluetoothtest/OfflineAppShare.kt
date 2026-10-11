@@ -23,9 +23,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Experimental "Share app nearby" (off by default; DEBUG `test_offline_app_share`, Advanced setting
- * otherwise). Research catalog: Briar's offline hotspot share and Bitchat's APK web page, described in
- * design-pattern notes (both GPL; re-implemented from the description, no code copied).
+ * "Share app nearby" (Help; promoted to Settings > Features on 2026-10-11, entry shown by default
+ * only after phone test T9: [ConnectivityFeatureDefaults.SHARE_APP_NEARBY]; DEBUG
+ * `test_offline_app_share` is the benchmark switch). Prior art: Briar's offline hotspot share and Bitchat's APK web page (both GPL; re-implemented from the
+ * description, no code copied).
  *
  * The sharing phone creates a Wi-Fi Direct group (5 GHz first where the phone supports it, because
  * 2.4 GHz Wi-Fi halved Bluetooth throughput on the M31), runs [OfflineAppShareServer] bound to the
@@ -40,16 +41,12 @@ object OfflineAppShareFeature {
 
     @Volatile var enabled = false
 
+    /** The shared feature rule ([FeatureCatalog.resolve]). */
     fun resolve(
         benchmarkLaunch: Boolean,
         extra: (String) -> Boolean,
-        advancedSettings: Boolean,
-        stored: (String) -> Boolean,
-    ): Boolean = when {
-        benchmarkLaunch -> extra(EXTRA)
-        advancedSettings -> stored(PREF)
-        else -> false
-    }
+        stored: (String) -> Boolean?,
+    ): Boolean = FeatureCatalog.resolve(ConnectivityFeatures.shareAppNearby, benchmarkLaunch, extra, stored)
 }
 
 /**
@@ -255,6 +252,8 @@ li{margin-bottom:8px}
 <p>File SHA-256:<br><code>${e(info.apkSha256)}</code></p>
 <p>Signing certificate SHA-256:<br>$certs</p>
 <p>${e(keyNote)} After installing, About in the app shows the signing certificate; it must match the one above.</p>
+<p>This page is written by the phone that shares it, so it can say anything. Compare the certificate above with the one on the project page (github.com/MeshLive/meshlive-android) before you install.</p>
+<p><b>Already have MeshLive?</b> Do not open the file from here. In MeshLive open Settings &gt; Features &gt; Updates and tap Choose the file: MeshLive checks it first. If Android offers to Install a new app instead of Update, cancel.</p>
 </body></html>
 """
     }

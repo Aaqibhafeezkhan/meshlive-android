@@ -31,16 +31,16 @@ Run these from the repository root before opening a pull request.
 
 ```
 python tools/fetch_native_sources.py
-./gradlew :app:testDebugUnitTest :app:assembleDebug
+./gradlew :app:testDebugUnitTest :app:assembleGithubDebug
 python -B -m pytest -q tools
 ```
 
 - `python tools/fetch_native_sources.py` downloads the pinned libaom and libopus sources into the git-ignored
   `reference-repos/` folder. Run it first on a fresh clone; the native build needs them. `--verify-only` checks what is
   there without downloading.
-- `./gradlew :app:testDebugUnitTest :app:assembleDebug` runs the JVM unit tests and builds the debug APK (use
+- `./gradlew :app:testDebugUnitTest :app:assembleGithubDebug` runs the JVM unit tests and builds the debug APK (use
   `gradlew.bat` on Windows). The toolchain is JDK 21, the Android SDK with NDK 28.2 and CMake 3.22.1, and Perl (the
-  libaom build uses it). Add `:app:compileReleaseKotlin` when you touch code that differs between debug and release.
+  libaom build uses it). Add `:app:compileGithubReleaseKotlin :app:compileFdroidReleaseKotlin` when you touch code that differs between debug and release or between the two distribution flavours (README "Build from source").
 - `python -B -m pytest -q tools` runs the host-tool tests (Python 3.11 or newer). They use temporary directories and
   never contact a phone.
 - Optional, for the C# desktop receiver and file sender (needs the .NET SDK, no Bluetooth):
@@ -801,6 +801,10 @@ the tunables `voice_calls`, `push_to_talk` and `ptt_mode`; a call case with `cal
 gate, proves zero video packets in both directions and scores audio continuity in whole 2 s report windows. Acoustic
 quality and gaps under one report window stay UNMEASURED.
 
+Rotating-ID test P3 needs mutual verified contacts, which normally take two people scanning QR codes. On DEBUG builds `python -B tools/debug_verify_contacts.py --phones A,B` reads each phone's `BENCHMARK identity fingerprint=` log line (the apps must have been launched once), writes a one-shot token file plus the peer's fingerprint into each app's private storage with `run-as` (no other phone action), and prints the `--es test_verify_contact <token>` launch extras; the owning runner starts each phone with them and checks `BENCHMARK contact_verified source=debug` before the call. `--forget` prepares `test_forget_contact` for the Forget and Reset cases. The day roll uses the tunable `presence_day_offset` (extra `test_presence_day_offset`, same value on both phones, cold start only): it shifts the discovery wall clock by whole days instead of waiting for 00:00 UTC, so record it as a simulated clock, not a natural roll, and clear app data afterwards. ARCHITECTURE register row "Debug contact verification and day-roll clock" has the details.
+
+Rotating-ID boundary tests can shorten the epoch: launch every phone of the run with `--ei test_rotid_epoch_s 60` (tunable `rotid_epoch_s`, 60-900, DEBUG builds only; the same value on all phones, otherwise rotating adverts fail the two-epoch check as stale) so three boundaries take about 3 minutes, and run `rotid_tracker.py --epoch-s 60`. Check `BENCHMARK rotid_epoch_s: ... applied=true` on each phone first; the extra is ignored in a process whose rotating discovery already started, so force-stop before the launch. It tests the boundary and restart machinery, not 900 s timing (Android's own 7-15 minute address timer does not scale, so the same-address-inside-an-epoch information is moot; the tracker's grace and early offsets default to a third and a sixth of the epoch). Results from short epochs are labelled with the value and never replace the 900 s cases. Afterwards a normal launch restarts the epoch counter by itself.
+
 `python -B tools/link_capacity.py probe|relay|report` measures integrity-checked link maxima (GATT write and notify, CoC
 primed, Classic), two-link relay airtime and each phone's learned link capacity. Probes restart the app on the
 participating phones. `tools/deploy_build.py` freezes and installs a build (above).
@@ -878,13 +882,10 @@ repository); CI holds no signing key.
 
 1. Everything for the release is committed and the tree is clean; `versionCode` is bumped in `app/build.gradle.kts`
    (`make_release.py` refuses to overwrite an existing `release/<versionName>-<versionCode>/`).
-2. `./gradlew :app:testDebugUnitTest :app:compileReleaseKotlin` and `python -B -m pytest -q tools` pass.
-3. `python tools/make_release.py`. It builds the split `assembleRelease` with `--no-daemon`, verifies every APK (single
-   signer, expected certificate, native ABIs, 16 KB page-size check on the 64-bit libraries, versionCode equal to base
-   x 10 + ABI digit, fastlane changelog present) and writes the per-ABI APKs, `SHA256SUMS`, `apksigner-certs.txt`,
-   `signing-cert.sha256`, `SOURCE-MANIFEST.txt` and a `RELEASE-NOTES.md` template to
-   `release/<versionName>-<versionCode>/` (git-ignored). Finish the notes by hand: changes, benchmark build IDs, known
-   limits. `--manifest-only` writes just the source manifest (CI mode); `--no-universal` skips the universal APK.
+2. `./gradlew :app:testDebugUnitTest :app:compileGithubReleaseKotlin :app:compileFdroidReleaseKotlin :app:processGithubReleaseManifest :app:processFdroidReleaseManifest`, `MESHLIVE_REQUIRE_FLAVOUR_MANIFESTS=1 python -B -m pytest -q tools/tests/test_flavour_manifests.py` (the F-Droid manifest must have no install permission; without the variable the test skips when no manifest was merged) and `python -B -m unittest discover -s tools/tests` pass, and `python tools/fetch_native_sources.py --verify-only` reports libaom and libopus OK (without `--verify-only` it downloads and verifies the pinned sources; `make_release.py` refuses a release otherwise).
+2b. Before a release that changes Gradle files, native code or toolchain pins, run `python -B tools/check_reproducible_build.py build ...` (README "Distribution", reproducible builds) in two clean worktrees at different paths; any differing entry must be explained or fixed. Never during a phone window or next to another Gradle build.
+2c. On every APK that goes to a phone or a release (frozen benchmark build, `make_release.py` output), run `python -B tools/dex_api_scan.py APK`: it reads the dex against the SDK's api-versions.xml and must report 0 unreviewed `java/`/`javax/` calls above minSdk (an `--allow` file lists reviewed ones; `android/` candidates are informational and must sit behind `SDK_INT` checks). The unit tests run on a newer Java than the phones, and a missing platform method is an `Error` that ends the app process (DECISIONS "Relayed calls: first phone probe"). `ApiLevelGuardTest` is the cheap source-level guard.
+3. `python tools/make_release.py`. Publish the release as **Latest** (not a pre-release): the in-app update check reads `releases/latest`, which ignores pre-releases and drafts, and it needs the per-ABI APKs plus `SHA256SUMS` (README "Updates inside the app"). It builds the split `assembleGithubRelease` (the github flavour: opt-in updater and install permission; the F-Droid recipe builds the `fdroid` flavour) with `--no-daemon`, verifies every APK (single signer, expected certificate, native ABIs, 16 KB check on 64-bit libraries, versionCode = base * 10 + ABI digit, fastlane changelog present), and writes the per-ABI APKs, `MeshLive.apk` (a copy of the arm64-v8a APK; the README download button links `releases/latest/download/MeshLive.apk`), `SHA256SUMS`, `apksigner-certs.txt`, `signing-cert.sha256`, `SOURCE-MANIFEST.txt` (with the native-source pins) and a `RELEASE-NOTES.md` template to `release/<versionName>-<versionCode>/` (gitignored). Finish the notes (changes, benchmark build ids, known limits) by hand.
 4. Install that exact APK on one idle phone and check that the About screen's signing-certificate fingerprint equals
    `signing-cert.sha256`, and that it matches the fingerprint published in the README section "Verifying a release". Do
    no phone work during someone else's test window.

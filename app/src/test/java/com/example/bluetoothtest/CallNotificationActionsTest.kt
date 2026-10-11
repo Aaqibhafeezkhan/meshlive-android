@@ -38,13 +38,14 @@ class CallNotificationActionsTest {
     }
 
     @Test
-    fun callStylePersonKeepsTheNamePrivacyRule() {
+    fun callStylePersonNamesTheCallerInTheFullNotificationOnly() {
+        // The person is part of the full notification, which Android shows to an unlocked phone; the
+        // lock screen shows the name-free public version (NotificationPrivacy).
         val c = CallNotificationActions
-        assertEquals(c.NEUTRAL_PERSON, c.personName("Alice", peerNamesOptIn = false))
-        assertEquals("Alice", c.personName(" Alice ", peerNamesOptIn = true))
+        assertEquals("Alice", c.personName(" Alice "))
         // CallStyle refuses an empty person name: fall back to the neutral label.
-        assertEquals(c.NEUTRAL_PERSON, c.personName("  ", peerNamesOptIn = true))
-        assertEquals(c.NEUTRAL_PERSON, c.personName(null, peerNamesOptIn = true))
+        assertEquals(c.NEUTRAL_PERSON, c.personName("  "))
+        assertEquals(c.NEUTRAL_PERSON, c.personName(null))
         assertNotEquals("", c.NEUTRAL_PERSON)
     }
 }

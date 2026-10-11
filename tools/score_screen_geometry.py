@@ -12,6 +12,7 @@ import math
 from pathlib import Path
 
 from benchmark_layout import original, output_path, resolve as resolve_input
+from evidence_relocation import logical
 
 import cv2
 import numpy as np
@@ -46,7 +47,7 @@ def _file(entry, base, evidence, name):
     digest = hasher.hexdigest()
     if digest != str(entry["sha256"]).lower():
         raise ValueError(f"{name} SHA256 mismatch")
-    evidence[name] = {"path": str(path.resolve()), "sha256": digest}
+    evidence[name] = {"path": str(logical(path)), "sha256": digest}
     return path
 
 

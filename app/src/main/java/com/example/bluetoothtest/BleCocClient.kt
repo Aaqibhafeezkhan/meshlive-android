@@ -40,12 +40,14 @@ internal object BleCocClient {
         phyPreference: BlePhyPreference,
         owner: String,
         connectionPriority: BleConnectionPriority = BleConnectionPriority.HIGH,
+        /** Dual listening: receives the CoC socket the moment it exists, so a deadline can close one that is still connecting. */
+        onSocket: (BluetoothSocket) -> Unit = {},
         onControl: (BleL2capControlConnection?) -> Unit,
     ): BluetoothSocket {
         val control = BleL2capPsmReader.open(context, device, onLinkStatus, phyPreference, connectionPriority)
         onControl(control)
         val psm = control.psm
-        if (!BleCocFreshAcl.enabled()) return connectChannel(device, psm, owner)
+        if (!BleCocFreshAcl.enabled()) return connectChannel(device, psm, owner, onSocket)
         val watch = AndroidAclDownWatch(context.applicationContext, device)
         BleCocFreshAcl.releaseControlAndAwaitAclDown(
             watch = watch,
@@ -58,7 +60,7 @@ internal object BleCocClient {
             owner = owner,
             mayBlock = Looper.myLooper() != Looper.getMainLooper(),
         )
-        val socket = connectChannel(device, psm, owner)
+        val socket = connectChannel(device, psm, owner, onSocket)
         val attached = runCatching { BleL2capPsmReader.attach(context, device, psm, onLinkStatus, phyPreference, connectionPriority) }
             .onFailure { error ->
                 onLinkStatus("BLE CoC connected; GATT control reattach failed: ${error.message}")
@@ -69,8 +71,14 @@ internal object BleCocClient {
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectChannel(device: BluetoothDevice, psm: Int, owner: String): BluetoothSocket {
+    private fun connectChannel(
+        device: BluetoothDevice,
+        psm: Int,
+        owner: String,
+        onSocket: (BluetoothSocket) -> Unit = {},
+    ): BluetoothSocket {
         val socket = device.createInsecureL2capChannel(psm).also { CocRegistrations.note("connect", owner) }
+        onSocket(socket)
         try {
             socket.connect()
         } catch (error: Exception) {

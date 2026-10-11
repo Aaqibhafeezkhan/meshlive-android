@@ -22,6 +22,7 @@ import tempfile
 from pathlib import Path
 
 from benchmark_layout import original, output_path, resolve
+from evidence_relocation import logical
 from score_parallel import score_threads
 
 import numpy as np
@@ -397,7 +398,7 @@ def score_phase_delivery(manifest: dict, receiver_device: str, output_directory:
                 path = output_directory / "reference-regions.json"
                 path.write_text(json.dumps(regions, indent=2, allow_nan=False) + "\n", encoding="utf-8")
                 result["content_regions"] = {"measurement_status": regions["measurement_status"], "acceptance_status": "UNMEASURED",
-                                             "evidence": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                                             "evidence": str(logical(path)), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
             except (ValueError, OSError, KeyError, TypeError) as error:
                 result["content_regions"]["reason"] = str(error)
     duration = len(expected) / fps

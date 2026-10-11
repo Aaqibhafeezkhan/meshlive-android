@@ -3,8 +3,10 @@ package com.example.bluetoothtest
 import java.util.UUID
 
 /**
- * Experimental iPhone compact discovery (off by default; DEBUG `test_ios_compact_discovery`,
- * Advanced setting otherwise). iOS apps cannot send manufacturer data, and a foreground iPhone
+ * iPhone compact discovery, shown to users as "Find iPhones" (promoted to Settings > Features on
+ * 2026-10-11; default [ConnectivityFeatureDefaults.IPHONE_DISCOVERY] until phone test T8 has logged how
+ * each phone's masked scan filter behaves). DEBUG `test_ios_compact_discovery` is the benchmark switch.
+ * iOS apps cannot send manufacturer data, and a foreground iPhone
  * exposes only one 128-bit service UUID to Android scanners, so an iPhone advertises
  * [CompactDiscoveryAnnouncement] instead of the 22-byte manufacturer-data announcement. On: every
  * [BleL2capDiscovery] adds one masked scan filter and maps a matching UUID into the ordinary
@@ -17,16 +19,35 @@ object CompactDiscoveryFeature {
 
     @Volatile var enabled = false
 
+    /**
+     * Set once a scanner reports that the masked filter cannot be used ([CompactFilterGuard]); every later
+     * scanner of this process leaves the filter out. Cleared when the feature is switched on again.
+     */
+    @Volatile var filterRejected = false
+
+    /** Whether a scan started now carries the masked iPhone filter. */
+    fun filterActive(): Boolean = enabled && !filterRejected
+
+    /** The shared feature rule ([FeatureCatalog.resolve]). */
     fun resolve(
         benchmarkLaunch: Boolean,
         extra: (String) -> Boolean,
-        advancedSettings: Boolean,
-        stored: (String) -> Boolean,
-    ): Boolean = when {
-        benchmarkLaunch -> extra(EXTRA)
-        advancedSettings -> stored(PREF)
-        else -> false
-    }
+        stored: (String) -> Boolean?,
+    ): Boolean = FeatureCatalog.resolve(ConnectivityFeatures.iphoneDiscovery, benchmarkLaunch, extra, stored)
+}
+
+/**
+ * Which scan failures mean the masked filter itself is the problem. A scan start carries the app's own
+ * filter and the masked iPhone filter together, so a phone whose scanner cannot take the second filter
+ * (no free hardware filter slot, or no masked-UUID filters at all) would otherwise lose Android discovery
+ * too. On these codes the scanner drops only the masked filter, restarts, and logs
+ * `compact_filter: event=dropped`; AOSP ScanCallback codes 4 (feature unsupported) and 5 (out of hardware
+ * resources). Transient codes (internal error, registration failure, scanning too frequently) keep the
+ * ordinary back-off and keep the filter.
+ */
+internal object CompactFilterGuard {
+    fun refusesFilter(errorCode: Int): Boolean =
+        errorCode == ScanFailurePolicy.FEATURE_UNSUPPORTED || errorCode == ScanFailurePolicy.OUT_OF_HARDWARE_RESOURCES
 }
 
 /**

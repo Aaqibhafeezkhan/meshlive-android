@@ -2,6 +2,7 @@ package com.example.bluetoothtest
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NotificationPrivacyTest {
@@ -17,11 +18,23 @@ class NotificationPrivacyTest {
     }
 
     @Test
-    fun incomingCallsShowTheNameOnlyAfterOptIn() {
+    fun incomingCallsKeepTheNameOffTheLockScreenUntilOptIn() {
+        // Q16-A: the full notification (unlocked phone) names the caller; the lock screen gets the public version.
         assertEquals(private, NotificationPrivacy.visibility(NotificationKind.INCOMING_CALL, false))
         assertEquals(public, NotificationPrivacy.visibility(NotificationKind.INCOMING_CALL, true))
-        assertEquals(NotificationPrivacy.HIDDEN_PEER_TEXT, NotificationPrivacy.incomingCallText("Asha [abcd]", false))
-        assertEquals("Asha [abcd]", NotificationPrivacy.incomingCallText("Asha [abcd]", true))
+        assertEquals("Asha [abcd]", NotificationPrivacy.incomingCallText("Asha [abcd]"))
+        assertEquals(NotificationPrivacy.HIDDEN_PEER_TEXT, NotificationPrivacy.incomingCallText("  "))
+        assertEquals(NotificationPrivacy.HIDDEN_PEER_TEXT, NotificationPrivacy.incomingCallText(null))
+        assertEquals("Incoming call", NotificationPrivacy.publicText(NotificationKind.INCOMING_CALL))
+    }
+
+    @Test
+    fun theCallScreenHidesTheNameOnlyOverASecureLockScreenWithoutOptIn() {
+        assertTrue(LockScreenNames.masked(keyguardLocked = true, keyguardSecure = true, namesAllowed = false))
+        assertFalse(LockScreenNames.masked(keyguardLocked = true, keyguardSecure = true, namesAllowed = true))
+        // An unlocked phone, and a swipe-only keyguard that protects nothing, show the name.
+        assertFalse(LockScreenNames.masked(keyguardLocked = false, keyguardSecure = true, namesAllowed = false))
+        assertFalse(LockScreenNames.masked(keyguardLocked = true, keyguardSecure = false, namesAllowed = false))
     }
 
     @Test

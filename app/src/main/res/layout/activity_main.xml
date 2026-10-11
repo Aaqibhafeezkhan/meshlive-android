@@ -56,6 +56,93 @@
                 android:textSize="16sp" />
         </LinearLayout>
 
+        <!-- Experimental viewer frame age (ViewerFrameAgeController.kt, Settings > Features): a light
+             dim over a frozen picture, a badge saying why, and a small "Last update" label. Hidden
+             unless the switch is on. The older overlay above is not drawn while the badge is up. -->
+        <View
+            android:id="@+id/viewerStaleScrim"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#66000000"
+            android:importantForAccessibility="no"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/viewerStaleBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:background="@drawable/viewer_stale_badge_background"
+            android:gravity="center_horizontal"
+            android:minWidth="220dp"
+            android:orientation="vertical"
+            android:paddingStart="24dp"
+            android:paddingTop="20dp"
+            android:paddingEnd="24dp"
+            android:paddingBottom="20dp"
+            android:visibility="gone">
+
+            <ProgressBar
+                android:id="@+id/viewerStaleProgress"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:indeterminateTint="@android:color/white" />
+
+            <TextView
+                android:id="@+id/viewerStaleTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:accessibilityLiveRegion="polite"
+                android:gravity="center"
+                android:maxWidth="272dp"
+                android:textColor="@android:color/white"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                tools:text="Signal lost — reconnecting" />
+
+            <TextView
+                android:id="@+id/viewerStaleDetail"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:gravity="center"
+                android:maxWidth="272dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="14sp"
+                tools:text="Last picture 3.2 s ago" />
+
+            <TextView
+                android:id="@+id/viewerStaleNote"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:maxWidth="272dp"
+                android:textColor="#99FFFFFF"
+                android:textSize="12sp"
+                android:visibility="gone"
+                tools:text="Finding another route..." />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/viewerFrameAgeLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_marginStart="16dp"
+            android:layout_marginBottom="16dp"
+            android:background="@drawable/call_overlay_background"
+            android:importantForAccessibility="no"
+            android:paddingStart="10dp"
+            android:paddingTop="3dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="3dp"
+            android:textColor="#B3FFFFFF"
+            android:textSize="12sp"
+            android:visibility="gone"
+            tools:text="Last update &lt;1 s ago" />
+
         <!-- Live / watching status: the coloured dot keeps its old role and description; the
              label next to it says the same thing in words (LIVE, viewers, route). -->
         <LinearLayout
@@ -372,6 +459,23 @@
                 android:visibility="gone"
                 app:drawableStartCompat="@drawable/ic_warning"
                 app:drawableTint="@color/warning" />
+
+            <!-- Quiet update note (UpdatesHome): "Newer version nearby" from a connected phone's build tag, or
+                 "Update available" after an opted-in check. Never a dialog, sound or notification. -->
+            <TextView
+                android:id="@+id/homeUpdateNotice"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="?attr/selectableItemBackground"
+                android:drawablePadding="12dp"
+                android:gravity="center_vertical"
+                android:minHeight="48dp"
+                android:padding="12dp"
+                android:textAppearance="@style/TextAppearance.App.Body"
+                android:visibility="gone"
+                app:drawableStartCompat="@drawable/ic_refresh"
+                app:drawableTint="@color/text_secondary" />
 
             <!-- Recent: the last people you talked to, one tap to call back (RecentCalls). -->
             <TextView
@@ -1495,6 +1599,14 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
+            <!-- Features for calls and messages (CallFeatureSettings.kt); it owns the shared "Features" header. -->
+            <include layout="@layout/settings_features_calls" />
+
+            <!-- Features for connectivity (FeatureCatalog.kt, FeatureSettingsBlock.kt): a second card under that header. -->
+            <include layout="@layout/settings_features_connectivity" />
+            <include layout="@layout/settings_features_viewer" />
+            <include layout="@layout/settings_features_updates" />
+
             <TextView
                 style="@style/Widget.App.SectionHeader"
                 android:text="@string/settings_section_safety" />
@@ -2076,96 +2188,6 @@
                             android:text="On by default. When this phone forwards a stream and the next phone's link is slower than the stream, that phone skips old video to the next keyframe while its sound continues. Off: nothing is skipped and a viewer that falls too far behind is disconnected so it can find another route. Applies to forwarding started after it is changed." />
 
                         <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/experimentalVoiceCallsSwitch"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:text="Experimental: voice calls" />
-
-                        <TextView
-                            android:id="@+id/experimentalVoiceCallsDescriptionText"
-                            style="@style/Widget.App.Description"
-                            android:text="Off by default. Tapping a person asks Voice call or Video call. A voice call starts no camera and sends no video, uses the earpiece, and either person can add or remove their own video during the call. Phones without this option see a video call with your video off." />
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/experimentalPushToTalkSwitch"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:text="Experimental: push-to-talk button in calls" />
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/experimentalPttModeSwitch"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="Experimental: PTT mode (calls start muted)" />
-
-                        <TextView
-                            android:id="@+id/experimentalPushToTalkDescriptionText"
-                            style="@style/Widget.App.Description"
-                            android:text="Off by default. Hold the button to talk; your microphone is muted when you let go. PTT mode starts every call muted. Applies to calls started after it is changed." />
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/experimentalStoreForwardSwitch"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:text="Experimental: store-and-forward messages" />
-
-                        <TextView
-                            android:id="@+id/experimentalStoreForwardDescriptionText"
-                            style="@style/Widget.App.Description"
-                            android:text="Off by default. Adds Messages: end-to-end encrypted text, voice notes and photos for contacts whose card you hold. Messages wait on this phone and move when both phones have Call open and one taps the other and chooses Exchange messages. A call pauses an exchange. Only direct neighbours for now; no other phone carries your messages." />
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/experimentalPeerLabelsSwitch"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:text="@string/experimental_peer_labels" />
-
-                        <TextView
-                            android:id="@+id/experimentalPeerLabelsDescriptionText"
-                            style="@style/Widget.App.Description"
-                            android:text="@string/experimental_peer_labels_description" />
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/experimentalCocAutoGattSwitch"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:text="Experimental: automatic BLE GATT when L2CAP fails" />
-
-                        <TextView
-                            android:id="@+id/experimentalCocAutoGattDescriptionText"
-                            style="@style/Widget.App.Description"
-                            android:text="Off by default. Some phones stop accepting L2CAP connections after about 15 uses until Bluetooth restarts. When it is on and L2CAP fails, or this Bluetooth session has used the set number of L2CAP registrations (12 by default), calls use BLE GATT and say so. Phones advertising GATT also appear in the call list." />
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/experimentalClassicBondFreeSwitch"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:text="Experimental: Classic without pairing" />
-
-                        <TextView
-                            android:id="@+id/experimentalClassicBondFreeDescriptionText"
-                            style="@style/Widget.App.Description"
-                            android:text="Off by default. Turn it on in both phones. Classic calls, relays and streams then work without Android pairing: the app's own signed handshake and encryption protect the link, and each phone remembers the Classic address of a phone it has met. A first call to a phone this phone has never met needs that phone to be visible, so a phone ready for Classic calls may ask Android to make it visible for two minutes. Streams use only phones already met." />
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/experimentalCompactDiscoverySwitch"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:text="Experimental: find iPhones" />
-
-                        <TextView
-                            android:id="@+id/experimentalCompactDiscoveryDescriptionText"
-                            style="@style/Widget.App.Description"
-                            android:text="Off by default. Searches also look for the short announcement an iPhone can send while its app is open, so iPhone callers, viewers and streams can appear in the lists. This phone's own announcement and every security check stay the same. An iPhone whose app is in the background cannot be found." />
-
-                        <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/experimentalRotatingIdsSwitch"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
@@ -2184,17 +2206,63 @@
                             android:layout_height="wrap_content"
                             android:text="@string/rotating_ids_visible_button" />
 
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/rotatingIdsResetKeyButton"
+                            style="@style/Widget.App.Button.Text"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/rotating_ids_reset_key" />
+
+                        <TextView
+                            android:id="@+id/rotatingIdsLegacyNoteText"
+                            style="@style/Widget.App.Description"
+                            android:visibility="gone"
+                            android:text="@string/rotating_ids_legacy_note" />
+
                         <com.google.android.material.materialswitch.MaterialSwitch
-                            android:id="@+id/experimentalOfflineAppShareSwitch"
+                            android:id="@+id/neutralBluetoothNameSwitch"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="8dp"
-                            android:text="Experimental: share app nearby" />
+                            android:text="@string/neutral_bluetooth_name" />
 
                         <TextView
-                            android:id="@+id/experimentalOfflineAppShareDescriptionText"
+                            android:id="@+id/neutralBluetoothNameDescriptionText"
                             style="@style/Widget.App.Description"
-                            android:text="Off by default. Adds Share app nearby to Help: this phone starts its own Wi-Fi Direct network and a download page, and shows two codes another phone scans to join it and download the app, without internet. It stops after 10 minutes or when you leave that screen, and it cannot start during a stream or call because Wi-Fi Direct slows Bluetooth." />
+                            android:text="@string/neutral_bluetooth_name_description" />
+
+                        <TextView
+                            android:id="@+id/neutralBluetoothNameStatusText"
+                            style="@style/Widget.App.Description" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/experimentalRelayedCallsSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/experimental_relayed_calls" />
+
+                        <TextView
+                            android:id="@+id/experimentalRelayedCallsDescriptionText"
+                            style="@style/Widget.App.Description"
+                            android:text="@string/experimental_relayed_calls_description" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/relayedCallsHelpSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/relayed_calls_help" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/relayedCallsConsentSwitch"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/relayed_calls_consent" />
+
+                        <TextView
+                            android:id="@+id/relayedCallsStatusText"
+                            style="@style/Widget.App.Description" />
+
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
             </LinearLayout>

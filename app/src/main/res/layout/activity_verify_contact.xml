@@ -145,6 +145,26 @@
                     android:textAppearance="@style/TextAppearance.App.BodyLarge"
                     tools:text="Not verified yet." />
 
+                <LinearLayout
+                    android:id="@+id/verifyVisibleRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/verifyVisibleSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:text="@string/verify_visible_nearby" />
+
+                    <TextView
+                        style="@style/Widget.App.Description"
+                        android:text="@string/verify_visible_nearby_description" />
+                </LinearLayout>
+
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/verifyMarkButton"
                     android:layout_width="match_parent"

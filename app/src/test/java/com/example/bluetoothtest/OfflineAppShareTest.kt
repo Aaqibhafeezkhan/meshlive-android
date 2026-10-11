@@ -170,10 +170,16 @@ class OfflineAppShareTest {
 
     @Test
     fun featureFollowsTheSharedLaunchRule() {
-        assertTrue(OfflineAppShareFeature.resolve(true, { it == OfflineAppShareFeature.EXTRA }, false, { false }))
-        assertFalse(OfflineAppShareFeature.resolve(true, { false }, true, { true }))
-        assertTrue(OfflineAppShareFeature.resolve(false, { false }, true, { it == OfflineAppShareFeature.PREF }))
-        assertFalse(OfflineAppShareFeature.resolve(false, { true }, false, { true }))
+        assertTrue(OfflineAppShareFeature.resolve(true, { it == OfflineAppShareFeature.EXTRA }, { false }))
+        assertFalse(OfflineAppShareFeature.resolve(true, { false }, { true }))
+        // Normal launch: the user's explicit choice, no Manual-settings toggle; extras are ignored.
+        assertTrue(OfflineAppShareFeature.resolve(false, { false }, { if (it == OfflineAppShareFeature.PREF) true else null }))
+        assertFalse(OfflineAppShareFeature.resolve(false, { true }, { false }))
+        // Never decided: the shipped default (the Help entry stays hidden until phone test T9).
+        assertEquals(
+            ConnectivityFeatureDefaults.SHARE_APP_NEARBY,
+            OfflineAppShareFeature.resolve(false, { true }, { null }),
+        )
     }
 
     @Test

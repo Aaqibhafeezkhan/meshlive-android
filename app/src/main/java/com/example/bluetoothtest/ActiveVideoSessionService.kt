@@ -34,6 +34,8 @@ class ActiveVideoSessionService : Service() {
         val statusText = intent?.getStringExtra(EXTRA_STATUS_TEXT)
         // Experimental CallStyle (CallNotificationActions): outgoing/active calls get Hang up.
         val ongoingCall = intent?.getBooleanExtra(EXTRA_CALL_STYLE, false) == true
+        // Experimental relayed calls: "Helping a call nearby" carries a Stop action.
+        val relayStopAction = intent?.getBooleanExtra(EXTRA_RELAY_STOP, false) == true
         val activityIntent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val pendingIntent = PendingIntent.getActivity(
@@ -60,6 +62,13 @@ class ActiveVideoSessionService : Service() {
                 if (!ongoingCall) return@let builder
                 // Never the peer's name here (NotificationKind.SESSION): the status text is the person.
                 builder.setStyle(CallNotificationActions.ongoingStyle(this, statusText ?: CallNotificationActions.NEUTRAL_PERSON))
+            }
+            .let { builder ->
+                if (relayStopAction) {
+                    builder.addAction(0, getString(R.string.relay_stop_action), RelayedCallsNotification.stopIntent(this))
+                } else {
+                    builder
+                }
             }
             .let { builder ->
                 // Lock screen: "Bluetooth Video / Active" only (NotificationPrivacy); never peer names.
@@ -140,6 +149,7 @@ class ActiveVideoSessionService : Service() {
         private const val EXTRA_STATUS_TEXT = "status_text"
         private const val EXTRA_USES_MICROPHONE = "uses_microphone"
         private const val EXTRA_CALL_STYLE = "call_style"
+        private const val EXTRA_RELAY_STOP = "relay_stop_action"
 
         /**
          * Asks Android to run the session service. Returns the immediate answer: [ForegroundStartRequest.refused]
@@ -152,6 +162,7 @@ class ActiveVideoSessionService : Service() {
             statusText: String? = null,
             usesMicrophone: Boolean = usesCamera,
             ongoingCallStyle: Boolean = false,
+            relayStopAction: Boolean = false,
         ): ForegroundStartRequest {
             val requested = requestedTypes(usesCamera, usesMicrophone)
             return try {
@@ -163,7 +174,8 @@ class ActiveVideoSessionService : Service() {
                         .putExtra(EXTRA_USES_CAMERA, usesCamera)
                         .putExtra(EXTRA_USES_MICROPHONE, usesMicrophone)
                         .putExtra(EXTRA_STATUS_TEXT, statusText)
-                        .putExtra(EXTRA_CALL_STYLE, ongoingCallStyle),
+                        .putExtra(EXTRA_CALL_STYLE, ongoingCallStyle)
+                        .putExtra(EXTRA_RELAY_STOP, relayStopAction),
                 )
                 ForegroundStartRequest(requested, null)
             } catch (error: RuntimeException) {

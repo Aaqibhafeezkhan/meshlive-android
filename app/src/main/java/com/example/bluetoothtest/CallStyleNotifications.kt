@@ -12,7 +12,8 @@ import java.security.SecureRandom
 internal enum class CallNotificationCommand { ACCEPT, DECLINE, CANCEL, HANG_UP, IGNORE }
 
 /**
- * Experimental CallStyle notifications (off by default, 2026-10-10; DEBUG
+ * CallStyle call notifications (Settings > Features "Answer and decline from notifications", promoted
+ * 2026-10-11, shipped default [CallFeatureDefaults.CALL_NOTIFICATIONS]; DEBUG
  * `test_call_style_notification`, benchmark tunable `call_style_notification`).
  *
  * Before: an incoming call posted at most the experimental CallLockScreen alert (a plain
@@ -28,9 +29,9 @@ internal enum class CallNotificationCommand { ACCEPT, DECLINE, CANCEL, HANG_UP, 
  * MainActivity is exported, so every action carries a per-process random token; an intent from
  * another app without it cannot answer (open the microphone) or end a call.
  *
- * Privacy (NotificationPrivacy): CallStyle needs a Person with a name. The incoming alert uses the
- * caller's name only when the user opted in, otherwise a neutral label; the ongoing notification
- * never names the peer. Visibility and the name-free public version are unchanged.
+ * Privacy (NotificationPrivacy, Q16-A): CallStyle needs a Person with a name. The incoming alert's full
+ * version uses the caller's name (shown on an unlocked phone only); its public version is name-free.
+ * The ongoing notification never names the peer.
  */
 internal object CallNotificationActions {
     const val EXTRA_ACTION = "com.example.bluetoothtest.extra.CALL_ACTION"
@@ -61,9 +62,13 @@ internal object CallNotificationActions {
         else -> CallNotificationCommand.IGNORE
     }
 
-    /** The CallStyle person's name: the caller only when the user opted in to names. */
-    fun personName(peerLabel: String?, peerNamesOptIn: Boolean): String =
-        peerLabel?.trim()?.takeIf { peerNamesOptIn && it.isNotEmpty() } ?: NEUTRAL_PERSON
+    /**
+     * The CallStyle person's name. CallStyle needs one; it is part of the full notification, which
+     * Android shows only on an unlocked phone (a secure lock screen shows the name-free public
+     * version, unless the user allowed names there).
+     */
+    fun personName(peerLabel: String?): String =
+        peerLabel?.trim()?.takeIf { it.isNotEmpty() } ?: NEUTRAL_PERSON
 
     fun answerIntent(context: Context): PendingIntent = PendingIntent.getActivity(
         context,

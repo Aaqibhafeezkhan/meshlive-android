@@ -1,0 +1,6 @@
+0.2.0-beta: privacy is on by default.
+- Rotating discovery IDs: a scanner nearby can no longer follow your phone by one fixed ID.
+- Hidden identities: calls hide both phones' identity keys from a Bluetooth sniffer.
+- Strangers see a throwaway identity; your real one goes to verified contacts and to people whose call you accept.
+- Older app versions cannot see or call updated phones. Switches are in Settings.
+- Calls to a phone that refuses the old handshake fail within seconds, with a reason.

@@ -108,6 +108,9 @@ internal class IntercomCallUi(
 
     fun onRemoteFrame(): Boolean = layoutState?.onRemoteFrame()?.also { if (it) applyLayout() } ?: false
 
+    /** True once per call when the peer answered a voice call with its camera (its app has no voice calls). */
+    fun consumePeerLacksVoiceNotice(): Boolean = layoutState?.consumePeerLacksVoiceNotice() ?: false
+
     private fun applyLayout() {
         val voice = layoutState?.layout == CallLayout.VOICE
         voicePanel.visibility = if (voice) View.VISIBLE else View.GONE

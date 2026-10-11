@@ -32,7 +32,8 @@
     <string name="home_watch_title">Watch</string>
     <string name="home_watch_subtitle">Live video from phones nearby</string>
     <string name="home_watch_description">Watch live video from phones nearby.</string>
-    <string name="home_messages">Messages (Experimental)</string>
+    <string name="home_messages">Messages</string>
+    <string name="home_messages_unread">Messages · %1$d new</string>
     <string name="home_identity_title">Your identity</string>
     <string name="home_identity_text">Your ID and verifying people</string>
     <string name="home_identity_text_id">Your ID %1$s</string>
@@ -77,13 +78,54 @@
     <string name="people_reach_nearby">Nearby</string>
     <string name="people_rotating_phone">Nearby phone</string>
     <string name="people_rotating_handle">Hidden until you connect (rotating ID)</string>
-    <string name="experimental_rotating_ids">Experimental: rotating discovery IDs</string>
+    <string name="experimental_rotating_ids">Rotating discovery IDs</string>
     <string name="rotating_ids_visible_button">Visible by handle for 10-25 minutes</string>
+    <string name="rotating_ids_reset_key">Reset presence key</string>
+    <string name="rotating_ids_reset_confirm">Contacts who could recognise you nearby will stop recognising you until you meet them again. Calls and verified contacts are not affected. Use this after your phone was out of your hands (it reveals this phone\'s IDs for the next four weeks).</string>
+    <string name="rotating_ids_reset_done">Presence key reset.</string>
+    <string name="rotating_ids_reset_off">Turn on rotating discovery IDs first.</string>
+    <string name="people_seen_nearby">%1$s \u00b7 seen nearby \u00b7 unconfirmed</string>
+    <string name="stream_row_live_from_nearby">Live from a nearby phone</string>
+    <string name="stream_row_live_from_seen">Live from %1$s \u00b7 seen nearby \u00b7 unconfirmed</string>
+    <string name="verify_visible_nearby">Can see when I\'m nearby</string>
+    <string name="verify_visible_nearby_description">This contact\'s phone may recognise yours when it is nearby (shown as unconfirmed, never as verified). Turning it off after they received a key makes this phone start a new key.</string>
     <string name="rotating_ids_visible_until">Visible by handle until %1$s. Older app versions and anyone who knows your handle can find you; every such window can be linked to the others.</string>
     <string name="rotating_ids_visible_off">Turn on rotating discovery IDs first. Without them this phone is always visible by handle.</string>
-    <string name="experimental_rotating_ids_description">Off by default. While you are ready for calls, this phone broadcasts a new random ID every 15 minutes instead of its fixed ID, so a scanner cannot follow it from place to place. Other phones see \"Nearby phone\" and learn who you are only when they connect; anyone who connects still learns that. While it is on, this phone\'s Bluetooth name is set to \"Phone\" (your name comes back when you turn it off). Older versions of the app cannot see this phone. Streams, viewers and relays still use the fixed ID for now. Phones paired with this one in Android settings can always recognise it. Takes effect the next time this phone gets ready for calls.</string>
+    <string name="experimental_rotating_ids_description">On by default. While you are ready for calls or sharing a stream, this phone broadcasts a new random ID every 15 minutes instead of its fixed ID, so a scanner cannot follow it from place to place. Other phones see \"Nearby phone\" and learn who you are only when they connect; anyone who connects still learns that. Verified contacts who allow it can recognise you nearby (shown as unconfirmed). On Android 14 and newer it also hides this phone\'s Bluetooth name from phones that connect without being paired; on older Android the name stays readable (this does not rename your phone; see the option below). Older versions of the app cannot see this phone or be seen by it, and joining a stream from an older phone shows your fixed ID while you join. Older versions can find your streams for a while with \"Visible by handle\"; they cannot call you while \"Pseudonymous toward strangers\" is on. Phones paired with this one in Android settings can always recognise it. Takes effect the next time this phone gets ready for calls or starts a stream.</string>
+    <string name="rotating_ids_legacy_note">This phone\'s Bluetooth chip may keep its address when the ID changes, so a scanner nearby could still link your IDs. Rotating IDs protect less on this phone.</string>
+    <string name="neutral_bluetooth_name">Use a neutral Bluetooth name (\"Phone\")</string>
+    <string name="neutral_bluetooth_name_description">Off by default. Any phone that connects to you can read this phone\'s Bluetooth name before any security check, and headphones, cars and other phones show it too. On: the name becomes \"Phone\" for everything on this phone (headphones, car, watch, PC, Quick Share) and turning this off puts your name back. If you uninstall the app while this is on, the name stays \"Phone\" until you rename the phone in Android settings.</string>
+    <string name="neutral_bluetooth_name_confirm">This renames your phone for everything: headphones, your car, your watch, PCs and Quick Share will show \"Phone\". Your name now: %1$s. Turn this option off to get it back. If you uninstall the app while it is on, the name stays \"Phone\" until you rename the phone in Android settings.</string>
+    <string name="neutral_bluetooth_name_turn_on">Rename to \"Phone\"</string>
+    <string name="neutral_bluetooth_name_unknown">(not available: allow Bluetooth access first)</string>
+    <string name="neutral_bluetooth_name_saved">Your original name, to restore by hand if the app is uninstalled: %1$s</string>
+    <string name="neutral_bluetooth_name_no_saved">Your original name was not saved (the app\'s data was cleared). Rename the phone in Android settings.</string>
+    <string name="neutral_name_advice_old_android">Recommended on this phone: Android 13 and older let any phone that connects read the name.</string>
+    <string name="neutral_name_advice_legacy">Recommended on this phone: its Bluetooth chip cannot hide the name from phones that connect.</string>
+    <string name="neutral_name_advice_classic">Recommended while you use Classic Bluetooth: it shows the name to phones nearby.</string>
+    <string name="neutral_name_advice_refused">Recommended on this phone: its Bluetooth refused to hide the name, so phones that connect can read it.</string>
+    <string name="neutral_name_advice_rotating_off">Without rotating discovery IDs the name is readable by phones that connect. Turn them on to hide it on Android 14 and newer, or use this option on any phone.</string>
+    <string name="neutral_name_advice_not_needed">While rotating discovery IDs are on, phones that connect to you without being paired cannot read the name on this phone. Calls you place and streams you send still show it to the phone you connect to, and Classic Bluetooth lookups see it; this option hides it there too.</string>
+    <string name="neutral_bluetooth_name_paused">You renamed the phone, so the neutral name is switched off. Your name stays.</string>
+    <string name="neutral_bluetooth_name_migrated">An earlier version renamed this phone to \"Phone\" while rotating IDs were on. It keeps that name for now and the option below is on. Your original name was: %1$s</string>
+    <string name="neutral_bluetooth_name_keep">Keep \"Phone\"</string>
+    <string name="neutral_bluetooth_name_restore">Restore my name</string>
     <string name="people_reach_via_one">Via 1 phone</string>
     <string name="people_reach_via">Via %1$d phones</string>
+    <string name="people_reach_relayed_one">Via 1 phone · not confirmed</string>
+    <string name="people_reach_relayed">Via %1$d phones · not confirmed</string>
+    <string name="relayed_chain_required">A relayed chain is required for this test; a direct call is refused.</string>
+    <string name="relayed_route_gone">That person is no longer reachable through nearby phones. Scanning continues.</string>
+    <string name="relay_preempted">Stopping the call you were helping with, then calling…</string>
+    <string name="relay_helping_text">Helping a call nearby</string>
+    <string name="relay_stop_action">Stop</string>
+    <string name="experimental_relayed_calls">Experimental: relayed calls</string>
+    <string name="experimental_relayed_calls_description">Off by default. Lets phones nearby relay private calls for each other, in the background, and lets you call a phone one or two relays away. Relays use the old handshake, so it works only between phones that have \"Pseudonymous toward strangers\" turned off (Settings > Features); with it on, a relayed call to a phone that is not your verified contact fails. A relay carries encrypted calls it cannot read or change, but it can see who is calling whom (public identity keys) and when. Helping pauses below 20% battery (unless charging) and in Battery Saver, and your own calls and streams always come first.</string>
+    <string name="relayed_calls_help">Help calls nearby</string>
+    <string name="relayed_calls_consent">Let phones nearby relay calls to me</string>
+    <string name="relayed_calls_prompt_title">Relayed calls</string>
+    <string name="relayed_calls_prompt_body">Phones up to two relays away will broadcast that you are reachable, so people near them can learn you are within two relays. A helping phone sees public identity keys and call timing, never call content. You can change both choices in Settings.</string>
+    <string name="relayed_calls_prompt_ok">Turn on</string>
     <string name="people_voice_call">Voice call %1$s</string>
     <string name="people_video_call">Video call %1$s</string>
     <string name="call_info_open">Call info: encryption and verification</string>
@@ -318,10 +360,10 @@
     <string name="call_subject_line">Subject: %1$s</string>
     <string name="action_save">Save</string>
     <string name="action_skip">Skip</string>
-    <!-- Experimental "Share app nearby" (OfflineAppShareActivity, test_offline_app_share). -->
+    <!-- "Share app nearby" (OfflineAppShareActivity; Settings > Features switch, DEBUG test_offline_app_share). -->
     <string name="help_share_app_nearby">Share app nearby (Wi-Fi Direct)</string>
     <string name="share_nearby_title">Share app nearby</string>
-    <string name="share_nearby_disabled">Share app nearby is an experimental feature. Turn it on in Advanced settings first.</string>
+    <string name="share_nearby_disabled">Share app nearby is switched off. Turn it on under Settings > Features first.</string>
     <string name="share_nearby_permission_needed">This needs permission to use nearby Wi-Fi devices.</string>
     <string name="share_nearby_permission_denied">Without the nearby Wi-Fi permission this phone cannot start a Wi-Fi Direct network, so the app cannot be shared this way. You can still use Share this app.</string>
     <string name="share_nearby_unsupported">This phone does not support Wi-Fi Direct.</string>
@@ -345,6 +387,8 @@ The page shows these, so the other person can check the download.
 File SHA-256: %2$s
 Signing certificate SHA-256:
 %3$s</string>
+    <string name="share_nearby_device_name">While sharing, other Wi-Fi devices nearby can see this phone\'s device name: \"%1$s\". Change it under Settings > About phone > Device name if it shows your name.</string>
+    <string name="share_nearby_device_name_unknown">While sharing, other Wi-Fi devices nearby can see this phone\'s device name (Settings > About phone > Device name). Change it first if it shows your name.</string>
     <string name="share_nearby_stop">Stop sharing</string>
     <string name="share_nearby_stopped">Sharing stopped.</string>
     <string name="share_nearby_timeout">Sharing stopped after 10 minutes. Open this screen again to share again.</string>

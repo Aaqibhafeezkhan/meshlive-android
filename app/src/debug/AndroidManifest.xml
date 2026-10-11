@@ -3,7 +3,11 @@
 
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <application>
+    <!--
+        Phone test T13 only: the debug-only updater test source (test_update_latest_url=http://host:port/...)
+        is a local server standing in for GitHub. Release builds keep the default: HTTPS only.
+    -->
+    <application android:usesCleartextTraffic="true">
         <receiver
             android:name=".DebugTestAlertReceiver"
             android:exported="true" />

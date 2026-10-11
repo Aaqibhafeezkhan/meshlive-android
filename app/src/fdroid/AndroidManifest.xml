@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        The F-Droid flavour has no updater and never installs a package: F-Droid updates it. If any library
+        ever declared the install permission, the merge would still remove it here (tools/tests checks the
+        merged manifest).
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" tools:node="remove" />
+</manifest>

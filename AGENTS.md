@@ -152,7 +152,7 @@ remains valid for routine implementation and logging.
 
 ## Checks before you hand work back
 
-- `./gradlew :app:testDebugUnitTest :app:assembleDebug` and `python -B -m pytest -q tools` pass.
+- `./gradlew :app:testDebugUnitTest :app:assembleGithubDebug` and `python -B -m pytest -q tools` pass.
 - Streaming changes name the phones, the frozen APK hash and the same-settings comparison.
 - The register in docs/ARCHITECTURE.md and the owning documents are updated.
 - The diff contains no private data, and your handoff file is current.

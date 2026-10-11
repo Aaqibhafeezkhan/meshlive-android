@@ -39,12 +39,31 @@ android {
     namespace = "com.example.bluetoothtest"
     compileSdk = 36
 
+    // Distribution flavours (README "Updates"): `github` is what make_release.py builds and ships on the
+    // release page; it holds the opt-in updater (online check, download, PackageInstaller) and declares
+    // REQUEST_INSTALL_PACKAGES. `fdroid` is what the F-Droid recipe builds: no updater code runs, no
+    // install permission, no network request of its own. Both carry the "newer version nearby" notice.
+    // Build commands name the flavour: assembleGithubDebug, assembleGithubRelease, assembleFdroidRelease.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            buildConfigField("boolean", "UPDATER_AVAILABLE", "true")
+            buildConfigField("String", "DISTRIBUTION", "\"github\"")
+        }
+        create("fdroid") {
+            dimension = "distribution"
+            buildConfigField("boolean", "UPDATER_AVAILABLE", "false")
+            buildConfigField("String", "DISTRIBUTION", "\"fdroid\"")
+        }
+    }
+
     defaultConfig {
         applicationId = appId
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0-beta"
+        versionCode = 2
+        versionName = "0.2.0-beta"
         // versionCode/versionName are literals: no date, git hash or counter, so a rebuild of a commit gets
         // the same version (the make_release.py and fastlane changelog readers parse these two lines).
 
@@ -146,6 +165,16 @@ androidComponents {
             output.versionCode.set(base * 10 + (abiVersionDigits[abi] ?: 0))
         }
     }
+}
+
+// With product flavours AGP no longer defines `testDebugUnitTest` (the name becomes ambiguous), but that is the one
+// command docs, tools (tools/refresh_public_export.py) and every agent use. This alias keeps it: the github flavour's
+// unit tests run once (main code is shared), and the fdroid flavour must still compile with its tests. A single
+// class: `:app:testGithubDebugUnitTest --tests <class>`.
+tasks.register("testDebugUnitTest") {
+    group = "verification"
+    description = "Unit tests of the github flavour (debug) and a compile check of the fdroid flavour's tests."
+    dependsOn("testGithubDebugUnitTest", "compileFdroidDebugUnitTestKotlin")
 }
 
 // Every resolved configuration is locked in app/gradle.lockfile (README "Build", toolchain pins).
