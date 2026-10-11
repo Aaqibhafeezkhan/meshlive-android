@@ -16,7 +16,7 @@ address, so a boundary restart changes the RDI but not the address. The tool cou
 address" per phone (BLOCKING for P5), treats a second address for one ID inside an epoch as expected (Android
 rotates a set's address on its own 7 to 15 minute timer; INFO, reported as sequential or concurrent), compares each
 phone with the capability it declared in its advertiser log (`rotid_address_reuse: source=capability`), and prints a
-layout census (how many distinct version 5 layouts the fleet produces per kind; PLAN Design E).
+layout census (how many distinct version 5 layouts the fleet produces per kind; DECISIONS Design E).
 
 Verdict "zero carry-over": FAIL when any blocking field link or stable-prefix (version 2 / reach v4)
 exposure exists, UNMEASURED when fewer than --min-boundaries boundaries were observed on both sides, else
@@ -1288,7 +1288,7 @@ def markdown(result: dict) -> str:
                          f"{info['second_address_same_id_sequential']} | {info['second_address_same_id_concurrent']} | "
                          f"{info['declared']} | {info['consistency']} |")
     if result.get("layout_census"):
-        lines += ["", "## Layout census (distinct version 5 capability layouts per kind; PLAN Design E)",
+        lines += ["", "## Layout census (distinct version 5 capability layouts per kind; DECISIONS Design E)",
                   "| kind | sets | distinct layouts | largest layout share |", "| --- | --- | --- | --- |"]
         for kind, info in result["layout_census"].items():
             lines.append(f"| {kind} | {info['sets']} | {info['distinct_layouts']} | {info['largest_layout_share']} |")

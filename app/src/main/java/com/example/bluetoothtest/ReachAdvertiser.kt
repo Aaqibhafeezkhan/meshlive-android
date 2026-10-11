@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 /**
- * Experimental relayed calls (PLAN Design C, PROTOCOL "Reach page"): a second legacy, non-connectable,
+ * Experimental relayed calls (DECISIONS Design C, PROTOCOL "Reach page"): a second legacy, non-connectable,
  * scannable advertising set whose scan response carries the helper's best reach entries, two per page.
  * Modelled on [TitleAdvertiser]: the same service UUID (no new scan-filter slot), 250 ms interval, one page
  * per second (about four advertising events per page, R15), pages rotated in place with

@@ -20,7 +20,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 
 /**
- * Store-and-forward Messages (PLAN Design A v1, direct neighbours only). Promoted 2026-10-11 to the
+ * Store-and-forward Messages (DECISIONS Design A v1, direct neighbours only). Promoted 2026-10-11 to the
  * Settings > Features switch "Messages"; the shipped default is [CallFeatureDefaults.MESSAGES]. A DEBUG
  * benchmark launch (any `test_` extra) uses only its own `test_store_forward` extra, default off.
  * Off: no Messages entry, no hop type 11 accepted anywhere, no change to calls.

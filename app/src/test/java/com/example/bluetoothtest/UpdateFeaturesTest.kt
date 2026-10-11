@@ -83,10 +83,10 @@ class UpdateFeaturesTest {
 
     @Test
     fun theDocumentsListBothFeaturesAndTheirPhoneTest() {
-        val readme = File("../docs/ARCHITECTURE.md").takeIf { it.isFile } ?: File("docs/ARCHITECTURE.md")
+        val readme = File("../docs/SWITCHES.md").takeIf { it.isFile } ?: File("docs/SWITCHES.md")
         val text = readme.readText()
         for (needle in listOf("check_for_updates", "newer_versions_nearby", "test_check_for_updates", "test_newer_versions_nearby")) {
-            assertTrue("ARCHITECTURE register must mention $needle", text.contains(needle))
+            assertTrue("SWITCHES register must mention $needle", text.contains(needle))
         }
         assertEquals("T13", UpdateFeatures.checkForUpdates.phoneTest)
         assertEquals("T13", UpdateFeatures.newerVersionsNearby.phoneTest)

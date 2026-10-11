@@ -4,7 +4,7 @@ import java.io.InputStream
 import java.io.OutputStream
 
 /**
- * Streams for the parent side of an on-demand relay (PLAN Design C). The parent link was already accepted and
+ * Streams for the parent side of an on-demand relay (DECISIONS Design C). The parent link was already accepted and
  * authenticated by the call endpoint, so the relay copies records through its [SecureBluetoothSession] and never
  * reads or writes these streams; they only give the relay's `TransportConnection` something to hold.
  *

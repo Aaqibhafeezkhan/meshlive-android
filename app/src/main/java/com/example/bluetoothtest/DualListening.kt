@@ -5,7 +5,7 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Experimental dual listening (user question Q-P3, designed 2026-10-11; PLAN "Design D", PROTOCOL
+ * Experimental dual listening (user question Q-P3, designed 2026-10-11; DECISIONS "Design D", PROTOCOL
  * "Experimental dual listening"). Settings > Features "Reachable over both Bluetooth LE links",
  * default [ConnectivityFeatureDefaults.DUAL_LISTENING] (off until phone test T12), DEBUG benchmark
  * extra `test_dual_listening`. Pure Kotlin except [DualListeningFeature.enabled]: every rule here is

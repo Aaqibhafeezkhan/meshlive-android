@@ -2,7 +2,7 @@ package com.example.bluetoothtest
 
 /**
  * Experimental relayed private calls and multi-hop discovery (off by default; DEBUG
- * `test_relayed_calls`, Advanced setting "Experimental: relayed calls" otherwise). PLAN "Design C"
+ * `test_relayed_calls`, Advanced setting "Experimental: relayed calls" otherwise). DECISIONS "Design C"
  * owns the design and PROTOCOL "Experimental relayed calls and multi-hop discovery" the wire
  * rules; this file holds the switches, constants and the pure capability/offer helpers.
  *
@@ -26,7 +26,7 @@ object RelayedCallsFeature {
     const val EXTRA_REQUIRE = "test_relayed_calls_require"
 
     /**
-     * Experimental DEBUG topology mask, default off (README register): `test_relayed_calls_no_direct=true` makes this
+     * Experimental DEBUG topology mask, default off (docs/SWITCHES.md register): `test_relayed_calls_no_direct=true` makes this
      * phone's reach tables ignore every target's own offer (see [ReachTable]), as if no target were in its radio
      * range. A co-located lab needs it for any chain of two or more relays: the caller and every helper except
      * the last mark themselves blind, the last helper stays normal and dials the target.
@@ -210,7 +210,7 @@ internal fun ByteArray.prefixHex(): String = joinToString("") { "%02x".format(it
  * chain is torn down unless the end-to-end handshake crosses within [HANDSHAKE_MS] and the first
  * end-to-end content record from the callee (its Ringing answer to the Invite, which the caller cannot
  * forge) within [ANSWER_MS]. Heartbeats and caller-originated content prove nothing here: a caller could
- * otherwise hold a helper with liveness or an empty request alone (PLAN Design C, C3). A pair of
+ * otherwise hold a helper with liveness or an empty request alone (DECISIONS Design C, C3). A pair of
  * colluding phones can still hold one helper with a real call; that is the feature.
  */
 internal class RelayChainGuard(private val readyNs: Long) {

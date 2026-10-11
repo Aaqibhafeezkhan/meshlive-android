@@ -15,7 +15,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * Store-and-forward limits (PLAN Design A sections 5-7). Hop-local: every limit is applied by
+ * Store-and-forward limits (DECISIONS Design A sections 5-7). Hop-local: every limit is applied by
  * this phone to one authenticated adjacent identity or to its own storage, never signalled onward.
  */
 data class StoreForwardLimits(

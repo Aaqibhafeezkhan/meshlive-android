@@ -2,7 +2,7 @@ package com.example.bluetoothtest
 
 import kotlin.random.Random
 
-/** Limits of the reach table (PLAN Design C, C3). The defaults are the reviewed values. */
+/** Limits of the reach table (DECISIONS Design C, C3). The defaults are the reviewed values. */
 internal data class ReachConfig(
     /** Relays a route may cross: 2 by default (design decision 6), at most the chain limit of 4. */
     val maxRelays: Int = RelayedCalls.DEFAULT_MAX_RELAYS,
@@ -60,7 +60,7 @@ internal class ReachRoute<P : Any>(
 internal class AdvertisedReach(val entry: ReachPageEntry, val relay: Boolean)
 
 /**
- * The reach table of PLAN Design C: targets this phone has learned only from adverts it scanned
+ * The reach table of DECISIONS Design C: targets this phone has learned only from adverts it scanned
  * itself, a distance vector with an age and no sequence numbers. It is never persisted and holds no
  * identity beyond node prefixes. All times come from [clock] (elapsed milliseconds); the type [P] is
  * the dialable peer (a BleL2capPeer in the app, a plain value in tests).

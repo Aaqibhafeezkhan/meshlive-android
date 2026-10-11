@@ -1,7 +1,7 @@
 package com.example.bluetoothtest
 
 /**
- * The shipped defaults of the connectivity features promoted on 2026-10-11 (README register,
+ * The shipped defaults of the connectivity features promoted on 2026-10-11 (docs/SWITCHES.md register,
  * "Experimental, alternative and optional behaviour"). Each feature has exactly one constant here.
  * Every one stays OFF until the phone test named beside it passes; turning a feature on for users
  * who never touched its switch is then a one-line change. The privacy features BMH3 and BMH3_PSEUDONYMS

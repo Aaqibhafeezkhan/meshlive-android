@@ -68,7 +68,7 @@ sealed interface StoreForwardCompletion {
 /**
  * Store-and-forward state of this phone: its mailbox key, contacts, bundle store, ledger and
  * archive. Every decision uses only local state and the one authenticated adjacent identity of
- * the current link (hop-local, PLAN Design A section 10).
+ * the current link (hop-local, DECISIONS Design A section 10).
  */
 class StoreForwardNode(
     val nodeId: NodeId,

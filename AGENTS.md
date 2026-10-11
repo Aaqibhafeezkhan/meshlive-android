@@ -9,8 +9,8 @@ mandatory reading chains.
 1. [README.md](README.md): what the app does in a few minutes, with links to the other documents.
 2. [docs/TESTING.md](docs/TESTING.md): test scope, acceptance gates, workflow and where results live. Read it before
    you run any test on a phone.
-3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the app is built, and the register of experimental, alternative and
-   optional behaviour.
+3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the app is built.
+   [docs/SWITCHES.md](docs/SWITCHES.md) is the register of experimental, alternative and optional behaviour.
 4. [docs/PROTOCOL.md](docs/PROTOCOL.md): wire and security rules. Read it before touching anything that is sent,
    encrypted, authenticated or stored.
 5. [docs/DECISIONS.md](docs/DECISIONS.md) and [docs/PLAN.md](docs/PLAN.md) when your change touches a measured
@@ -109,7 +109,7 @@ gate is.
 - New behaviour that is not proven ships behind a flag that is **off by default** and labelled **Experimental**.
 - Never delete an experiment or the losing arm of an A/B comparison. Keep it switchable and off by default, unless it
   is impossible by first principles.
-- List every switch in the "Experimental, alternative and optional behaviour" register in docs/ARCHITECTURE.md with
+- List every switch in the "Experimental, alternative and optional behaviour" register in docs/SWITCHES.md with
   its switch and reason. Update the register whenever you add, promote or retire a switch.
 - New features may be developed while frozen-build tests run. They ship default-off and are tested after the running
   work finishes.
@@ -133,7 +133,8 @@ plans for finished features.
 | --- | --- |
 | [README.md](README.md) | Short overview and entry links |
 | [AGENTS.md](AGENTS.md) | These working rules |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design, build/distribution notes and the experimental behaviour register |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design and build/distribution notes |
+| [docs/SWITCHES.md](docs/SWITCHES.md) | Register of experimental, alternative and optional behaviour |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | Wire format and security rules |
 | [docs/TESTING.md](docs/TESTING.md) | Scope, gates, workflow, result locations, release checklist |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Measured reasons and comparisons |
@@ -161,5 +162,5 @@ behaviour in plain language, with the evidence and the tradeoff.
 
 - `./gradlew :app:testDebugUnitTest :app:assembleGithubDebug` and `python -B -m pytest -q tools` pass.
 - Streaming changes name the phones, the frozen APK hash and the same-settings comparison.
-- The register in docs/ARCHITECTURE.md and the owning documents are updated.
+- The register in docs/SWITCHES.md and the owning documents are updated.
 - The diff contains no private data, and your handoff file is current.

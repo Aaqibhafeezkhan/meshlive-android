@@ -27,7 +27,7 @@ sealed class RelayAdmission {
 }
 
 /**
- * What a call endpoint needs from the relayed-call runtime (PLAN Design C). An endpoint created without
+ * What a call endpoint needs from the relayed-call runtime (DECISIONS Design C). An endpoint created without
  * a host (feature off) never reads hop type 12 and changes no byte on air or on the link.
  */
 interface RelayHelperHost {

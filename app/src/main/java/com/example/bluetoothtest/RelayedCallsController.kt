@@ -24,7 +24,7 @@ internal data class HelperDeviceState(
 )
 
 /**
- * The runtime of experimental relayed calls (PLAN Design C) for one activity: the reach table, the idle
+ * The runtime of experimental relayed calls (DECISIONS Design C) for one activity: the reach table, the idle
  * scan, the reach pages, SETUP admission and the helper state shown in Settings. It exists only while the
  * experiment is on; the activity creates it in applyRelayedCalls and drops it when the switch goes off.
  * All radio work is bounded by [RelayHelperPolicy]; a relay already running is never cut by a pause.

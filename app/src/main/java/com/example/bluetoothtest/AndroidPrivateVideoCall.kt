@@ -1108,7 +1108,7 @@ class AndroidPrivateVideoCall(
     fun startMessageSync(peer: BleL2capPeer): Boolean {
         val nodeProvider = storeForwardNode ?: return false
         if (!canStartOutgoingPrivateCall(running.get(), state, callRunning.get())) return false
-        // Message exchanges are dialed on the endpoint's own transport only (PLAN Design D): a row listed only
+        // Message exchanges are dialed on the endpoint's own transport only (DECISIONS Design D): a row listed only
         // because of the dual hint (a GATT endpoint, a CoC offer) is not an exchange target.
         if (DualCallerPlan.listsHintedOffer(endpointTransport, peer.announcement, DualListeningFeature.enabled)) return false
         if (!callRunning.compareAndSet(false, true)) return false
@@ -3307,7 +3307,7 @@ class AndroidPrivateVideoCall(
         if (endedCallbackSent.compareAndSet(false, true)) onEnded(localFailureMessage ?: message)
     }
 
-    // ----- Experimental relayed calls (PLAN Design C) -----
+    // ----- Experimental relayed calls (DECISIONS Design C) -----
 
     /** The user's own activity ends a relay in progress at once (PLAN C5). True when one was running. */
     fun preemptRelay(): Boolean {

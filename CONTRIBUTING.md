@@ -38,7 +38,7 @@ For anything bigger than a typo, open an issue first so the approach is agreed b
 - **Measure on real phones** when you touch streaming, Bluetooth, codecs, audio or lifecycle: one frozen APK, the same settings before and after. Never silently change a requested bitrate, frame rate, resolution, encoder, audio setting, transport or buffer to make a test pass.
 - **Every phone meets the same gates.** Keep the safety guards: authentication, ordered encryption, hop-local control, admission and overload protection. If you think a limit is too low, show measured evidence.
 - **Do not call something passed without evidence.** Unmeasured stays unmeasured; a fallback is not a pass for the requested path.
-- **Experiments ship default off**, labelled Experimental, with a row in the [switch register](docs/ARCHITECTURE.md#experimental-alternative-and-optional-behaviour). The losing arm of an A/B stays switchable.
+- **Experiments ship default off**, labelled Experimental, with a row in the [switch register](docs/SWITCHES.md). The losing arm of an A/B stays switchable.
 - **Device-family policies** (SoC, vendor skin, Bluetooth stack, codec component) need a matcher, official sources (AOSP, CDD or API docs, vendor docs, Bluetooth SIG), test data from more than your own phone, a confidence level and an off switch, in `DeviceFamilyPolicy.kt` and `tools/device_policy_registry.json`.
 - **Protocol or security changes** (wire format, identity, encryption, admission, message storage) need a written design in [docs/PROTOCOL.md](docs/PROTOCOL.md) and a review before merge. Do not post exploit details publicly.
 - **Docs**: keep each fact in one document and replace outdated text instead of appending. Explain a changed assumption in plain language: what was wrong, what changed, why, and the evidence.
@@ -75,7 +75,7 @@ The repository is public and permanent. Never commit, paste into an issue or put
 - [ ] The change is narrow and a focused regression covers it.
 - [ ] `./gradlew :app:testDebugUnitTest :app:assembleGithubDebug` and `python -B -m pytest -q tools` pass.
 - [ ] Streaming changes name the phones, the frozen APK hash and the same-settings comparison.
-- [ ] New behaviour is default off, labelled Experimental and registered in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#experimental-alternative-and-optional-behaviour).
+- [ ] New behaviour is default off, labelled Experimental and registered in [docs/SWITCHES.md](docs/SWITCHES.md).
 - [ ] Protocol or security changes link to a reviewed design in docs/PROTOCOL.md.
 - [ ] The documents that own the changed behaviour are updated.
 - [ ] Commits are signed off, the diff contains no private data, and substantial AI assistance is disclosed.

@@ -86,7 +86,7 @@ python tools/fetch_native_sources.py   # downloads the pinned libaom and libopus
 ./gradlew :app:testDebugUnitTest :app:assembleGithubDebug
 ```
 
-The APK is `app/build/outputs/apk/github/debug/app-github-debug.apk`. Developers can read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how it is built, build notes, the list of experimental switches) and [docs/PROTOCOL.md](docs/PROTOCOL.md) (wire formats and security rules). Test results are in [MeshLive/meshlive-benchmarks](https://github.com/MeshLive/meshlive-benchmarks).
+The APK is `app/build/outputs/apk/github/debug/app-github-debug.apk`. Developers can read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how it is built, build notes), [docs/SWITCHES.md](docs/SWITCHES.md) (the list of experimental switches) and [docs/PROTOCOL.md](docs/PROTOCOL.md) (wire formats and security rules). Test results are in [MeshLive/meshlive-benchmarks](https://github.com/MeshLive/meshlive-benchmarks).
 
 ## Documentation
 
@@ -95,7 +95,8 @@ The APK is `app/build/outputs/apk/github/debug/app-github-debug.apk`. Developers
 | Install, update, verify, use the app, get answers | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) |
 | Know what is exposed and what is hidden | [docs/PRIVACY.md](docs/PRIVACY.md) |
 | See which phones work | [docs/DEVICES.md](docs/DEVICES.md) |
-| Understand how it is built, and the experimental switches | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Understand how it is built | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Look up an experimental or optional switch | [docs/SWITCHES.md](docs/SWITCHES.md) |
 | Implement or review the wire format and security rules | [docs/PROTOCOL.md](docs/PROTOCOL.md) |
 | See what is unfinished | [docs/PLAN.md](docs/PLAN.md) |
 | Test on phones, or read why a measured choice was made | [docs/TESTING.md](docs/TESTING.md), [docs/DECISIONS.md](docs/DECISIONS.md) |

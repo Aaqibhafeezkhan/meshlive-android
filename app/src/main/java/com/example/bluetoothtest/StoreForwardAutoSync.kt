@@ -40,7 +40,7 @@ object StoreForwardAutoSyncFeature {
 enum class OutboxStatus {
     /** Waiting for the recipient (or a courier). */
     QUEUED,
-    /** Handed to a courier, best effort. Needs the carrier role (PLAN Design A v2, hard-off in v1). */
+    /** Handed to a courier, best effort. Needs the carrier role (DECISIONS Design A v2, hard-off in v1). */
     CARRIED,
     /** The recipient's phone holds it (DELIVERED_LOCAL) or a receipt arrived. */
     DELIVERED,

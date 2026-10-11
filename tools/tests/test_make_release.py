@@ -228,7 +228,7 @@ class MakeReleaseTest(unittest.TestCase):
         self.assertIn("GPL-3.0-or-later", notes)
         self.assertIn("Change 72", notes)
         self.assertIn(names["armeabi-v7a"], notes)
-        gradle = [c for c in self.calls if "assembleRelease" in " ".join(c)][0]
+        gradle = [c for c in self.calls if "assembleGithubRelease" in " ".join(c)][0]
         for flag in ("--no-daemon", "-PsplitAbis=true", "-PenableArmeabiV7a=true"):
             self.assertIn(flag, gradle)
 
@@ -241,7 +241,7 @@ class MakeReleaseTest(unittest.TestCase):
 
     def test_wrong_version_code_refused(self):
         def runner(args, cwd, input_bytes=None):
-            if "assembleRelease" in " ".join(args):
+            if "assembleGithubRelease" in " ".join(args):
                 write_gradle_outputs(cwd, codes={**ABI_CODES, "arm64-v8a": 77})
                 return b""
             return mr.run(args, cwd, input_bytes)

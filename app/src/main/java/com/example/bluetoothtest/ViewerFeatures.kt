@@ -1,7 +1,7 @@
 package com.example.bluetoothtest
 
 /**
- * Shipped defaults of the stream-viewer features (README register, "Experimental, alternative and
+ * Shipped defaults of the stream-viewer features (docs/SWITCHES.md register, "Experimental, alternative and
  * optional behaviour"). One constant per feature, in the same pattern as [ConnectivityFeatureDefaults]:
  * it stays OFF until the phone test named beside it passes; turning the feature on for users who never
  * touched its switch is then a one-line change. A user's explicit choice always wins, and a DEBUG
@@ -10,7 +10,7 @@ package com.example.bluetoothtest
 internal object ViewerFeatureDefaults {
     /**
      * Stale-picture overlay, honest "last update" label and `viewer_frame_age` log for stream viewers
-     * (T11: relay loss and rejoin on phones; README register).
+     * (T11: relay loss and rejoin on phones; docs/SWITCHES.md register).
      */
     const val FRAME_AGE = false
 }

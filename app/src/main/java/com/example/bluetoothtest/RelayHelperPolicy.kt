@@ -48,7 +48,7 @@ internal data class RelayHelperPlan(
 }
 
 /**
- * When a phone helps with other people's calls (PLAN Design C, C5; design decision 2: on by default while
+ * When a phone helps with other people's calls (DECISIONS Design C, C5; design decision 2: on by default while
  * the app runs, paused below 20 % battery or in Battery Saver). Pure, so every combination is tested.
  * A relayed call already running is not cut by a pause; only [preempts] ends it.
  */

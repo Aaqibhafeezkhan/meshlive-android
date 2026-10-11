@@ -111,7 +111,7 @@ We list these so you can judge the risk for your own situation. They are open wo
   person for contacts you care about; unverified peers are trusted on first use at most.
 - **No live revocation for groups.** Static group forwarding does not support removing a member and re-keying.
 - **Experimental features are experimental.** Anything labelled Experimental in
-  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is off by default and has had less review.
+  [docs/SWITCHES.md](docs/SWITCHES.md) is off by default and has had less review.
 - **Emergency wipe has stated limits** (PROTOCOL "Emergency wipe"): it cannot reach copies outside the app and cannot
   promise erasure of flash storage.
 - **Reproducible builds are checked on one platform only.** Two clean release builds from different folders produce

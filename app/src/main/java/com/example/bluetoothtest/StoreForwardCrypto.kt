@@ -23,7 +23,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /*
- * Experimental store-and-forward messages v1 (PLAN Design A, PROTOCOL "Store-and-forward messages").
+ * Experimental store-and-forward messages v1 (DECISIONS Design A, PROTOCOL "Store-and-forward messages").
  * Off by default (StoreForwardFeature). Nothing here changes BMH2/BMS1/BME1 or a live session.
  *
  * - Contact card `BCC1`: identity SPKI + compressed P-256 mailbox key, signed by the identity key.

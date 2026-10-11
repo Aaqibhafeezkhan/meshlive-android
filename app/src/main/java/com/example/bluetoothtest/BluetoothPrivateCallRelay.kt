@@ -238,7 +238,7 @@ class BluetoothPrivateCallRelay(
     }
 
     /**
-     * Experimental relayed calls (PLAN Design C): serves a SETUP that the call endpoint read from its
+     * Experimental relayed calls (DECISIONS Design C): serves a SETUP that the call endpoint read from its
      * parent. Connects to the next hop as central (the target itself when [nextBudget] is 0, else another
      * helper that receives a regenerated SETUP), then reports READY upstream through [onReady] and
      * copies the ordered end-to-end records exactly as [start] does. [onFailed] runs once, only before

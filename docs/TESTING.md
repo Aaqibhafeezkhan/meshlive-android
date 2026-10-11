@@ -795,7 +795,7 @@ validates its declared simulation separately from streaming performance.
 A case may carry `tunables`, exact debug launch extras applied to every participant: `stream_buffer_kib`,
 `stream_flush`, `playback_delay_ms`, `decoder_low_latency`, `release_video_at_playout`, `source_gatt_priority`,
 `forwarder_gatt_priority` and `decoder`. Unknown names fail the launch, and different tunables are different case IDs.
-The LE link tunables that the architecture register describes (`coc_sequenced_phy`, `gatt_request_mtu`,
+The LE link tunables that the switch register ([SWITCHES.md](SWITCHES.md)) describes (`coc_sequenced_phy`, `gatt_request_mtu`,
 `gatt_aligned_writes`, `ble_phy`, `link_pacer_peer_seed`) work the same way. Every LE link logs `BENCHMARK le_conn_params`
 (interval, latency, supervision timeout, status and payload bounds) whenever the stack reports a connection update; read
 it before attributing an LE throughput result to a phone. Experimental voice calls and push-to-talk (default off) use
