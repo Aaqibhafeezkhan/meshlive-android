@@ -1,6 +1,6 @@
 # MeshLive
 
-**Live video, voice calls and messages between nearby phones, over Bluetooth, with no internet.**
+**Decentralized, encrypted video calls and live streams over a Bluetooth mesh. No internet needed.**
 
 > **Privacy (0.2.0-beta):** MeshLive now broadcasts a random ID that changes every 15 minutes instead of a fixed
 > node-ID prefix, hides both phones' identity keys during calls, and shows a stranger a throwaway identity instead of
