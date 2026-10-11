@@ -126,7 +126,7 @@ SHA-256 fingerprint is:
 ```
 
 Check `apksigner verify --print-certs app.apk` against it and follow the steps in the "Verifying a release" section
-of the [README](README.md). An APK with a different fingerprint comes from a different publisher: do not install it,
+of [docs/INSTALL.md](docs/INSTALL.md#verifying-a-release). An APK with a different fingerprint comes from a different publisher: do not install it,
 and please tell us where you found it. The signing key lives only on the maintainer's machine; the CI workflow holds
 no signing key and builds no APK.
 

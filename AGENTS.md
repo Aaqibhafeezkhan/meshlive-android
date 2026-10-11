@@ -6,7 +6,7 @@ mandatory reading chains.
 
 ## Read first
 
-1. [README.md](README.md): what the app does, install, verification, and the map of the other documents.
+1. [README.md](README.md): what the app does in a few minutes, with links to the other documents.
 2. [docs/TESTING.md](docs/TESTING.md): test scope, acceptance gates, workflow and where results live. Read it before
    you run any test on a phone.
 3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the app is built and the register of experimental, alternative
@@ -116,7 +116,7 @@ plans for finished features.
 
 | Document | Owns |
 | --- | --- |
-| [README.md](README.md) | App behaviour, install, verification, the documentation map |
+| [README.md](README.md) | Short overview and entry links |
 | [AGENTS.md](AGENTS.md) | These working rules |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design and the experimental behaviour register |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | Wire format and security rules |

@@ -12,7 +12,8 @@ not open a public issue; read [SECURITY.md](SECURITY.md) first.
 
 | You want to know | Read |
 | --- | --- |
-| What the app does, how to install and verify it | [README.md](README.md) |
+| What the app does, in a few minutes | [README.md](README.md) |
+| Install, verify, features, FAQ, device list, privacy | [INSTALL](docs/INSTALL.md), [USER_GUIDE](docs/USER_GUIDE.md), [DEVICES](docs/DEVICES.md), [PRIVACY](docs/PRIVACY.md) |
 | How it is built, and the register of experimental switches | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | The wire format and security rules | [docs/PROTOCOL.md](docs/PROTOCOL.md) |
 | Test scope, acceptance gates, how to measure | [docs/TESTING.md](docs/TESTING.md) |
@@ -49,7 +50,7 @@ Steps:
 
    On Windows use `gradlew.bat`. Gradle verifies every dependency against `gradle/verification-metadata.xml` and the
    lockfiles. If you change a dependency, update the lockfiles and verification metadata together (the steps are in
-   the Build section of the [README](README.md)).
+   the "Build notes" in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#build-notes)).
 4. Run the host tool tests:
 
    ```

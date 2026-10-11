@@ -50,7 +50,7 @@ Added 2026-10-10 (API only; the UI binds it). Fingerprints, codes and checks are
 
 ## Build tag in the link hello and update verification (updater, default on; wire change 2026-10-11)
 
-Status: designed 2026-10-11 for the "Newer version nearby" notice (README register "Check for updates" and "Tell me about newer versions nearby"). No record type, length or version number changes, so every BMH2 build keeps interoperating. Not yet tested on phones (ROADMAP).
+Status: designed 2026-10-11 for the "Newer version nearby" notice (ARCHITECTURE register "Check for updates" and "Tell me about newer versions nearby"). No record type, length or version number changes, so every BMH2 build keeps interoperating. Not yet tested on phones (ROADMAP).
 
 **Why the hello, and why not a new field.** The link hello is the one authenticated artifact both phones already exchange on every connection, and its signature binds it into the session transcript. `HandshakeHelloCodec` is exact-length (a longer capability block or trailing bytes fail with "Unsupported capability version" or "Trailing handshake data"), so a new field would cut off every older build, including the published 0.1.0-beta. A new hop record type is also rejected as unknown by older readers. The hello does have two places an older build cannot object to: a transport-mask bit it never tests, and a 32-byte nonce it treats as opaque.
 
@@ -70,7 +70,7 @@ nonce[0..1] = tag, big-endian u16:  bit 15 = project release key,  bits 14..0 = 
 nonce[2..31] = 30 random bytes
 ```
 
-`R = installed longVersionCode / 10`: the base `versionCode` of `app/build.gradle.kts` with the ABI digit removed (README "Distribution": code = base x 10 + 0/1/2), so the tag never says which CPU type a phone has. A debug or non-split build (code below 10) has no release number and sends no tag. Bit 15 is set when the installed APK's only signer is the published release certificate pinned in the app (`AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256`); an F-Droid build, a self-built APK and a debug build send 0. The tag is sent only in **link** hellos (never end-to-end hellos, which a relay copies, so only the adjacent phone learns it), never in an advertisement, and only while the user's switch "Tell me about newer versions nearby" is on. A DEBUG benchmark launch sends it only with `test_newer_versions_nearby=true`; otherwise the hello bytes are exactly as before.
+`R = installed longVersionCode / 10`: the base `versionCode` of `app/build.gradle.kts` with the ABI digit removed (ARCHITECTURE "Distribution and releases": code = base x 10 + 0/1/2), so the tag never says which CPU type a phone has. A debug or non-split build (code below 10) has no release number and sends no tag. Bit 15 is set when the installed APK's only signer is the published release certificate pinned in the app (`AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256`); an F-Droid build, a self-built APK and a debug build send 0. The tag is sent only in **link** hellos (never end-to-end hellos, which a relay copies, so only the adjacent phone learns it), never in an advertisement, and only while the user's switch "Tell me about newer versions nearby" is on. A DEBUG benchmark launch sends it only with `test_newer_versions_nearby=true`; otherwise the hello bytes are exactly as before.
 
 **Receiver rules.**
 

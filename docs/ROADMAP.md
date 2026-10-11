@@ -1,7 +1,7 @@
 # Roadmap
 
 This file lists unfinished work and open design questions. Current behaviour is described in
-[../README.md](../README.md) and [ARCHITECTURE.md](ARCHITECTURE.md); the wire format and security rules are in
+[../README.md](../README.md), [USER_GUIDE.md](USER_GUIDE.md) and [ARCHITECTURE.md](ARCHITECTURE.md); the wire format and security rules are in
 [PROTOCOL.md](PROTOCOL.md); acceptance gates and how to measure are in [TESTING.md](TESTING.md); measured reasons behind
 existing policies are in [DECISIONS.md](DECISIONS.md). When an item is finished, its description moves to the document
 that owns it and the item is removed.
@@ -120,7 +120,7 @@ by default since 0.2.0-beta (one constant each; an explicit stored choice wins).
 viewer requests, forwarders, call-relay chains), phase 2 (presence leases, `BDX1`, the recognition table), reach pages
 version 6 for relayed calls and non-discoverable connectable sets on Android 14+; formats and vectors are in PROTOCOL.md
 under "Experimental rotating discovery IDs". Measured once, on four phones: no field carried over any of three ID
-changes (README "What nearby phones can see"). Not measured: battery cost, the Bluetooth name read on the A15s, an
+changes (PRIVACY.md "Measurements"). Not measured: battery cost, the Bluetooth name read on the A15s, an
 active attacker holding a contact's key, fake adverts, relays with the new handshake and abuse limits. Open design
 question: the monotonic epoch never returns after a backward clock step, so a lead of 3 to 96 epochs leaves a phone
 unable to receive a version 5 call until it recovers. The list below was the plan; items 0 and 1 were exercised in that
@@ -401,7 +401,7 @@ That is a protective default, not a measured limit: no headset-coexistence measu
   real phone screenshots in `fastlane/` and the inclusion requests (the application ID is already the final
   `io.github.meshlive.app`).
 - **Release verification and field reports.** The About screen shows the app version and the signing-certificate
-  fingerprint, and Export diagnostics copies the block defined in the README section "Verifying a release" (no media,
+  fingerprint, and Export diagnostics copies the block defined in the INSTALL.md section "Verifying a release" (no media,
   messages, contact names or full keys). The current builder is a minimal fallback; the full block must come from
   bounded in-memory records the app keeps (connection, adaptive-PHY and codec events, device-policy state), never from
   logcat: release builds strip `Log.v/d/i` (`app/proguard-release-logs.pro`), and other apps' logs are not readable.

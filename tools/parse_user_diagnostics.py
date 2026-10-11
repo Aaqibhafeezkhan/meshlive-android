@@ -5,7 +5,7 @@
     python tools/parse_user_diagnostics.py report.txt --format text
     type report.txt | python tools/parse_user_diagnostics.py -
 
-The field list is the contract in README "Verifying a release" (Diagnostics block). The parser is an
+The field list is the contract in docs/ARCHITECTURE.md "Diagnostics block". The parser is an
 allowlist: an unknown field, a MAC-like value or a long hex run (a possible key) is an error, because
 the export must never carry media, messages, contact names, addresses or full identity keys.
 A user report is always unverified evidence: it never edits the registry, it only drafts text for a

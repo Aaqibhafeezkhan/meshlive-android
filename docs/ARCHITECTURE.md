@@ -350,7 +350,7 @@ confidence by itself).
 - **Debug launch extras.** Benchmark behaviour is selected with `test_*` launch extras and benchmark tunables
   (the bracketed names in the register). They exist only in debug launches; normal sessions never read them.
 - **Export diagnostics.** About > Export diagnostics copies one bounded text block (never media, messages, contact
-  or peer names, addresses or full keys) for GitHub issue forms. README describes the exact contract.
+  or peer names, addresses or full keys) for GitHub issue forms. The exact contract is under "Diagnostics block" below.
 
 ## The desktop receiver and file sender
 
@@ -386,6 +386,101 @@ The harness lives in `tools/` and never touches a phone unless a run is explicit
 
 [TESTING.md](TESTING.md) owns the scope, acceptance gates and commands. Failed, interrupted and unmeasured cases stay
 visible: a generated case is not a result.
+
+## Distribution and releases
+
+For maintainers and packagers. Users: see [INSTALL.md](INSTALL.md).
+
+- **Channels.** GitHub Releases (primary, signed APKs), F-Droid and IzzyOnDroid. No Play Store for now. Draft F-Droid
+  metadata: `distribution/fdroid/<applicationId>.yml`; IzzyOnDroid checklist: `distribution/izzyondroid-notes.txt`;
+  store text and changelogs: `fastlane/metadata/android/en-US/` (`changelogs/<versionCode>.txt` is required for each
+  published APK code, and `make_release.py` refuses a release without them; `images/phoneScreenshots/` is empty until
+  real screenshots exist).
+- **ABI split.** Release builds use `-PsplitAbis=true -PenableArmeabiV7a=true` (set by `make_release.py`; default
+  off, so debug and benchmark builds stay one arm64 APK). Outputs: arm64-v8a, armeabi-v7a and optionally universal.
+  `versionCode` in `app/build.gradle.kts` is the base; each APK's code is `base * 10 + digit` (universal 0,
+  armeabi-v7a 1, arm64-v8a 2: the Signal/F-Droid convention, so a device that supports both prefers 64-bit).
+  Example: base 1 gives 10, 11, 12. `make_release.py` cross-checks Gradle's `output-metadata.json`, each APK's native
+  ABIs, the 16 KB page-size check for 64-bit libraries (`tools/check_apk_16kb.py`) and that every APK has exactly the
+  expected single signer.
+- **Flavours.** `github` is the release page's build (`tools/make_release.py` runs `:app:assembleGithubRelease`; the in-app updater and its install permission live only there); `fdroid` is the F-Droid recipe's (`gradle: [fdroid]`, outputs `app-fdroid-<abi>-release-unsigned.apk`). Both carry the "newer version nearby" note. The APK of one source cannot update the other: F-Droid signs its own build, and the in-app updater is offered only to a copy that carries the release key. Neither flavour embeds a build time, so reproducibility is unchanged (`tools/check_reproducible_build.py` defaults to `:app:assembleFdroidRelease`).
+- **Deterministic version.** `versionName`/`versionCode` are literals (no date or git hash). The APK carries no Google dependency-info block (`dependenciesInfo` off). **Reproducible builds.** `python -B tools/check_reproducible_build.py build --tree-a DIR_A --tree-b DIR_B -- -PsplitAbis=true -PenableArmeabiV7a=true -PuniversalApk=false` builds the unsigned release (release key never read; build cache off; sequential; refuses to start when memory use is high) in two clean checkouts at different paths and compares every APK entry; `compare A.apk B.apk` compares two existing APKs ignoring the META-INF signature files, as F-Droid does. Result 2026-10-11 (AGP 8.13.2, Gradle 8.13, JDK 21, Windows): both ABIs bit-identical in two checkouts at different paths. The first run differed only in `libbluetooth_video_native.so`, because libopus `__FILE__`/assert strings embedded the checkout path; `app/src/main/cpp/CMakeLists.txt` now maps the libopus, libaom, app-source and build directories with `-ffile-prefix-map`. Not yet verified: a Linux build (the F-Droid buildserver, JDK 17, Linux NDK) against a Windows build, and the signed APK; so F-Droid still signs its own build and `Binaries` stays commented out in the recipe. A release signed with our key must be re-checked with `compare` against the F-Droid-built APK before enabling it.
+- **Application ID.** The app name is MeshLive and the application ID is `io.github.meshlive.app` (the draft
+  F-Droid metadata is `distribution/fdroid/io.github.meshlive.app.yml`). The benchmark harness uses the same ID;
+  set `MESHLIVE_APP_ID` to drive a build with another ID. The Kotlin package, `namespace`, proguard rules and the
+  FileProvider authority (`${applicationId}`) need no change; `-PappId=<id>` builds a trial APK with another ID. A
+  new ID is a different app to Android: installs of the old ID are not updated, and the signing key stays the same.
+  For a later name change edit `app_name` in `app/src/main/res/values/strings.xml`, `RELEASE_BASENAME` in
+  `tools/make_release.py` and `fastlane/metadata/android/en-US/title.txt`.
+- **Native sources for a clean checkout.** libaom and libopus are not in Git: `python tools/fetch_native_sources.py`
+  downloads the pinned versions (see the README, "Build from source"). Needs NDK 28.2.13676358, CMake
+  3.22.1, JDK 21 and Perl.
+- **Dependency licences.** [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md), "Runtime dependency licences". All
+  Apache-2.0 except libaom (BSD-2-Clause plus the AOM patent licence) and libopus (BSD-3-Clause); nothing
+  proprietary.
+- **Open items before an F-Droid request.** public repository and tag; a final non-`com.example` application id; real screenshots; run the split-APK recipe through `fdroid build` on a buildserver image (`fdroid readmeta`/`lint` of the draft pass with fdroidserver 2.4.5; the srclib `distribution/fdroid/srclibs/libaom.yml` goes to fdroiddata too) and cut a release built with AGP 8.13.2 or newer (v0.1.0-beta used 8.13.0-rc01), then point the recipe's `commit` at that tag.
+
+### Diagnostics block (contract for "Export diagnostics")
+
+The About screen's Export diagnostics button copies one text block that users paste into the GitHub issue forms;
+`python tools/parse_user_diagnostics.py report.txt` turns it into a DeviceFamilyPolicy evidence suggestion (a draft
+for a human to check against official sources; it never edits the registry and a user report never raises
+confidence by itself). The parser is an allowlist and rejects any other field.
+
+Never exported: media, message content, contact or peer names, Bluetooth or Wi-Fi addresses, full identity or session
+keys, account or location data. Identity is only a non-reversible short hash: the first 6 bytes (12 lowercase hex) of
+SHA-256 over `"bluetoothvideo-diag-v1:"` + the phone's own public node key; each peer is the same hash of that peer's
+public node key.
+
+Layout: a header line `=== BLUETOOTH-VIDEO DIAGNOSTICS v1 ===`, the lines below in any order, then
+`=== END (lines=N) ===` where N counts the lines between (detects truncated pastes). At most 16 KB.
+
+| Line | Content |
+| --- | --- |
+| `app.version`, `app.build`, `app.build_type` | versionName, versionCode, `release` or `debug` |
+| `app.signing_sha256` | SHA-256 of the installed APK's signing certificate, colon-separated uppercase (`PackageManager` signing info) |
+| `device.manufacturer`, `device.model`, `device.soc` | `Build.MANUFACTURER`, `Build.MODEL`, SoC manufacturer + model (`Build.SOC_*`, API 31+, else `unknown`) |
+| `device.android`, `device.sdk`, `device.security_patch` | release string, API level, `Build.VERSION.SECURITY_PATCH` |
+| `bluetooth.le_2m`, `le_coded`, `le_extended_advertising`, `le_coc` | `true`/`false` from `BluetoothAdapter` (`isLe2MPhySupported`, `isLeCodedPhySupported`, `isLeExtendedAdvertisingSupported`) and API level 29+ for CoC |
+| `bluetooth.le_max_adv_data_length` | optional, `getLeMaximumAdvertisingDataLength` |
+| `identity.short_hash` | the phone's own short hash (above) |
+| `device_policy` | `matched=id1,id2 \| registry=N`: ids of DeviceFamilyPolicy entries that match this phone (`matched=none` if none) and the registry size |
+| `conn` (up to 50, newest last) | ` \| `-separated `key=value`: `t` (UTC ISO-8601), `transport` (`gatt`/`coc`/`classic`), `role` (`central`/`peripheral`), `peer` (short hash), `status` (stack status code or `ok`), `phy_req`, `phy_obs` (`1M`/`2M`/`coded`), `mtu_req`, `mtu_obs`, `interval_req_ms`, `interval_obs_ms`, `outcome` (`connected`/`failed`/`timeout`/`disconnected`), `reason` (short token) |
+| `adaptive_phy` (up to 50) | `t`, `link`, `from`, `to`, `reason` (as the `BENCHMARK adaptive_phy` line), `kbps`, `blocked` |
+| `codec` (up to 20) | `t`, `role` (`tx`/`rx`), `mime`, `component` (codec name), `hw` (`true`/`false`), `req` and `eff` (requested and effective `WxH@fps/kbps`) |
+
+Example start: `app.version: 1.0`, `app.build: 1`, `device.model: SM-S901B`, `device_policy: matched=none | registry=4`,
+`conn: t=2026-10-10T10:00:00Z | transport=coc | role=central | peer=abcdef012345 | status=42 | phy_req=2M | phy_obs=1M | outcome=failed | reason=phy_unavailable`.
+
+### Build notes
+
+Extra notes for the build steps in the [README](../README.md#build-from-source).
+
+- **Flavours.** Two distribution flavours (`app/build.gradle.kts` `productFlavors`): `github` (what the release page ships, with the opt-in updater and `REQUEST_INSTALL_PACKAGES`) and `fdroid` (what the F-Droid recipe builds; no updater, no install permission). Name the flavour in build tasks: `:app:assembleGithubDebug` (APK `app/build/outputs/apk/github/debug/app-github-debug.apk`, the one `tools/deploy_build.py` installs), `:app:assembleGithubRelease`, `:app:assembleFdroidRelease`. `:app:testDebugUnitTest` is an alias (AGP defines none once flavours exist): the github flavour's unit tests run once, and the fdroid flavour's main and test code must compile; one class: `:app:testGithubDebugUnitTest --tests <class>`. The plain `assembleDebug`/`assembleRelease` aggregates would compile the native libraries twice, so avoid them. `:app:processGithubReleaseManifest :app:processFdroidReleaseManifest` followed by `python -B -m pytest tools/tests/test_flavour_manifests.py` checks the merged manifests.
+- **Application ID.** `io.github.meshlive.app`. The Kotlin package and `namespace` stay `com.example.bluetoothtest`,
+  so launch components are `io.github.meshlive.app/com.example.bluetoothtest.MainActivity`. See
+  "Distribution and releases" above.
+- **Pinned toolchain.** The Gradle wrapper checks `distributionSha256Sum` against every Gradle download.
+  `gradle/verification-metadata.xml` holds the SHA-256 of every plugin and dependency artifact and Gradle fails a build
+  whose download differs. `buildscript-gradle.lockfile` (plugins) and `app/gradle.lockfile` (every `:app`
+  configuration) lock resolved versions. To change a version, update them together: (1) for Gradle, change
+  `distributionUrl` and set `distributionSha256Sum` to the official `.sha256` for that distribution; (2) for
+  dependencies, edit `gradle/libs.versions.toml` and run
+  `./gradlew --no-configuration-cache --write-locks --write-verification-metadata sha256 help :app:assembleGithubDebug :app:assembleFdroidDebug :app:assembleGithubRelease :app:assembleFdroidRelease :app:testDebugUnitTest`
+  (add any other task you run, because tools such as AAPT2 and lint are resolved only when their task runs; a new
+  Android Gradle Plugin needs the command on each OS or the published checksums added by hand); (3) review the lockfile
+  and verification diff and confirm an `--offline` build.
+- **Release logging.** `proguard-release-logs.pro` applies to the minified release build only: R8 removes
+  `Log.v/d/i`, so release logcat keeps warnings, errors and the `BENCHMARK device_policy` line. Debug builds keep every
+  line, including `BENCHMARK` lines.
+- **Desktop receiver.** The Windows C# receiver implements the older video-only `BTV2` path; current `BTV3` audio and
+  normal discovery integration are unfinished. Its offline cryptographic self-test is
+  `dotnet run --project receiver/BluetoothVideoReceiver.csproj -- --self-test`.
+- **Test-video generator.** `tools/video-stress-generator/` (Python package `videostress`; run
+  `python -m videostress --help` from that folder, or set `VIDEO_STRESS_GENERATOR` to point elsewhere).
+- **Benchmarks.** Copy `tools/benchmark_devices.example.json` to `tools/benchmark_devices.json` (git-ignored) and fill
+  in your own phones' adb serials and aliases; `tools/benchmark_scope.json` lists the reference aliases. See
+  [TESTING.md](TESTING.md).
 
 ## Experimental, alternative and optional behaviour
 
