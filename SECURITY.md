@@ -102,10 +102,11 @@ We list these so you can judge the risk for your own situation. They are open wo
 - **Bluetooth metadata is visible.** Anyone in radio range can see advertisements, connection timing, and the size
   and timing of encrypted records. Encryption protects content, not the fact that you are communicating. A relay
   also learns the identities of its direct neighbours.
-- **A stable discovery prefix is broadcast by default.** Discovery advertises a stable identifier prefix, so a passive
-  scanner could recognise the same phone over time. Rotating discovery IDs exist behind an **Experimental** switch
-  and are not yet validated on all phones; see PROTOCOL "Experimental rotating discovery IDs" for what remains.
-  Phones paired at the operating-system level, and the Classic Bluetooth address, remain trackable.
+- **Discovery hides identity only from passive listeners.** Phones broadcast a random ID that changes every 15
+  minutes, calls hide both identities, and strangers see a throwaway identity until you accept. Someone who connects
+  to your phone, or whose call you accept, can still learn who you are; a live stream shows its source; Bluetooth
+  Classic uses the permanent hardware address; phones paired at the operating-system level can recognise each other;
+  on Android 13 and older a connecting phone can read the Bluetooth device name. See [docs/PRIVACY.md](docs/PRIVACY.md).
 - **Identity is not a person.** A cryptographic identity does not prove who owns a phone. Compare fingerprints in
   person for contacts you care about; unverified peers are trusted on first use at most.
 - **No live revocation for groups.** Static group forwarding does not support removing a member and re-keying.
@@ -113,8 +114,9 @@ We list these so you can judge the risk for your own situation. They are open wo
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is off by default and has had less review.
 - **Emergency wipe has stated limits** (PROTOCOL "Emergency wipe"): it cannot reach copies outside the app and cannot
   promise erasure of flash storage.
-- **Builds are not bit-for-bit reproducible.** The source manifest binds the source files that went into a release,
-  not the APK bytes. The signature is what proves who built an APK.
+- **Reproducible builds are checked on one platform only.** Two clean release builds from different folders produce
+  identical unsigned APKs on Windows; a Linux comparison has not been done yet. The signature is what proves who built
+  an APK.
 
 ## Verifying what you install
 
