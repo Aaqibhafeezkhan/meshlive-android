@@ -9,19 +9,15 @@ mandatory reading chains.
 1. [README.md](README.md): what the app does in a few minutes, with links to the other documents.
 2. [docs/TESTING.md](docs/TESTING.md): test scope, acceptance gates, workflow and where results live. Read it before
    you run any test on a phone.
-3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the app is built and the register of experimental, alternative
-   and optional behaviour.
+3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the app is built, and the register of experimental, alternative and
+   optional behaviour.
 4. [docs/PROTOCOL.md](docs/PROTOCOL.md): wire and security rules. Read it before touching anything that is sent,
    encrypted, authenticated or stored.
-5. [docs/DECISIONS.md](docs/DECISIONS.md) and [docs/ROADMAP.md](docs/ROADMAP.md) when your change touches a measured
+5. [docs/DECISIONS.md](docs/DECISIONS.md) and [docs/PLAN.md](docs/PLAN.md) when your change touches a measured
    limit or unfinished work.
-6. Your **handoff file**, if one exists. Create it from [docs/agents/HANDOFF_TEMPLATE.md](docs/agents/HANDOFF_TEMPLATE.md)
-   and keep it **outside Git**: in an ignored path such as `local/` (add the path to `.git/info/exclude` if the
-   repository's `.gitignore` does not already cover it) or in a folder outside the checkout. It records the current
-   build, device assignments, open issues and next actions, and it contains private device data. Read it completely
-   at the start of each work period and update it when something changes.
+6. Your local **handoff note**, if one exists (see [Handoffs](#handoffs)). Read it completely at the start of each work period.
 
-## Roles
+## Work and ownership
 
 - **Coordinator.** One person or agent owns integration, shared source, builds and the results ledger. Nobody else
   edits those unless the coordinator explicitly hands them over.
@@ -33,7 +29,18 @@ mandatory reading chains.
 
 A solo contributor is both roles at once. The rules still apply.
 
-## Work rules
+### Handoffs
+
+Keep one handoff note per work stream **outside Git** (an ignored path such as `local/HANDOFF.md`, or a folder outside the checkout); it holds private device data and is never committed. It owns the current state only, and outdated entries are replaced in place. It must contain:
+
+- the last update time and author; the current build (branch and commit, variant, APK path and SHA-256, whether it is frozen, last green checks, last behaviour change with files, reason and affected scope);
+- one row per phone (alias, model, adb serial, owner, task and case IDs, last identity/APK/Bluetooth/permission verification, state), the files each worker owns, and unavailable phones with the reason;
+- the radio environment, test state, open issues, interrupted work and next actions;
+- questions waiting for a maintainer (recommendation first, two to four options, evidence), switches touched, and cleanup owed.
+
+Contribution rules for everyone are in [CONTRIBUTING.md](CONTRIBUTING.md), including the policy for AI-assisted work.
+
+## Fixes and evidence
 
 - **Reproduce first.** Show the defect with a failing test, a log or a measurement before changing code.
 - **Narrow fix, focused regression.** Change the smallest thing that explains the failure, and add a test that fails
@@ -60,19 +67,7 @@ A solo contributor is both roles at once. The rules still apply.
   combinations that share the same stage or stack behaviour, not only the failing pair) before you schedule
   preservation tests.
 
-## Experiments and alternatives
-
-- New behaviour that is not proven ships behind a flag that is **off by default** and labelled **Experimental**.
-- Never delete an experiment or the losing arm of an A/B comparison. Keep it switchable and off by default, unless it
-  is impossible by first principles.
-- List every switch in the "Experimental, alternative and optional behaviour" register in docs/ARCHITECTURE.md with
-  its switch and reason. Update the register whenever you add, promote or retire a switch.
-- New features may be developed while frozen-build tests run. They ship default-off and are tested after the running
-  work finishes.
-- Changes to the protocol or security (group calls, store-and-forward messages, identity) need a design in
-  docs/PROTOCOL.md and a review before code.
-
-## Device-family policies
+### Device-family policies
 
 Specializing behaviour for a SoC family, vendor skin, Bluetooth stack or Android version, codec component, or any
 combination is encouraged when each entry cites official sources (AOSP source or commits, Android CDD or API
@@ -81,7 +76,7 @@ Keep entries in the device-family policy registry with a matcher, the behaviour,
 off switch. The gates stay the same for every phone. A policy changes how the app reaches a gate, never where the
 gate is.
 
-## Testing rules
+### Testing rules
 
 - **Verify before you test:** current adb identity, the authenticated public node ID, the installed APK hash,
   Bluetooth, permission and wake state, and offered capabilities. A registry entry is not proof that a phone is
@@ -109,7 +104,27 @@ gate is.
   tools and small benchmark definitions. Report numbers, phone aliases and models, and short build hashes in your
   pull request instead.
 
-## Documentation ownership
+## User decisions and experiments
+
+- New behaviour that is not proven ships behind a flag that is **off by default** and labelled **Experimental**.
+- Never delete an experiment or the losing arm of an A/B comparison. Keep it switchable and off by default, unless it
+  is impossible by first principles.
+- List every switch in the "Experimental, alternative and optional behaviour" register in docs/ARCHITECTURE.md with
+  its switch and reason. Update the register whenever you add, promote or retire a switch.
+- New features may be developed while frozen-build tests run. They ship default-off and are tested after the running
+  work finishes.
+- Changes to the protocol or security (group calls, store-and-forward messages, identity) need a design in
+  docs/PROTOCOL.md and a review before code.
+
+### Decisions that need maintainers
+
+Do not stop work to wait for an answer. Add the question to the handoff under "Waiting for the maintainer": your
+recommendation first, then two to four options with their tradeoffs, and the evidence. Then continue with independent
+tasks. Once answered, move the decision into docs/DECISIONS.md with its reason. Do not promote an unsupported policy
+without discussing the evidence and the tradeoff with a maintainer. A decision already given for a named experiment
+remains valid for routine implementation and logging.
+
+## Documentation and cleanup
 
 Keep one owner per topic and replace outdated text in place. Do not add redirect pages, a second status ledger, or
 plans for finished features.
@@ -118,18 +133,18 @@ plans for finished features.
 | --- | --- |
 | [README.md](README.md) | Short overview and entry links |
 | [AGENTS.md](AGENTS.md) | These working rules |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design and the experimental behaviour register |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design, build/distribution notes and the experimental behaviour register |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | Wire format and security rules |
 | [docs/TESTING.md](docs/TESTING.md) | Scope, gates, workflow, result locations, release checklist |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Measured reasons and comparisons |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Unfinished work |
-| Local handoff file | Current build, ownership, open issues and next actions (not committed) |
+| [docs/PLAN.md](docs/PLAN.md) | Unfinished work |
+| Local handoff note | Current build, ownership, open issues and next actions (not committed) |
 
 When a plan is implemented, move its content into the owner above and delete the plan. Retire a requirement
 explicitly, with its reason, and keep meaningful old benchmark evidence. Explain a disputed assumption or a changed
 behaviour in plain language, with the evidence and the tradeoff.
 
-## Privacy and hygiene
+### Privacy and hygiene
 
 - Never commit or paste phone serials, adb device names, Bluetooth or Wi-Fi addresses, node IDs or key fingerprints
   of real phones, private photos, voice or video, other people's data, personal file paths, usernames, email
@@ -142,20 +157,9 @@ behaviour in plain language, with the evidence and the tradeoff.
 - Preserve a dirty working tree: do not blindly revert changes you did not make, and use branches for parallel work.
 - Commit after each verified checkpoint, sign off commits (`git commit -s`), and never skip hooks.
 
-## Decisions that need maintainers
-
-Do not stop work to wait for an answer. Add the question to the handoff under "Waiting for the maintainer": your
-recommendation first, then two to four options with their tradeoffs, and the evidence. Then continue with independent
-tasks. Once answered, move the decision into docs/DECISIONS.md with its reason. Do not promote an unsupported policy
-without discussing the evidence and the tradeoff with a maintainer. A decision already given for a named experiment
-remains valid for routine implementation and logging.
-
-## Checks before you hand work back
+### Checks before you hand work back
 
 - `./gradlew :app:testDebugUnitTest :app:assembleGithubDebug` and `python -B -m pytest -q tools` pass.
 - Streaming changes name the phones, the frozen APK hash and the same-settings comparison.
 - The register in docs/ARCHITECTURE.md and the owning documents are updated.
 - The diff contains no private data, and your handoff file is current.
-
-For how AI coding agents are used in this project, see [docs/AI_ASSISTED_DEVELOPMENT.md](docs/AI_ASSISTED_DEVELOPMENT.md).
-Contribution rules for everyone are in [CONTRIBUTING.md](CONTRIBUTING.md).

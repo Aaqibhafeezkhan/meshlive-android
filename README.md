@@ -69,7 +69,7 @@ Details and measurements: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 Both people need MeshLive. To get updates automatically, add the project in [Obtainium](https://github.com/ImranR98/Obtainium) with the button above. With no internet, a friend can send you the app: in MeshLive, Help, then **Share this app**. The app can also check for updates, but only if you say yes.
 
-To check a download is genuine, see [how to verify a release](docs/INSTALL.md#verifying-a-release). More options and the file list are in [docs/INSTALL.md](docs/INSTALL.md); features and common questions are in the [user guide](docs/USER_GUIDE.md).
+To check a download is genuine, see [how to verify a release](docs/USER_GUIDE.md#verifying-a-release). Other install options, the file list, features and common questions are in the [user guide](docs/USER_GUIDE.md).
 
 ## Status
 
@@ -88,6 +88,19 @@ python tools/fetch_native_sources.py   # downloads the pinned libaom and libopus
 
 The APK is `app/build/outputs/apk/github/debug/app-github-debug.apk`. Developers can read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how it is built, build notes, the list of experimental switches) and [docs/PROTOCOL.md](docs/PROTOCOL.md) (wire formats and security rules). Test results are in [MeshLive/meshlive-benchmarks](https://github.com/MeshLive/meshlive-benchmarks).
 
+## Documentation
+
+| I want to... | Read |
+| --- | --- |
+| Install, update, verify, use the app, get answers | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) |
+| Know what is exposed and what is hidden | [docs/PRIVACY.md](docs/PRIVACY.md) |
+| See which phones work | [docs/DEVICES.md](docs/DEVICES.md) |
+| Understand how it is built, and the experimental switches | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Implement or review the wire format and security rules | [docs/PROTOCOL.md](docs/PROTOCOL.md) |
+| See what is unfinished | [docs/PLAN.md](docs/PLAN.md) |
+| Test on phones, or read why a measured choice was made | [docs/TESTING.md](docs/TESTING.md), [docs/DECISIONS.md](docs/DECISIONS.md) |
+| Contribute, or follow the rules for coding agents | [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) |
+
 ## Contributing
 
 Bug reports, device results, documentation and code are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). Please follow the [code of conduct](CODE_OF_CONDUCT.md).
@@ -98,7 +111,7 @@ Report vulnerabilities privately through [GitHub private vulnerability reporting
 
 ## How this was built
 
-Most of the code was written with AI assistance (Anthropic's Claude), directed by the maintainer, who decides what the app does and tests it on real phones. It has not had an independent security audit. See [docs/AI_ASSISTED_DEVELOPMENT.md](docs/AI_ASSISTED_DEVELOPMENT.md).
+Most of the code was written with AI assistance (Anthropic's Claude), directed by the maintainer, who decides what the app does and tests it on real phones. It has not had an independent security audit.
 
 ## License
 

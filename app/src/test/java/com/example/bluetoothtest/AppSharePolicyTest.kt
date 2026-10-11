@@ -45,10 +45,10 @@ class AppSharePolicyTest {
 
     @Test
     fun publishedReleaseFingerprintMatchesReadme() {
-        val readme = File("../docs/INSTALL.md").takeIf { it.isFile } ?: File("docs/INSTALL.md")
+        val readme = File("../docs/USER_GUIDE.md").takeIf { it.isFile } ?: File("docs/USER_GUIDE.md")
         if (!readme.isFile) return // Not run from the project tree.
         assertTrue(
-            "docs/INSTALL.md 'Verifying a release' must carry AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256",
+            "docs/USER_GUIDE.md 'Verifying a release' must carry AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256",
             readme.readText().contains(AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256),
         )
         assertTrue(AppSharePolicy.matchesPublishedReleaseKey(listOf(AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256.lowercase())))

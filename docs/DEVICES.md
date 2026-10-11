@@ -1,6 +1,6 @@
 # Device compatibility
 
-Which phones MeshLive has been tested on, and how it went. The app needs Android 10 or newer.
+For users and testers: which phones MeshLive has been tested on, and how it went. The app needs Android 10 or newer.
 
 ## Reference phones
 

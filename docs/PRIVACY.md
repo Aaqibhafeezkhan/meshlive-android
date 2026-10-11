@@ -1,6 +1,6 @@
 # Privacy and security
 
-What other people can learn about you when you use MeshLive, what is hidden, and what is not. The wire-level rules are in [PROTOCOL.md](PROTOCOL.md).
+For users: what other people can learn about you when you use MeshLive, what is hidden, and what is not. The wire-level rules are in [PROTOCOL.md](PROTOCOL.md).
 
 ## What nearby phones can see
 
@@ -156,7 +156,7 @@ problem privately, read [SECURITY.md](../SECURITY.md).
 - **No independent security audit.** The primitives are standard (P-256, ECDH, HKDF-SHA-256, AES-256-GCM), but the
   protocol composed from them has not been reviewed by outsiders and is not a certification.
 - Human ownership verification beyond comparing codes, live group re-key or revocation, and trust-on-first-use pinning
-  of unverified peers are open work ([ROADMAP.md](ROADMAP.md)).
+  of unverified peers are open work ([PLAN.md](PLAN.md)).
 - The emergency wipe cannot undo flash remanence, copies outside the app (backups, screenshots, the system log, other
   people's phones), or malware already on the phone.
 - Video over Bluetooth is slow and its recovery after link loss has a gap; do not depend on it for safety.

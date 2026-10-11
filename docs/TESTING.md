@@ -1,5 +1,7 @@
 # Testing and benchmarks
 
+*Engineering log and process for contributors; you do not need it to use or build the app.*
+
 This is the contributor guide to testing MeshLive: what you can check without a phone, what the acceptance gates
 mean, how to set up two or more Android phones of your own, how to run and read the benchmark suite, and how to
 make a release. It is written for someone who owns a few phones and a computer, not a lab.
@@ -137,7 +139,7 @@ interference.
 
 Required security and relay work includes wrong-identity, unauthorized, replayed and tampered controls, branch key
 changes and expiry, and relay endpoint versus adjacent identity separation. Future product and platform prerequisites
-are tracked in [ROADMAP.md](ROADMAP.md) and stay unmeasured here until implemented and executed.
+are tracked in [PLAN.md](PLAN.md) and stay unmeasured here until implemented and executed.
 
 ## Common acceptance gates
 
@@ -887,7 +889,7 @@ repository); CI holds no signing key.
 2c. On every APK that goes to a phone or a release (frozen benchmark build, `make_release.py` output), run `python -B tools/dex_api_scan.py APK`: it reads the dex against the SDK's api-versions.xml and must report 0 unreviewed `java/`/`javax/` calls above minSdk (an `--allow` file lists reviewed ones; `android/` candidates are informational and must sit behind `SDK_INT` checks). The unit tests run on a newer Java than the phones, and a missing platform method is an `Error` that ends the app process (DECISIONS "Relayed calls: first phone probe"). `ApiLevelGuardTest` is the cheap source-level guard.
 3. `python tools/make_release.py`. Publish the release as **Latest** (not a pre-release): the in-app update check reads `releases/latest`, which ignores pre-releases and drafts, and it needs the per-ABI APKs plus `SHA256SUMS` (README "Updates inside the app"). It builds the split `assembleGithubRelease` (the github flavour: opt-in updater and install permission; the F-Droid recipe builds the `fdroid` flavour) with `--no-daemon`, verifies every APK (single signer, expected certificate, native ABIs, 16 KB check on 64-bit libraries, versionCode = base * 10 + ABI digit, fastlane changelog present), and writes the per-ABI APKs, `MeshLive.apk` (a copy of the arm64-v8a APK; the README download button links `releases/latest/download/MeshLive.apk`), `SHA256SUMS`, `apksigner-certs.txt`, `signing-cert.sha256`, `SOURCE-MANIFEST.txt` (with the native-source pins) and a `RELEASE-NOTES.md` template to `release/<versionName>-<versionCode>/` (gitignored). Finish the notes (changes, benchmark build ids, known limits) by hand.
 4. Install that exact APK on one idle phone and check that the About screen's signing-certificate fingerprint equals
-   `signing-cert.sha256`, and that it matches the fingerprint published in the INSTALL.md section "Verifying a release". Do
+   `signing-cert.sha256`, and that it matches the fingerprint published in the USER_GUIDE.md section "Verifying a release". Do
    no phone work during someone else's test window.
 5. Tag `v<versionName>`, create the release as a draft, upload the APKs and `SHA256SUMS` first, then publish.
    `release-attest.yml` recomputes the manifest, attests it and attests the uploaded APK by digest. Publishing with no
