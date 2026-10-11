@@ -32,7 +32,7 @@ independent security review. See [Status](#status) before you rely on it.
 - [Build from source](#build-from-source) | [How it works](#how-it-works) |
   [What nearby phones can see](#what-nearby-phones-can-see) |
   [Security model and limitations](#security-model-and-limitations) | [FAQ](#faq) |
-  [Contributing](#contributing) | [License](#license)
+  [How this was built](#how-this-was-built) | [Contributing](#contributing) | [License](#license)
 
 ## Status
 
@@ -521,6 +521,30 @@ that). LE CoC is experimental because some phone stacks have serious bugs with i
 **Can I give the app to a friend with no internet?** Yes: use Share in the app to send the installed APK through
 Quick Share/Nearby Share or a file manager. The share screen shows the APK hash and the signing-certificate hash, so
 your friend can compare them with the release page.
+
+## How this was built
+
+MeshLive is built with heavy AI assistance. Most of the code was written by Anthropic's Claude (through Claude Code),
+directed by the maintainer, who decides what the product should do, runs the tests on real phones and reviews the
+changes. A second AI model reviews critical changes read-only. The details, including the rules the agents follow, are
+in [docs/AI_ASSISTED_DEVELOPMENT.md](docs/AI_ASSISTED_DEVELOPMENT.md).
+
+What that does and does not mean:
+
+- **Tested on real hardware.** The reference phones listed under [Status](#status) were used for the calls, streams
+  and relays described here. The numbers in [MeshLive/meshlive-benchmarks](https://github.com/MeshLive/meshlive-benchmarks)
+  come from real device runs, failures included; they are not simulated.
+- **Not independently security-audited.** The authentication, encryption and Bluetooth announcement design have had no
+  third-party review. Read [What nearby phones can see](#what-nearby-phones-can-see) and
+  [Security model and limitations](#security-model-and-limitations), and do not rely on it where your safety depends
+  on it.
+- **Open to inspection.** The source is GPL-3.0-or-later, the protocol is written down in
+  [docs/PROTOCOL.md](docs/PROTOCOL.md), and releases carry a source manifest and attestation
+  ([Verifying a release](#verifying-a-release)).
+
+Found a problem? Open an [issue](https://github.com/MeshLive/meshlive-android/issues/new/choose) or send a
+[device test report](https://github.com/MeshLive/meshlive-android/issues/new?template=device-report.yml). For anything
+security-related use the private route in [SECURITY.md](SECURITY.md), not a public issue.
 
 ## Contributing
 
