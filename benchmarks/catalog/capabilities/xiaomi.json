@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "node_prefix": "b0b1b2b3b4b5",
+  "node_prefix": "f3394f8f16e0",
   "manufacturer": "Xiaomi",
   "model": "23053RN02I",
   "api": 35,
@@ -75,7 +75,14 @@
   "playback": [
     "low",
     "balanced",
-    "stable"
+    "stable",
+    "auto",
+    "call_low",
+    "call_balanced",
+    "call",
+    "call_voice",
+    "radio",
+    "call_stable"
   ],
   "encoders": [
     {

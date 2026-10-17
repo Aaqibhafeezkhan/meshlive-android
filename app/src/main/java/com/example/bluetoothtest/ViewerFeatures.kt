@@ -13,6 +13,9 @@ internal object ViewerFeatureDefaults {
      * (T11: relay loss and rejoin on phones; docs/SWITCHES.md register).
      */
     const val FRAME_AGE = false
+
+    /** Muted / Camera off records for viewers (every viewer and relay needs this build; T-LM1). */
+    const val LIVE_MEDIA_STATE = false
 }
 
 /** Keys of the viewer frame-age feature: the benchmark launch extra and the user's stored choice. */
@@ -44,8 +47,30 @@ internal object ViewerFeatures {
         phoneTest = "T11",
     )
 
+    /**
+     * Live Mute / Camera off (PROTOCOL "Experimental live media state"): the broadcaster's Mute and Camera buttons
+     * always work; with this on they also send one state record so viewers see "Muted" / "Camera off". Builds without
+     * the record treat it as an unknown stream state and drop the link, so it stays off until every phone has it.
+     */
+    val liveMediaState = FeatureSpec(
+        id = "live_media_state",
+        prefKey = "feature_live_media_state",
+        defaultEnabled = ViewerFeatureDefaults.LIVE_MEDIA_STATE,
+        benchmarkExtra = "test_live_media_state",
+        titleRes = R.string.feat_live_media_state,
+        descriptionRes = R.string.feat_live_media_state_description,
+        iconRes = R.drawable.ic_visibility,
+        group = GROUP,
+        phoneTest = "T-LM1",
+    )
+
     /** In Settings order. */
-    val all: List<FeatureSpec> = listOf(frameAge)
+    val all: List<FeatureSpec> = listOf(
+        frameAge,
+        AudioLiveFeatures.audioLive,
+        liveMediaState,
+        CallBluetoothOutputFeature.spec,
+    )
 
     /** Idempotent: an activity can be recreated. */
     fun registerAll() = all.forEach(FeatureCatalog::register)

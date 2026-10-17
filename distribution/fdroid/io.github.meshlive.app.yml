@@ -1,6 +1,8 @@
-# fdroiddata metadata draft (metadata/<applicationId>.yml) for MeshLive 0.1.0-beta.
+# fdroiddata metadata draft (metadata/<applicationId>.yml) for MeshLive.
 # The file name is the final applicationId, io.github.meshlive.app (`appId` in app/build.gradle.kts;
-# README "Distribution").
+# docs/ARCHITECTURE.md "Distribution and releases"). Companion file: distribution/fdroid/srclibs/libaom.yml (goes to fdroiddata srclibs/).
+# Checked 2026-10-11 with fdroidserver 2.4.5 (`fdroid readmeta` and `fdroid lint`: clean). NOT yet run:
+# `fdroid build` (needs the buildserver image). See the notes at the end for what remains untested.
 Categories:
   - Connectivity
   - Multimedia
@@ -20,60 +22,109 @@ Repo: https://github.com/MeshLive/meshlive-android.git
 # Anti-features: none known. No proprietary dependency, no tracking, no ads, no network service
 # (media is Bluetooth only; INTERNET is declared for the experimental local Wi-Fi Direct share page).
 
-# One Builds entry per ABI APK. The versionCode is base*10 + 1 (armeabi-v7a) or + 2 (arm64-v8a);
-# the universal APK (digit 0) is for GitHub only and is NOT built here.
+# Flavour: `gradle: [fdroid]` builds the `fdroid` product flavour (app/build.gradle.kts `productFlavors`): no
+# updater, no REQUEST_INSTALL_PACKAGES, no request of its own to GitHub. The `github` flavour is the release page's
+# (opt-in updater); F-Droid must never ship it. Both flavours exist only from the first tag cut after the updater
+# merge, so `commit` below must point at that tag (v0.1.0-beta predates the flavours and cannot be built with this recipe;
+# the first tag with them is v0.2.0-beta).
+#
+# One Builds entry per ABI APK: AGP's ABI splits make versionCode = base * 10 + 1 (armeabi-v7a) or + 2
+# (arm64-v8a); the universal APK (digit 0) is for GitHub only (universalApk=false). Gradle builds both split
+# APKs in each entry; `output` (relative to `subdir`) selects the one the entry publishes. Replace
+# `commit` with the tag of the first release built with AGP 8.13.2 or newer: v0.1.0-beta was built with
+# 8.13.0-rc01 and has a path-dependent native library (docs/ARCHITECTURE.md "Distribution and releases", reproducible builds).
 Builds:
-  - versionName: '0.1.0-beta'
-    versionCode: 12
-    commit: v0.1.0-beta
+  - versionName: '0.3.0-beta'
+    versionCode: 31
+    commit: v0.3.0-beta
     subdir: app
     sudo:
       - apt-get update
-      - apt-get install -y cmake perl
-    # libopus 1.5.2: the official release tarball (it carries the package_version file CMakeLists.txt checks),
-    # downloaded and SHA-256-verified by the repository's own script before extraction.
+      - apt-get install -y perl
+    output: build/outputs/apk/fdroid/release/app-fdroid-armeabi-v7a-release-unsigned.apk
+    srclibs:
+      - libaom@0006e96cdb595ff88950a2c664115335ca5517bf
     prebuild:
-      - cd .. && python3 tools/fetch_native_sources.py --only libopus
+      # CMake 3.22.1 from the SDK (app/build.gradle.kts: externalNativeBuild.cmake.version).
+      - sdkmanager --install "cmake;3.22.1"
+      # libopus 1.5.2: the official release tarball, SHA-256-verified by the repository's own script
+      # into ../reference-repos/libopus (prebuild runs in the subdir, the script's root is the repo).
+      - python3 ../tools/fetch_native_sources.py --only libopus
+      # libaom: CMakeLists.txt defaults to reference-repos/libaom; point it at the srclib checkout.
+      # (fdroidserver substitutes $$srclib$$ in prebuild only, not in gradleprops.)
+      - mkdir -p ../reference-repos
+      - ln -sfn $$libaom$$ ../reference-repos/libaom
     gradle:
-      - yes
+      - fdroid
     gradleprops:
       - splitAbis=true
       - enableArmeabiV7a=true
       - universalApk=false
-      - aomSourceDir=$$libaom$$
+    ndk: r28c
+
+  - versionName: '0.3.0-beta'
+    versionCode: 32
+    commit: v0.3.0-beta
+    subdir: app
+    sudo:
+      - apt-get update
+      - apt-get install -y perl
+    output: build/outputs/apk/fdroid/release/app-fdroid-arm64-v8a-release-unsigned.apk
     srclibs:
       - libaom@0006e96cdb595ff88950a2c664115335ca5517bf
+    prebuild:
+      - sdkmanager --install "cmake;3.22.1"
+      - python3 ../tools/fetch_native_sources.py --only libopus
+      - mkdir -p ../reference-repos
+      - ln -sfn $$libaom$$ ../reference-repos/libaom
+    gradle:
+      - fdroid
+    gradleprops:
+      - splitAbis=true
+      - enableArmeabiV7a=true
+      - universalApk=false
     ndk: r28c
-    # Duplicate this entry with versionCode: 11 for armeabi-v7a. Each entry must publish the APK whose
-    # versionCode it names; confirm with a local `fdroid build` dry run (UNTESTED here) which split output
-    # fdroidserver picks, and add `output: build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk` if needed.
 
-# Reproducible-build verification (optional, needs bit-identical APKs: NOT yet verified, see README
-# "Distribution"). With it F-Droid publishes the developer-signed APK from GitHub after checking it
-# against its own build:
-# Binaries: https://github.com/MeshLive/meshlive-android/releases/download/v%v/MeshLive-%v-arm64-v8a.apk
+# Reproducible-build verification (optional): with `Binaries` F-Droid publishes the developer-signed APK from
+# GitHub after checking it against its own build (bit-identical except META-INF signature files).
+# Enable it only after `python -B tools/check_reproducible_build.py compare <our unsigned APK> <F-Droid's>` passes for
+# a release built with AGP 8.13.2 or newer on the Linux buildserver. Until then F-Droid signs its own build.
+# `Binaries` must point at FDROID-FLAVOUR files: the release page's MeshLive-<version>-<abi>.apk files are the github
+# flavour (updater, REQUEST_INSTALL_PACKAGES) and can never match this recipe's build (tools/tests checks that no
+# Binaries line names them). Publishing developer-signed fdroid-flavour APKs would also let them replace a github
+# install (same package, same key); do that only with separate asset names and a deliberate decision.
+# Binaries: (separate fdroid-flavour assets, not published yet)
 # AllowedAPKSigningKeys: 2eefc05a444522529d9f75d7ebcefd08864707f21a79041db51ebff83649e213
 
-AutoUpdateMode: Version
+# Each release adds two Builds entries (11 and 12 above become base*10+1 and base*10+2), so no automatic
+# versionCode update: one version appears as two APKs and fdroidserver's AutoUpdate copies one template entry,
+# so it cannot vary `output` per ABI. UpdateCheckData still reads the base versionCode for the update check.
+AutoUpdateMode: None
 UpdateCheckMode: Tags
-CurrentVersion: '0.1.0-beta'
-CurrentVersionCode: 12
+UpdateCheckData: 'app/build.gradle.kts|versionCode\s*=\s*(\d+)|.|versionName\s*=\s*"(.+)"'
+VercodeOperation:
+  - '%c * 10 + 1'
+  - '%c * 10 + 2'
+CurrentVersion: '0.3.0-beta'
+CurrentVersionCode: 32
 
-# srclibs/libaom.yml (separate fdroiddata merge request):
-#   RepoType: git
-#   Repo: https://aomedia.googlesource.com/aom
-#   Pinned by commit 0006e96cdb595ff88950a2c664115335ca5517bf (a main-branch commit after the v3.14.1 tag,
-#   whose tag commit is 03087864cf4bea6abb0d28f95cf7843511413d8f). tools/fetch_native_sources.py verifies the same
-#   commit plus a SHA-256 tree manifest; a libaom release tarball is NOT the same source.
+# libaom pin (srclibs/libaom.yml): commit 0006e96cdb595ff88950a2c664115335ca5517bf, a main-branch commit after
+# the v3.14.1 tag (tag commit 03087864cf4bea6abb0d28f95cf7843511413d8f). tools/fetch_native_sources.py verifies
+# the same commit plus a SHA-256 tree manifest; a libaom release tarball is NOT the same source. The pin must
+# stay equal to NATIVE_SOURCES["libaom"]["commit"] in tools/fetch_native_sources.py (tools/tests checks it).
 #
-# libopus: tools/fetch_native_sources.py (prebuild above) downloads
+# libopus pin: tools/fetch_native_sources.py downloads
 #   https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz and checks SHA-256
-#   65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1 (xiph SHA256SUMS.txt) into reference-repos/libopus.
-#   If fdroiddata prefers a srclib, an equivalent is a srclibs/libopus.yml for https://gitlab.xiph.org/xiph/opus.git
-#   at tag v1.5.2 plus a prebuild step that writes PACKAGE_VERSION="1.5.2" to package_version (UNTESTED).
+#   65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1 (xiph SHA256SUMS.txt).
+# A git srclib for https://gitlab.xiph.org/xiph/opus.git at tag v1.5.2 would also need a Prepare step writing
+# PACKAGE_VERSION="1.5.2" to package_version (CMakeLists.txt checks it) and differs from the tarball tree (UNTESTED).
 #
-# Notes for the build recipe
-# - AGP 8.13.0-rc01 (a release candidate) and Gradle 8.13: F-Droid's buildserver needs JDK 17 and network
-#   access to Google Maven for the verified-checksum downloads (gradle/verification-metadata.xml).
-# - No keystore on the buildserver: Gradle then makes unsigned release APKs, which F-Droid signs itself.
-# - Needs Android SDK platform 36, build-tools, NDK 28.2.13676358 (= r28c) and CMake 3.22.1.
+# Notes for the build recipe and what is untested
+# - AGP 8.13.2 (stable), Gradle 8.13 (wrapper, SHA-256 pinned), Kotlin 2.0.21, JDK 17, compileSdk/targetSdk 36
+#   (platform 36 and build-tools 35+), NDK 28.2.13676358 (= r28c), CMake 3.22.1. Dependencies are locked
+#   (app/gradle.lockfile, buildscript-gradle.lockfile) and checksummed (gradle/verification-metadata.xml);
+#   the buildserver needs network access to Google Maven and Maven Central for them.
+# - No keystore on the buildserver: Gradle then makes *-release-unsigned.apk, which F-Droid signs itself.
+# - UNTESTED here: `fdroid build` itself (the sdkmanager/cmake step, the `ndk: r28c` install, fdroidserver's own
+#   Gradle launcher honouring the wrapper checksum, the symlinked srclib under -ffile-prefix-map), a Linux build
+#   (all reproducibility checks so far ran on Windows), and F-Droid's scanner on the dependencies.

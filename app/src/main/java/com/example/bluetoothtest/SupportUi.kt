@@ -7,7 +7,6 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
-import android.provider.Settings
 
 /** One background-restriction problem and what the user can do about it. */
 internal data class ReliabilityCardIssue(
@@ -18,10 +17,10 @@ internal data class ReliabilityCardIssue(
 )
 
 /**
- * Adapter for the "Connection reliability" card. The full implementation is
- * BackgroundReliability.status(context) (issues, vendor guidance and settings intents), built
- * separately; wire it in [CoreReliabilityUi]. The fallback reports only Android's battery
- * optimization state, which the platform exposes directly.
+ * Adapter for the "Connection reliability" card. [CoreReliabilityUi] returns
+ * BackgroundReliability.cardIssues(context) (issues, vendor guidance and settings intents) plus the
+ * Bluetooth-stack health notes; if that fails it falls back to Android's battery optimization state,
+ * which the platform exposes directly.
  */
 internal interface ReliabilityUi {
     fun issues(context: Context): List<ReliabilityCardIssue>
@@ -33,21 +32,49 @@ internal object ReliabilityUiBackend {
 
 internal object CoreReliabilityUi : ReliabilityUi {
     override fun issues(context: Context): List<ReliabilityCardIssue> {
-        // TODO: return BackgroundReliability.status(context) mapped to ReliabilityCardIssue.
-        val power = context.getSystemService(PowerManager::class.java) ?: return emptyList()
-        if (power.isIgnoringBatteryOptimizations(context.packageName)) return emptyList()
-        return listOf(
-            ReliabilityCardIssue(
-                title = context.getString(R.string.reliability_battery_title),
-                guidance = context.getString(R.string.reliability_battery_text),
-                settingsIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
-            ),
-        )
+        val card = runCatching { BackgroundReliability.cardIssues(context) }
+            .getOrElse { listOfNotNull(batteryExemptionIssue(context)) }
+        return card + bluetoothStackHealthIssues(context)
     }
 }
 
 /**
- * Adapter for "Export diagnostics". The field contract (README release section) is owned by the
+ * Notes about the Bluetooth stack itself, from the transport layers (advertising slots held by other apps or a leaked
+ * stack, a GATT pool that stays exhausted, Bluetooth audio sharing the radio). Each opens the Bluetooth settings; none
+ * appears on a healthy phone.
+ */
+internal fun bluetoothStackHealthIssues(context: Context): List<ReliabilityCardIssue> {
+    val bluetoothSettings = Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)
+    return listOfNotNull(
+        runCatching { AdvertisingBudget.shared.stuck() }.getOrNull()?.let {
+            ReliabilityCardIssue("Bluetooth has no free advertising slots", it.message, bluetoothSettings)
+        },
+        PoolExhaustionPolicy.shared.takeIf { runCatching { it.restartGuidanceDue() }.getOrDefault(false) }?.let {
+            ReliabilityCardIssue("Bluetooth may be stuck", PoolExhaustionPolicy.GUIDANCE, bluetoothSettings)
+        },
+        runCatching { BluetoothAudioCoexistence.advice() }.getOrNull()?.let {
+            ReliabilityCardIssue("Bluetooth audio is sharing the radio", it, bluetoothSettings)
+        },
+    )
+}
+
+/**
+ * The battery-optimisation card entry, shared with whatever maps BackgroundReliability.status later. Its button opens the
+ * system's one-tap exemption prompt (user decision Q38: offered again from Settings), falling back to the battery list
+ * screen on phones whose maker removed the prompt. Null when the app is already exempt.
+ */
+internal fun batteryExemptionIssue(context: Context): ReliabilityCardIssue? {
+    val power = context.getSystemService(PowerManager::class.java) ?: return null
+    if (power.isIgnoringBatteryOptimizations(context.packageName)) return null
+    return ReliabilityCardIssue(
+        title = context.getString(R.string.reliability_battery_title),
+        guidance = context.getString(R.string.reliability_battery_text),
+        settingsIntent = BatteryExemptionPrompt.intent(context),
+    )
+}
+
+/**
+ * Adapter for "Export diagnostics". The field contract (docs/ARCHITECTURE.md "Diagnostics block") is owned by the
  * release work; wire its builder in [CoreDiagnosticsUi]. The fallback lists only non-identifying
  * facts: no media, messages, contact names, node IDs or keys.
  */
@@ -61,7 +88,7 @@ internal object DiagnosticsUiBackend {
 
 internal object CoreDiagnosticsUi : DiagnosticsUi {
     override fun build(context: Context): String = buildString {
-        // TODO: replace with the release patch's diagnostics builder (device_policy rules,
+        // TODO(root): replace with the release patch's diagnostics builder (device_policy rules,
         // recent connection outcomes and codec choices).
         appendLine("Bluetooth Video diagnostics")
         appendLine("app_version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}, ${BuildConfig.BUILD_TYPE})")
@@ -113,10 +140,10 @@ internal object DistributionUiBackend {
 }
 
 internal object CoreDistributionUi : DistributionUi {
-    override val shareAvailable: Boolean = false // TODO: true once AppShare is merged
-    override fun shareApk(activity: android.app.Activity) = Unit // TODO: AppShare.shareApk(activity)
-    override fun apkInfo(context: Context): String? = null // TODO: AppShare.apkInfo()
-    override fun deepSleepBanner(context: Context): String? = null // TODO: DozeWatchdog state
+    override val shareAvailable: Boolean = false // TODO(root): true once AppShare is merged
+    override fun shareApk(activity: android.app.Activity) = Unit // TODO(root): AppShare.shareApk(activity)
+    override fun apkInfo(context: Context): String? = null // TODO(root): AppShare.apkInfo()
+    override fun deepSleepBanner(context: Context): String? = runCatching { DozeWatchdog.message() }.getOrNull()
 }
 
 internal object SupportLinks {

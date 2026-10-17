@@ -33,6 +33,8 @@ enum class StoreForwardRefusal(val wireValue: Int) {
     INVALID(6),
     NOT_FOR_ME(7),
     UNKNOWN(8),
+    /** Messaging v2 phase 2: the slot named a prekey this phone no longer holds. Not emitted in phase 1. */
+    PREKEY_GONE(9),
     ;
 
     companion object {
@@ -63,7 +65,36 @@ sealed interface StoreForwardCompletion {
     data class Rejected(val reason: String) : StoreForwardCompletion
     /** Authenticated but not stored durably (archive full or write failed): kept, not acknowledged. */
     data class Deferred(val reason: String) : StoreForwardCompletion
+    /** Messaging v2: a text or attachment manifest stored as a conversation message. */
+    data class V2Message(val message: ThreadMessage) : StoreForwardCompletion
+    /** Messaging v2: a re-sealed replacement of a message already opened; dropped, still acknowledged. */
+    data object V2Duplicate : StoreForwardCompletion
+    /** Messaging v2: a receipt bundle; [applied] flags changed, [ignored] named nothing new. */
+    data class V2Receipts(val applied: Int, val ignored: Int) : StoreForwardCompletion
+    /** Messaging v2: segment [index] of a download is stored; [fileComplete] when it was the last, [damaged] if the hash failed. */
+    data class V2Segment(val transferId: String, val index: Int, val fileComplete: Boolean, val damaged: Boolean = false) :
+        StoreForwardCompletion
 }
+
+/** What an authenticated adjacent phone may send and receive in one exchange and one UTC day (M8). */
+class AdmissionTier(
+    val sessionBytes: Long,
+    val dailyBytes: Long,
+    val dailyBundles: Int,
+    val senderDailyBundles: Int,
+    val sessionBytesOut: Long,
+    val dailyBytesOut: Long,
+    /** An accepted contact in a Messaging v2 session. */
+    val contact: Boolean,
+    val v2: Boolean,
+)
+
+/** Where a Messaging v2 engine keeps its files and how it checks free space. */
+class MessagingV2Setup(
+    val limits: MessagingV2Limits = MessagingV2Limits(),
+    val freeSpace: () -> Long = { Long.MAX_VALUE },
+    val random: SecureRandom = SecureRandom(),
+)
 
 /**
  * Store-and-forward state of this phone: its mailbox key, contacts, bundle store, ledger and
@@ -83,8 +114,115 @@ class StoreForwardNode(
     /** QA3: 1:1 delivery receipts on, time coarsened to the hour. */
     val receiptsEnabled: Boolean = true,
     private val random: SecureRandom = SecureRandom(),
+    /** Messaging v2 (switch `test_messaging_v2`): null keeps every v1 path and every byte on air exactly as before. */
+    messagingV2: MessagingV2Setup? = null,
+    root: File? = null,
+    cipher: AtRestCipher? = null,
 ) {
     private val pairSecrets = HashMap<String, ByteArray>()
+    private val sessions = java.util.concurrent.CopyOnWriteArraySet<StoreForwardLinkSession>()
+
+    /** The Messaging v2 engine, or null when the master switch is off. */
+    val v2: MessagingV2Engine? = if (messagingV2 != null) {
+        MessagingV2Engine(
+            this, requireNotNull(root) { "Messaging v2 needs a storage root" }, requireNotNull(cipher) { "Messaging v2 needs a cipher" },
+            messagingV2.limits, clock, messagingV2.random, messagingV2.freeSpace,
+        )
+    } else null
+
+    /**
+     * Messaging v2 (M1): the verified-contact store as the source of truth for trust. Set by the Android runtime when the
+     * node is opened; null in v1 and in tests that do not need it. A card from a verified identity is accepted without a
+     * second comparison.
+     */
+    @Volatile var verifiedDirectory: VerifiedIdentityDirectory? = null
+
+    internal fun registerSession(session: StoreForwardLinkSession) {
+        sessions += session
+    }
+
+    internal fun unregisterSession(session: StoreForwardLinkSession) {
+        sessions -= session
+    }
+
+    /** Exchanges that are running now and stay open as chat sessions (the chat controller ends them when interest lapses). */
+    fun chatSessions(): List<StoreForwardLinkSession> = sessions.filter { it.isChat }
+
+    /** Whether a chat session with [peer] is open now. */
+    fun chatSessionActive(peer: NodeId): Boolean = sessions.any { it.isChat && it.peerId == peer }
+
+    /** Whether any exchange with [peer] is running now (the thread shows "Sending" for messages that wait). */
+    fun exchangeRunning(peer: NodeId): Boolean = sessions.any { it.peerId == peer }
+
+    private val completionListeners = java.util.concurrent.CopyOnWriteArrayList<(NodeId, StoreForwardCompletion) -> Unit>()
+
+    /**
+     * Told, from the exchange's reader thread, about every completion that reached storage while an exchange runs (a chat
+     * session lasts up to 30 minutes, so the exchange result alone would show a message at its end). Keep it short.
+     */
+    fun addCompletionListener(listener: (NodeId, StoreForwardCompletion) -> Unit) {
+        completionListeners += listener
+    }
+
+    fun removeCompletionListener(listener: (NodeId, StoreForwardCompletion) -> Unit) {
+        completionListeners -= listener
+    }
+
+    internal fun notifyCompletion(peer: NodeId, completion: StoreForwardCompletion) {
+        completionListeners.forEach { runCatching { it(peer, completion) } }
+    }
+
+    /** A new bundle was queued: running chat sessions offer it at once. */
+    fun notifyNewBundles() = sessions.forEach { it.offerNewBundles() }
+
+    /**
+     * A peer we hold a card for is trusted for messaging when it is an accepted contact, or when the user verified its
+     * identity in person (its card has not arrived yet, so it is not a contact row).
+     */
+    fun isTrustedPeer(peer: NodeId): Boolean =
+        contacts.get(peer)?.state == ContactState.ACCEPTED || verifiedDirectory?.isVerifiedNode(peer) == true
+
+    /**
+     * A card arrived over [peer]'s authenticated link. With Messaging v2 on, the verified-contact store decides trust and a
+     * changed mailbox key is held back (see [ContactBook.offerFromLinkV2]); without it, exactly v1's behaviour.
+     */
+    fun onCardFromLink(card: ContactCard, peer: NodeId): CardOffer =
+        if (v2 != null) contacts.offerFromLinkV2(card, peer, verifiedDirectory) else contacts.offerFromLink(card, peer)
+
+    /**
+     * Messaging v2 housekeeping: follows the verified-contact store (a verified identity's pending card is accepted, a
+     * forgotten verification removes the contact it had auto-accepted), then opens bundles that waited for a promoted card.
+     */
+    fun reconcileContacts(): List<StoreForwardCompletion> {
+        val directory = verifiedDirectory ?: return emptyList()
+        if (v2 == null) return emptyList()
+        val changed = contacts.reconcileVerified(directory)
+        changed.demoted.forEach { removeContact(it) }
+        return changed.promoted.flatMap { openPendingFrom(it) }
+    }
+
+    /** A download was approved: running sessions ask the sender for the missing segments now. */
+    fun pullNow() = sessions.forEach { it.pullNow() }
+
+    /** The user cancelled a download: running sessions tell the sender to stop serving these bundles. */
+    fun cancelBundles(ids: List<ByteArray>) = sessions.forEach { session -> ids.forEach(session::cancelBundle) }
+
+    /** The v1 admission numbers, or the contact tier for an accepted contact in a Messaging v2 session. */
+    fun tierFor(peer: NodeId, v2Active: Boolean): AdmissionTier {
+        val engine = v2
+        if (!v2Active || engine == null) {
+            return AdmissionTier(limits.sessionBytes, limits.neighborDailyBytes, limits.neighborDailyBundles, limits.senderDailyBundles,
+                limits.sessionBytesOut, limits.neighborDailyBytesOut, contact = false, v2 = false)
+        }
+        return if (engine.isContact(peer)) {
+            val l = engine.limits
+            AdmissionTier(l.contactSessionBytes, l.contactDailyBytes, l.contactDailyMessages + l.contactDailyReceipts,
+                l.contactDailyMessages, l.contactSessionBytes, l.contactDailyBytes, contact = true, v2 = true)
+        } else {
+            AdmissionTier(limits.sessionBytes, limits.neighborDailyBytes, limits.neighborDailyBundles, limits.senderDailyBundles,
+                limits.sessionBytesOut, limits.neighborDailyBytesOut, contact = false, v2 = true)
+        }
+    }
     @Volatile private var cachedCard: ContactCard? = null
 
     val ownCard: ContactCard
@@ -110,6 +248,7 @@ class StoreForwardNode(
     fun send(contactNode: NodeId, message: BundleMessage, ttlHours: Int = StoreForwardFormat.DEFAULT_TTL_HOURS): StoredBundle {
         val contact = requireNotNull(contacts.get(contactNode)) { "Unknown contact" }
         require(contact.state == ContactState.ACCEPTED) { "Accept this contact before messaging it" }
+        if (contact.keysChanged) throw MessagingV2KeysChangedException("The contact's keys changed: compare the new safety number first")
         val sealed = StoreForwardSeal.seal(
             message, mailbox, nodeId, contact.card.mailboxKey, contactNode, pairSecret(contact), clock(), ttlHours, random,
         )
@@ -151,12 +290,16 @@ class StoreForwardNode(
      * self-declared, so it widens the offer only when this phone itself runs the carrier role
      * (StoreForwardLimits.carrierEnabled, hard-off in v1; finding 1).
      */
-    fun offers(peer: NodeId, peerIsCarrier: Boolean): List<StoredBundle> {
+    fun offers(peer: NodeId, peerIsCarrier: Boolean, v2Mode: Boolean = false): List<StoredBundle> {
         val nowHour = StoreForwardFormat.hourOf(clock())
         val peerHex = peer.toString()
+        // Messaging v2 (M1): after a key change nothing is sent to that contact until the user compares again.
+        val holdOwn = v2 != null && contacts.get(peer)?.keysChanged == true
         return store.all().filter { bundle ->
-            bundle.complete && nowHour < bundle.storedUntilHour(limits.maxStoreHours) && when (bundle.role) {
-                BundleRole.OWN -> bundle.state == BundleState.QUEUED &&
+            // Bulk (class 4) segments are never listed: the receiver pulls them. A v1 peer is offered version 2 bundles only.
+            !bundle.header.isBulk && (v2Mode || bundle.header.version == StoreForwardFormat.BUNDLE_VERSION) &&
+                bundle.complete && nowHour < bundle.storedUntilHour(limits.maxStoreHours) && when (bundle.role) {
+                BundleRole.OWN -> bundle.state == BundleState.QUEUED && !(holdOwn && bundle.peerNode == peerHex) &&
                     (bundle.peerNode == peerHex || (limits.carrierEnabled && peerIsCarrier))
                 BundleRole.FOREIGN -> limits.carrierEnabled && bundle.state == BundleState.STORED &&
                     bundle.fromNeighbor != peerHex
@@ -183,7 +326,13 @@ class StoreForwardNode(
      * bundle charges only the neighbour's pre-authentication allowance; the sending contact's daily
      * count is charged after the HEADER's key slot authenticates that contact (finding 3).
      */
-    fun decide(entry: SummaryEntry, peer: NodeId, sessionReserved: Long, tags: Map<String, Set<NodeId>>): StoreForwardAdmission {
+    fun decide(
+        entry: SummaryEntry,
+        peer: NodeId,
+        sessionReserved: Long,
+        tags: Map<String, Set<NodeId>>,
+        tier: AdmissionTier = tierFor(peer, false),
+    ): StoreForwardAdmission {
         val nowHour = StoreForwardFormat.hourOf(clock())
         if (entry.chunkCount !in 1..StoreForwardFormat.MAX_CHUNKS) return StoreForwardAdmission.Skip(StoreForwardRefusal.TOO_LARGE)
         if (entry.priorityClass !in 0..3) return StoreForwardAdmission.Skip(StoreForwardRefusal.INVALID)
@@ -192,9 +341,10 @@ class StoreForwardNode(
         store.get(idHex)?.let { existing ->
             if (existing.complete) return StoreForwardAdmission.Skip(StoreForwardRefusal.HAVE)
             val missing = ChunkBitmap.full(existing.chunkCount).apply { andNot(existing.present) }
-            return admitBytes(existing.role, emptySet(), peer,
-                missing.cardinality().toLong() * StoreForwardFormat.CHUNK_CIPHERTEXT_BYTES, sessionReserved, entry.tag, newBundle = false)
-                ?: StoreForwardAdmission.Want(existing.role, emptySet(), false, missing)
+            val resumeBytes = missing.cardinality().toLong() * StoreForwardFormat.CHUNK_CIPHERTEXT_BYTES
+            admitBytes(existing.role, emptySet(), peer, resumeBytes, sessionReserved, entry.tag, newBundle = false, tier)?.let { return it }
+            if (tier.v2 && existing.role == BundleRole.INBOX) v2?.reserve(existing.idHex, peer, resumeBytes, bulk = false)
+            return StoreForwardAdmission.Want(existing.role, emptySet(), false, missing)
         }
         if (store.isSeen(idHex)) {
             // Answer DELIVERED_LOCAL only to the contact the delivered bundle's own tag belongs to, so
@@ -212,10 +362,44 @@ class StoreForwardNode(
             limits.carrierEnabled -> BundleRole.FOREIGN
             else -> return StoreForwardAdmission.Skip(StoreForwardRefusal.NOT_FOR_ME)
         }
-        admitBytes(role, candidates, peer, entry.maxBytes, sessionReserved, entry.tag, newBundle = true)?.let { return it }
+        admitBytes(role, candidates, peer, entry.maxBytes, sessionReserved, entry.tag, newBundle = true, tier)?.let { return it }
+        if (tier.v2 && role == BundleRole.INBOX) {
+            // Messaging v2: physical reservations, global ingress and metadata caps (M12a) before anything is accepted.
+            v2?.resourceRefusal(peer, entry.maxBytes, isBulk = false, contact = tier.contact)?.let {
+                return StoreForwardAdmission.Skip(it)
+            }
+            v2?.reserve(entry.idHex, peer, entry.maxBytes, bulk = false)
+        }
         // The neighbour's pre-authentication allowance is charged now, so one session cannot exceed it.
         ledger.add(NeighborLedger.neighborKey(peer), bundlesIn = 1)
         return StoreForwardAdmission.Want(role, candidates, true, ChunkBitmap.full(entry.chunkCount))
+    }
+
+    /**
+     * Admission of a segment the receiver itself pulls (Messaging v2): a synthesized entry for a class 4 bundle listed by an
+     * accepted manifest of an approved download from [peer]. Bulk is charged by bytes, not as a message.
+     */
+    fun decidePull(entry: SummaryEntry, peer: NodeId, sessionReserved: Long, tier: AdmissionTier): StoreForwardAdmission {
+        val engine = v2 ?: return StoreForwardAdmission.Skip(StoreForwardRefusal.INVALID)
+        val nowHour = StoreForwardFormat.hourOf(clock())
+        val (record, index) = engine.expectedSegment(entry.idHex, peer) ?: return StoreForwardAdmission.Skip(StoreForwardRefusal.NOT_FOR_ME)
+        if (entry.chunkCount != record.segmentChunks[index] || entry.priorityClass != StoreForwardFormat.BULK_CLASS) {
+            return StoreForwardAdmission.Skip(StoreForwardRefusal.INVALID)
+        }
+        if (entry.expiryHour <= nowHour - limits.skewHours) return StoreForwardAdmission.Skip(StoreForwardRefusal.EXPIRED)
+        store.get(entry.idHex)?.let { existing ->
+            if (existing.complete) return StoreForwardAdmission.Skip(StoreForwardRefusal.HAVE)
+            val missing = ChunkBitmap.full(existing.chunkCount).apply { andNot(existing.present) }
+            val bytes = missing.cardinality().toLong() * StoreForwardFormat.CHUNK_CIPHERTEXT_BYTES
+            admitBytes(BundleRole.INBOX, setOf(peer), peer, bytes, sessionReserved, entry.tag, newBundle = false, tier)?.let { return it }
+            engine.reserve(entry.idHex, peer, bytes, bulk = true)
+            return StoreForwardAdmission.Want(BundleRole.INBOX, setOf(peer), false, missing)
+        }
+        if (store.isSeen(entry.idHex)) return StoreForwardAdmission.Skip(StoreForwardRefusal.HAVE)
+        admitBytes(BundleRole.INBOX, setOf(peer), peer, entry.maxBytes, sessionReserved, entry.tag, newBundle = false, tier)?.let { return it }
+        engine.resourceRefusal(peer, entry.maxBytes, isBulk = true, contact = tier.contact)?.let { return StoreForwardAdmission.Skip(it) }
+        engine.reserve(entry.idHex, peer, entry.maxBytes, bulk = true)
+        return StoreForwardAdmission.Want(BundleRole.INBOX, setOf(peer), true, ChunkBitmap.full(entry.chunkCount))
     }
 
     /** Null when within every applicable quota; otherwise the refusal. */
@@ -227,18 +411,19 @@ class StoreForwardNode(
         sessionReserved: Long,
         tag: ByteArray,
         newBundle: Boolean,
+        tier: AdmissionTier,
     ): StoreForwardAdmission.Skip? {
         val neighbor = ledger.today(NeighborLedger.neighborKey(peer))
-        if (sessionReserved + bytes > limits.sessionBytes) return StoreForwardAdmission.Skip(StoreForwardRefusal.QUOTA)
-        if (neighbor.bytesIn + sessionReserved + bytes > limits.neighborDailyBytes) {
+        if (sessionReserved + bytes > tier.sessionBytes) return StoreForwardAdmission.Skip(StoreForwardRefusal.QUOTA)
+        if (neighbor.bytesIn + sessionReserved + bytes > tier.dailyBytes) {
             return StoreForwardAdmission.Skip(StoreForwardRefusal.RATE)
         }
-        if (newBundle && neighbor.bundlesIn >= limits.neighborDailyBundles) return StoreForwardAdmission.Skip(StoreForwardRefusal.RATE)
+        if (newBundle && neighbor.bundlesIn >= tier.dailyBundles) return StoreForwardAdmission.Skip(StoreForwardRefusal.RATE)
         when (role) {
             BundleRole.INBOX -> {
                 // Read-only pre-check; the allowance is charged after the header authenticates.
                 if (newBundle && candidates.isNotEmpty() && candidates.all {
-                        ledger.today(NeighborLedger.senderKey(it.toString())).bundlesIn >= limits.senderDailyBundles
+                        ledger.today(NeighborLedger.senderKey(it.toString())).bundlesIn >= tier.senderDailyBundles
                     }
                 ) return StoreForwardAdmission.Skip(StoreForwardRefusal.RATE)
                 if (newBundle && store.usage(BundleRole.INBOX) + archive.bytes(MessageDirection.IN) + bytes > limits.inboxQuotaBytes) {
@@ -268,19 +453,40 @@ class StoreForwardNode(
         role: BundleRole,
         peer: NodeId,
         tagContacts: Set<NodeId> = emptySet(),
+        tier: AdmissionTier = tierFor(peer, false),
     ): StoredBundle {
         val nowHour = StoreForwardFormat.hourOf(clock())
         require(header.bundleId.contentEquals(entry.bundleId)) { "Header does not match the requested bundle" }
         require(header.priorityClass == entry.priorityClass && header.expiryHour == entry.expiryHour &&
             header.chunkCount == entry.chunkCount) { "Header does not match its summary" }
-        require(header.tags.any { it.contentEquals(entry.tag) }) { "Header does not carry the summarized tag" }
         require(header.createdHour <= nowHour + limits.skewHours) { "Bundle was created in the future" }
         require(header.expiryHour > nowHour - limits.skewHours) { "Bundle has expired" }
-        if (role == BundleRole.INBOX && store.get(header.bundleId.sfHex()) == null) authorizeInbox(header, tagContacts)
+        if (header.isBulk) {
+            authorizeBulk(header, peer)
+            return store.beginReceive(header, BundleRole.INBOX, peer.toString())
+        }
+        require(header.tags.any { it.contentEquals(entry.tag) }) { "Header does not carry the summarized tag" }
+        if (role == BundleRole.INBOX && store.get(header.bundleId.sfHex()) == null) authorizeInbox(header, tagContacts, tier)
         return store.beginReceive(header, role, peer.toString())
     }
 
-    private fun authorizeInbox(header: BundleHeader, tagContacts: Set<NodeId>) {
+    /**
+     * A class 4 header has no key slot to authenticate: it is admitted only as a segment listed by the accepted manifest of
+     * an approved download from this very peer, and its tag must be the pair's tag for its day.
+     */
+    private fun authorizeBulk(header: BundleHeader, peer: NodeId) {
+        val engine = v2 ?: throw StoreForwardRefused(StoreForwardRefusal.INVALID, "Messaging v2 is off")
+        val idHex = header.bundleId.sfHex()
+        if (engine.expectedSegment(idHex, peer) == null) {
+            throw StoreForwardRefused(StoreForwardRefusal.NOT_FOR_ME, "Segment is not listed by an approved download")
+        }
+        val contact = contacts.get(peer)?.takeIf { it.state == ContactState.ACCEPTED }
+            ?: throw StoreForwardRefused(StoreForwardRefusal.NOT_FOR_ME, "Segments come from accepted contacts only")
+        val expected = StoreForwardTags.tag(pairSecret(contact), header.createdDay)
+        if (!expected.contentEquals(header.bulkTag)) throw StoreForwardRefused(StoreForwardRefusal.INVALID, "Segment tag is not the pair's tag")
+    }
+
+    private fun authorizeInbox(header: BundleHeader, tagContacts: Set<NodeId>, tier: AdmissionTier) {
         val slot = try {
             StoreForwardSeal.authenticate(header, mailbox, nodeId, contacts::isKnownSender)
         } catch (error: IllegalArgumentException) {
@@ -291,7 +497,7 @@ class StoreForwardNode(
             throw StoreForwardRefused(StoreForwardRefusal.INVALID, "Sender does not own the bundle's tag")
         }
         val key = NeighborLedger.senderKey(slot.senderNodeId.toString())
-        if (ledger.today(key).bundlesIn >= limits.senderDailyBundles) {
+        if (ledger.today(key).bundlesIn >= tier.senderDailyBundles) {
             throw StoreForwardRefused(StoreForwardRefusal.RATE, "Sender's daily message allowance is used")
         }
         ledger.add(key, bundlesIn = 1)
@@ -316,6 +522,9 @@ class StoreForwardNode(
      * fails the ciphertext stays (UNOPENED) and delivery is not acknowledged.
      */
     fun openInbox(bundle: StoredBundle): StoreForwardCompletion {
+        if (bundle.header.version == StoreForwardFormat.BUNDLE_VERSION_V3) {
+            return v2?.openInbox(bundle) ?: StoreForwardCompletion.Deferred("Messaging v2 is off")
+        }
         val tombstone = limits.tombstoneUntilHour(bundle.header.expiryHour)
         val opened = try {
             StoreForwardSeal.open(bundle.header, store.chunks(bundle.idHex), mailbox, nodeId, contacts::isKnownSender)
@@ -392,6 +601,22 @@ class StoreForwardNode(
     fun admitExchange(peer: NodeId): Boolean =
         ledger.admitExchange(NeighborLedger.neighborKey(peer), limits.exchangeCooldownMs, limits.maxExchangesPerHour)
 
+    /** Gives back the cooldown of an admitted exchange that moved nothing ([NeighborLedger.refundCooldown]); the hourly count stays. */
+    fun refundExchangeCooldown(peer: NodeId) = ledger.refundCooldown(NeighborLedger.neighborKey(peer))
+
+    /**
+     * Messaging v2 (M6): admission after the peer's HELLO was read. An accepted contact whose HELLO set the chat flag gets the
+     * relaxed 5 s and 60 per hour; every other adjacent phone keeps the v1 60 s and 10 per hour.
+     */
+    fun admitExchangeAfterHello(peer: NodeId, contactChat: Boolean): Boolean {
+        val l = v2?.limits
+        return if (contactChat && l != null) {
+            ledger.admitExchange(NeighborLedger.neighborKey(peer), l.contactExchangeCooldownMs, l.contactMaxExchangesPerHour)
+        } else {
+            admitExchange(peer)
+        }
+    }
+
     /** Opens bundles that waited for [contact] to be accepted. */
     fun openPendingFrom(contact: NodeId): List<StoreForwardCompletion> =
         store.all().filter { it.role == BundleRole.INBOX && it.state == BundleState.PENDING_CONTACT && it.peerNode == contact.toString() }
@@ -402,6 +627,7 @@ class StoreForwardNode(
         val bundle = store.get(bundleId.sfHex()) ?: return false
         if (bundle.role != BundleRole.OWN || bundle.peerNode != peer.toString()) return false
         if (bundle.state == BundleState.QUEUED) store.update(bundle.idHex, BundleState.HANDED)
+        v2?.onDelivered(bundle.idHex, peer)
         return true
     }
 
@@ -419,6 +645,8 @@ class StoreForwardNode(
                 bundle.peerNode?.let { peer -> contacts.all().none { it.nodeId.toString() == peer } } != false
         }.forEach { store.remove(it.idHex, limits.tombstoneUntilHour(it.header.expiryHour)) }
         ledger.prune()
+        v2?.sweep()
+        reconcileContacts()
         retryUnopened()
     }
 
@@ -430,6 +658,8 @@ class StoreForwardNode(
             cipher: AtRestCipher,
             limits: StoreForwardLimits = StoreForwardLimits(),
             clock: () -> Long = System::currentTimeMillis,
+            messagingV2: MessagingV2Setup? = null,
+            verifiedDirectory: VerifiedIdentityDirectory? = null,
         ): StoreForwardNode = StoreForwardNode(
             identity.nodeId,
             identity,
@@ -440,6 +670,9 @@ class StoreForwardNode(
             NeighborLedger(File(root, "neighbors.properties"), clock, cipher, limits.maxNeighborRecords),
             limits,
             clock,
-        )
+            messagingV2 = messagingV2,
+            root = root,
+            cipher = cipher,
+        ).also { it.verifiedDirectory = verifiedDirectory }
     }
 }

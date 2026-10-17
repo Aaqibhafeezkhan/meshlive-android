@@ -5,18 +5,24 @@ package com.example.bluetoothtest
  * "Experimental, alternative and optional behaviour"). Each feature has exactly one constant here.
  * Every one stays OFF until the phone test named beside it passes; turning a feature on for users
  * who never touched its switch is then a one-line change. The privacy features BMH3 and BMH3_PSEUDONYMS
- * were switched on for 0.2.0-beta (design decision 2026-10-12, after T14/T15 passed). A user's explicit choice always wins, and
+ * were switched on for 0.2.0-beta (user decision 2026-10-12, after T14/T15 passed). A user's explicit choice always wins, and
  * a DEBUG benchmark launch (any `test_` extra) never reads these constants (see [FeatureCatalog]).
  */
 internal object ConnectivityFeatureDefaults {
     /** LE CoC to GATT safety net on the A15s class of stack (T6: CoC exhaustion, automatic GATT). */
     const val COC_AUTO_GATT = false
 
+    /**
+     * Sub-switch of [COC_AUTO_GATT] for streams (Design SG, Q50): receiver restart on GATT and the source's separate
+     * GATT child pool. Experimental, off; it does nothing while [COC_AUTO_GATT] is off.
+     */
+    const val COC_AUTO_GATT_STREAMS = false
+
     /** Classic RFCOMM without Android pairing, both phones (T7). */
     const val CLASSIC_WITHOUT_PAIRING = false
 
     /** Compact (single-UUID) announcements of iPhones in discovery (T8: masked scan filter on the six phones). */
-    const val IPHONE_DISCOVERY = false
+    const val IPHONE_DISCOVERY = true // on since 2026-10-17: first iPhone calls and streams passed both ways (user decision)
 
     /** Help > Share app nearby over Wi-Fi Direct (T9). Flipping it makes the Help entry a normal one. */
     const val SHARE_APP_NEARBY = false

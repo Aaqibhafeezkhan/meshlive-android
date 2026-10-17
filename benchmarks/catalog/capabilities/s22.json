@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "node_prefix": "c0c1c2c3c4c5",
+  "node_prefix": "1347a3e8b0db",
   "manufacturer": "samsung",
   "model": "SM-S901E",
   "api": 36,
@@ -75,7 +75,14 @@
   "playback": [
     "low",
     "balanced",
-    "stable"
+    "stable",
+    "auto",
+    "call_low",
+    "call_balanced",
+    "call",
+    "call_voice",
+    "radio",
+    "call_stable"
   ],
   "encoders": [
     {
