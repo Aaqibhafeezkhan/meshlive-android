@@ -11,8 +11,10 @@ object CameraOrientation {
         val cameraManager = context.getSystemService(CameraManager::class.java)
         val cameraId = cameraManager.cameraIdFor(cameraLens)
             ?: error("${cameraLens.displayName} camera is unavailable")
-        val sensorOrientation = cameraManager.getCameraCharacteristics(cameraId)
-            .get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val sensorOrientation = safeCameraRead("SENSOR_ORIENTATION") {
+            cameraManager.getCameraCharacteristics(cameraId)
+                .get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION)
+        } ?: 0
         return relativeRotationDegrees(
             sensorOrientation,
             currentDisplayRotation(context),

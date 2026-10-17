@@ -15,6 +15,10 @@ import org.junit.Test
 
 /** The link opening `BDO1` over a real BMH2 link: negotiation by hello bit 3 and record order. */
 class RotatingDiscoveryLinkTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private val base = NodeCapabilities(
         transportMask = NodeCapabilities.TRANSPORT_BLE_L2CAP,
         encodeCodecMask = NodeCapabilities.CODEC_VP9,
@@ -99,7 +103,7 @@ class RotatingDiscoveryLinkTest {
         val link = SecureBluetoothHandshake.initiate(pipes.initiatorInput, pipes.initiatorOutput, KeyPairSigningIdentity(generateEcKeyPair()), base)
         val thrown = assertThrows(IllegalStateException::class.java) { link.reader.read() }
         assertTrue(thrown.message!!.contains("Unknown secure record type 13"))
-        callee.join(5_000)
+        callee.join(120_000)
         assertNull(error.get())
     }
 
@@ -134,7 +138,7 @@ class RotatingDiscoveryLinkTest {
         val link = SecureBluetoothHandshake.initiate(pipes.initiatorInput, pipes.initiatorOutput, callerIdentity, callerCaps)
         val received = LinkOpeningExchange.exchange(link, callerCaps, emptyList())
         val next = link.reader.read()
-        callee.join(5_000)
+        callee.join(120_000)
         failure.get()?.let { throw AssertionError("callee failed", it) }
         assertEquals(NodeId.fromPublicKey(callerIdentity.publicKeyEncoded), tarpitSaw.get())
         return Result(

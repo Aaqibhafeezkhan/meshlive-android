@@ -1,0 +1,92 @@
+names-v2 screening report (Design G review F23 and the two multilingual reviews of 2026-10-12)
+Produced by tools/screen_names_v2.py. names-v1 stays frozen for vector history.
+
+Machine screen inputs (not shipped): LDNOOBW en, es, fr, de, hi, ar, pt, tr, fa, ru, it, nl; CMU Pronouncing Dictionary; MANUAL_BAD roots for Bengali, Indonesian/Malay,
+romanised Hindi and Arabizi (written by hand in the script; LDNOOBW has no list for them); 3-letter roots (cum, ass, tit, cun,
+fag) as whole words, prefixes, suffixes and across the word boundary; 32 famous or political phrases and an innuendo
+carrier x shellfish pattern as a PAIR BLOCKLIST enforced at generation.
+
+Rules for every word: a-z, 3-7 letters, sorted, unique, no prefix of another, edit distance >= 2 inside its list, no
+homophone inside or across the lists, not on the ban list (authority/emergency/trust cues, party and community colours AND
+their near shades, skin-tone words, insult or sacred animals, military/ethnic/national cues, the 'amber' alert cue).
+Near-shade rule, applied consistently in v2: ivory, chalk, pearl, onyx, slate, pewter, cocoa, coffee, mocha, caramel, wheat,
+honey, almond, beige, ruby, russet, rose, sienna, coral and amber left the list with ashen, sooty and the red/green/orange shades
+v1 had already removed. No exception remains.
+
+Frozen SHA-256:
+  adjectives-v2.txt      d832789668051db146496979eaf9d362b90f43c55d51febb9c825dc1e0417b46
+  nouns-v2.txt           1560dd97fdb19313fcdcfd6335c454d888d298ca2da595fc4c032d051ab4a39c
+  blocked-pairs-v2.txt   381d7404fe637a61ace734d6569103f159de2e27d2ea62adc54dae4f9acfa304
+
+Adjectives added to v1: adroit amused arched artsy astute boxy buoyant chic classy clever cosmic daring deft domed earthen elated festive floral folksy fruity glad humane inland layered mindful nested oval pastel quaint radiant rural sharp sheer silver spiffy spiral square stellar suede tidal tiered vaulted vibrant wintry wooden
+Nouns added to v1: abalone alder alpaca bayou beluga bobcat bream dipper eland hoopoe ibex krill macaw myna oasis oryx pool sesame sunbird vista
+
+Dropped during pair screening (word, hits): [('a', 'canvas', 28), ('n', 'opal', 26), ('a', 'striped', 13), ('n', 'orca', 7), ('a', 'grand', 7), ('a', 'eager', 6), ('n', 'grove', 4), ('n', 'garnet', 4), ('n', 'gazelle', 4), ('a', 'urban', 4), ('a', 'quince', 4), ('a', 'clay', 3), ('a', 'cyan', 2), ('a', 'lean', 2), ('a', 'open', 2), ('a', 'herbal', 2), ('a', 'citrus', 1), ('a', 'walnut', 1), ('a', 'carbon', 1)]
+
+Blocked pairs in force (95): blue falcon; bouncy jelly; bouncy mussel; bouncy oyster; bouncy scallop; bushy jelly; bushy mussel; bushy oyster; bushy scallop; curved jelly; curved mussel; curved oyster; curved scallop; damp jelly; damp mussel; damp oyster; damp scallop; deep jelly; deep mussel; deep oyster; deep scallop; downy jelly; downy mussel; downy oyster; downy scallop; firm jelly; firm mussel; firm oyster; firm scallop; fleecy jelly; fleecy mussel; fleecy oyster; fleecy scallop; fluffy jelly; fluffy mussel; fluffy oyster; fluffy scallop; furry jelly; furry mussel; furry oyster; furry scallop; fuzzy jelly; fuzzy mussel; fuzzy oyster; fuzzy scallop; gold dawn; gold rain; gold stream; icy crystal; large jelly; large mussel; large oyster; large scallop; plush jelly; plush mussel; plush oyster; plush scallop; round jelly; round mussel; round oyster; round scallop; shaggy jelly; shaggy mussel; shaggy oyster; shaggy scallop; silver fox; smooth jelly; smooth mussel; smooth oyster; smooth scallop; snowy crystal; soft jelly; soft mussel; soft oyster; soft scallop; supple jelly; supple mussel; supple oyster; supple scallop; sweet jelly; sweet mussel; sweet oyster; sweet scallop; tasty jelly; tasty mussel; tasty oyster; tasty scallop; tufted jelly; tufted mussel; tufted oyster; tufted scallop; warm jelly; warm mussel; warm oyster; warm scallop
+
+Dormant phrases (a word is not in the lists; kept so a later list cannot bring them back): shining path; desert fox; desert lizard; desert storm; blue whale; blue film; golden dawn; golden shower; iron guard; iron fist; grey wolf; gray wolf; swift boat; cedar revolution; rose revolution; tulip revolution; jasmine revolution; velvet revolution; orange revolution; saffron revolution; black swan; red fox; lone wolf; polar bear; brave heart
+
+OPEN, RELEASE-BLOCKING: the reading by speakers of Hindi, Arabic, Spanish and French (and, since the multilingual
+reviews, Portuguese, Bengali, Turkish, Indonesian/Malay) required by DECISIONS Design G F23 has NOT been done by a person.
+Two model reviews and the machine screen are not a substitute. Until a reviewer signs off, names-v2 must not ship.
+
+Removed and refused words:
+  removed adjective airy (review)
+  removed adjective almond (near-shade rule)
+  removed adjective amber (near-shade rule)
+  removed adjective balmy (review)
+  removed adjective beige (near-shade rule)
+  removed adjective broad (review)
+  removed adjective bronze (near-shade rule)
+  removed adjective caramel (near-shade rule)
+  removed adjective chalk (near-shade rule)
+  removed adjective cherry (review)
+  removed adjective cocoa (near-shade rule)
+  removed adjective coffee (near-shade rule)
+  removed adjective copper (review)
+  removed adjective coral (near-shade rule)
+  removed adjective cream (review)
+  removed adjective dense (review)
+  removed adjective desert (review)
+  removed adjective fawn (near-shade rule)
+  removed adjective frank (review)
+  removed adjective glass (bad root at an end)
+  removed adjective honey (near-shade rule)
+  removed adjective ivory (near-shade rule)
+  removed adjective mocha (near-shade rule)
+  removed adjective onyx (near-shade rule)
+  removed adjective pearl (near-shade rule)
+  removed adjective pewter (near-shade rule)
+  removed adjective rose (near-shade rule)
+  removed adjective ruby (near-shade rule)
+  removed adjective russet (near-shade rule)
+  removed adjective salty (review)
+  removed adjective satin (review)
+  removed adjective shallow (review)
+  removed adjective shining (review)
+  removed adjective sienna (near-shade rule)
+  removed adjective simple (review)
+  removed adjective slate (near-shade rule)
+  removed adjective sour (review)
+  removed adjective topaz (bad substring)
+  removed adjective wheat (near-shade rule)
+  removed adjective woody (review)
+  removed noun beaver (review)
+  removed noun bunting (review)
+  removed noun clam (review)
+  removed noun conch (review)
+  removed noun cumin (review)
+  removed noun deer (review)
+  removed noun llama (review)
+  removed noun mound (review)
+  removed noun pond (review)
+  removed noun sable (review)
+  removed noun snapper (review)
+  removed noun sponge (banned)
+  removed noun swallow (review)
+  removed noun tetra (review)
+  removed noun trout (review)
+  removed noun whale (review)
+Pool rejects (adjectives): [('spacious', 'shape'), ('temperate', 'shape'), ('dappled', 'no CMU entry'), ('polished', 'shape'), ('silken', 'prefix of silk'), ('hardy', 'duplicate'), ('lively', 'duplicate'), ('gentle', 'duplicate'), ('zesty', 'no CMU entry'), ('lush', 'edit distance with plush')]
+Pool rejects (nouns): [('waxwing', 'no CMU entry'), ('dugong', 'no CMU entry'), ('loach', 'no CMU entry'), ('curlew', 'no CMU entry')]

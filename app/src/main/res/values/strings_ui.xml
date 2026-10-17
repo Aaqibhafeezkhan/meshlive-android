@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Strings added by the UI redesign (navigation, settings pages, labels). Sentence case, short. -->
+<resources>
+    <string name="badge_live">LIVE</string>
+    <string name="action_go_live">Go live</string>
+    <string name="info_more">More information</string>
+    <string name="info_close">Got it</string>
+
+    <string name="nav_live">Live</string>
+    <string name="nav_calls">Calls</string>
+    <string name="nav_contacts">Contacts</string>
+
+    <string name="live_nearby_title">Live nearby</string>
+    <string name="calls_title">Calls</string>
+    <string name="people_someone_nearby">Someone nearby</string>
+    <string name="stream_row_someone_live">Someone nearby is live</string>
+    <string name="stream_row_name_live">%1$s is live</string>
+    <string name="people_voice_call_generic">Voice call</string>
+    <string name="people_video_call_generic">Video call</string>
+
+    <string name="settings_row_video">Video quality</string>
+    <string name="settings_video_auto">Auto</string>
+    <string name="settings_video_manual">Manual</string>
+    <string name="settings_video_title">Video and calls</string>
+    <string name="settings_privacy_advanced_title">Advanced privacy</string>
+    <string name="settings_details">Details</string>
+    <string name="settings_privacy_title">Privacy</string>
+    <string name="settings_calls_title">Calls</string>
+    <string name="settings_share_title">Share app offline</string>
+    <string name="settings_section_about">About and updates</string>
+    <string name="settings_name_not_set">Not set</string>
+    <string name="settings_experiments_title">Experiments</string>
+    <string name="nav_settings">Settings</string>
+
+    <string name="status_ready">Ready</string>
+    <string name="status_bluetooth_off">Bluetooth off</string>
+    <string name="status_bluetooth_unavailable">No Bluetooth</string>
+    <string name="status_permissions">Permissions needed</string>
+    <string name="status_hidden">Hidden</string>
+    <string name="status_battery_saver">Battery saver: relaying paused</string>
+    <string name="status_hot">Phone hot: quality lowered</string>
+    <string name="status_sheet_title">Status</string>
+    <string name="status_row_bluetooth">Bluetooth</string>
+    <string name="status_row_calls">Allow calls</string>
+    <string name="status_row_relay">Relay video for others</string>
+    <string name="status_row_battery">Battery and temperature</string>
+    <string name="status_on">On</string>
+    <string name="status_off">Off</string>
+    <string name="status_value_hidden">Off: others cannot find you</string>
+    <string name="status_value_needs_permission">Needs permission</string>
+    <string name="status_value_unavailable">Not available</string>
+    <string name="status_value_relay_paused">Paused to save battery</string>
+    <string name="status_battery_line">%1$s · %2$s</string>
+    <string name="badge_paused">PAUSED</string>
+    <string name="live_control_pause">Pause</string>
+    <string name="live_control_resume">Resume</string>
+    <string name="live_control_flip">Flip</string>
+    <string name="action_end_live_short">End</string>
+    <string name="broadcast_title_idle">Ready to go live</string>
+    <string name="broadcast_title_live">You are live</string>
+    <string name="broadcast_title_relay">Relay</string>
+    <string name="watch_title_live">Live stream</string>
+    <string name="live_viewers_count">%1$d watching</string>
+    <string name="calls_nearby">Nearby</string>
+    <string name="calls_recent">Recent</string>
+    <string name="contacts_nearby_now">Nearby now</string>
+    <string name="contact_sheet_voice">Voice call</string>
+    <string name="contact_sheet_video">Video call</string>
+    <string name="status_ready_description">Status: ready</string>
+    <string name="verify_seg_scan">Scan their code</string>
+    <string name="verify_seg_show">Show my code</string>
+    <string name="advanced_section_manual">Manual video</string>
+    <string name="live_control_mute">Mute</string>
+    <string name="live_control_unmute">Unmute</string>
+    <string name="live_control_camera_off">Camera off</string>
+    <string name="live_control_camera_on">Camera on</string>
+    <string name="call_output_title">Audio output</string>
+    <string name="call_output_selected">Selected</string>
+</resources>

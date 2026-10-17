@@ -29,7 +29,7 @@ import kotlin.concurrent.thread
  * through the Android share sheet as one `ACTION_SEND` item, so the user can choose Quick Share/Nearby
  * Share, a file manager, or Bluetooth where the stack offers it. No permission and no radio of our own
  * are used. The installed base APK of a single-APK install is the distributed file itself, so its
- * SHA-256 equals the release's `.apk.sha256` (README "Verifying a release").
+ * SHA-256 equals the release's `.apk.sha256` (docs/USER_GUIDE.md "Verifying a release").
  *
  * Bluetooth (OPP) caveat, from AOSP packages/modules/Bluetooth 745ee92b87ed: the stock OPP share target
  * does not list `application/vnd.android.package-archive` (android/app/AndroidManifest.xml SEND filter),
@@ -61,7 +61,7 @@ internal data class AppApkInfo(
     val apkSha256: String,
     /** SHA-256 of each signing certificate, colon-separated uppercase (the format of `apksigner`). */
     val signingCertSha256: List<String>,
-    /** True when the only signer is the published release key (README "Verifying a release"). */
+    /** True when the only signer is the published release key (docs/USER_GUIDE.md "Verifying a release"). */
     val matchesPublishedReleaseKey: Boolean,
     val splitCount: Int,
     /** Null when the APK may be shared; otherwise the message to show. */
@@ -92,7 +92,7 @@ internal object AppSharePolicy {
     const val COPY_TTL_MS = 30 * 60 * 1000L
     const val FILE_PREFIX = "BluetoothVideo"
 
-    /** Must equal README "Verifying a release" (AppSharePolicyTest checks it). */
+    /** Must equal docs/USER_GUIDE.md "Verifying a release" (AppSharePolicyTest checks it). */
     const val PUBLISHED_RELEASE_CERT_SHA256 =
         "2E:EF:C0:5A:44:45:22:52:9D:9F:75:D7:EB:CE:FD:08:86:47:07:F2:1A:79:04:1D:B5:1E:BF:F8:36:49:E2:13"
 

@@ -13,6 +13,8 @@ import subprocess
 import threading
 import time
 
+from child_process_guard import guard
+
 THREADTIME = re.compile(r"^(\d\d-\d\d \d\d:\d\d:\d\d\.\d{3})\s")
 HEADER = "---------"
 
@@ -91,7 +93,7 @@ class LogCapture:
 
     def spawn(self, since):
         # stderr is not read: an unread PIPE blocks adb once it fills.
-        self.process = subprocess.Popen(self.command(since), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.process = guard(subprocess.Popen(self.command(since), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
         self.thread = threading.Thread(target=self.pump, args=(self.process,), daemon=True)
         self.thread.start()
 

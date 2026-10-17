@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/onboardingBackgroundRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/app_background"
+    android:fillViewport="true"
+    android:scrollbars="none">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/screen_gutter"
+        android:paddingTop="40dp"
+        android:paddingEnd="@dimen/screen_gutter"
+        android:paddingBottom="24dp">
+
+        <ImageView
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_relay"
+            app:tint="@color/text_primary" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:accessibilityHeading="true"
+            android:text="@string/onboarding_bg_title"
+            android:textAppearance="@style/TextAppearance.App.Display" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/onboarding_bg_intro"
+            android:textAppearance="@style/TextAppearance.App.BodyLarge"
+            android:textColor="@color/text_secondary" />
+
+        <TextView
+            style="@style/Widget.App.SectionHeader"
+            android:layout_marginTop="32dp"
+            android:text="@string/onboarding_bg_cost_title" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/onboarding_bg_cost_text"
+            android:textAppearance="@style/TextAppearance.App.Body" />
+
+        <TextView
+            style="@style/Widget.App.SectionHeader"
+            android:text="@string/onboarding_bg_warning_title" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/onboarding_bg_warning_text"
+            android:textAppearance="@style/TextAppearance.App.Body" />
+
+        <TextView
+            android:id="@+id/onboardingBackgroundResult"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:accessibilityLiveRegion="polite"
+            android:textAppearance="@style/TextAppearance.App.BodyLarge"
+            android:visibility="gone" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:minHeight="24dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/onboardingBackgroundPrimary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/onboarding_bg_allow" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/onboardingBackgroundSecondary"
+            style="@style/Widget.App.Button.Text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/onboarding_bg_skip" />
+    </LinearLayout>
+</ScrollView>

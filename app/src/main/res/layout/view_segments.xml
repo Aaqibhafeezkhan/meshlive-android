@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A two-way switch under a title (Nearby | Recent, Scan their code | Show my code). The selected side is a
+     white pill, the other plain on a raised track. Labels and state come from SegmentedControl.bind. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="48dp"
+    android:background="@drawable/segments_track"
+    android:baselineAligned="false"
+    android:orientation="horizontal"
+    android:padding="4dp">
+
+    <TextView
+        android:id="@+id/segFirst"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center"
+        android:textAppearance="@style/TextAppearance.App.Button"
+        android:textSize="15sp" />
+
+    <TextView
+        android:id="@+id/segSecond"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center"
+        android:textAppearance="@style/TextAppearance.App.Button"
+        android:textSize="15sp" />
+</LinearLayout>

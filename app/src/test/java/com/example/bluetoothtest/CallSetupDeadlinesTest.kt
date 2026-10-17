@@ -68,4 +68,29 @@ class CallSetupDeadlinesTest {
         val deadline = CallSetupDeadlines.logLine("ab12", 10_012L)
         assertTrue(deadline.startsWith("call_setup: event=hop_auth_deadline | node=ab12 | sinceOpenMs=10012 | deadlineMs=10000"))
     }
+
+    @Test
+    fun theIncomingDeadlineCoversEverySingleTransportEndpointAndTheControlArmRestoresDualOnly() {
+        // Q29: default on, so a silent stranger on a plain CoC or GATT endpoint is closed at 20 s too.
+        assertEquals(20_000L, DualSetupBudget.INCOMING_HANDSHAKE_MS)
+        assertTrue(CallSetupDeadlines.incomingDeadlineApplies(dualEndpoint = false, relayedCallsOn = false, allEndpoints = true))
+        assertTrue(CallSetupDeadlines.incomingDeadlineApplies(dualEndpoint = true, relayedCallsOn = false, allEndpoints = true))
+        // Control arm (test_call_handshake_deadline_all=false): only dual endpoints keep it, exactly as before.
+        assertFalse(CallSetupDeadlines.incomingDeadlineApplies(dualEndpoint = false, relayedCallsOn = false, allEndpoints = false))
+        assertTrue(CallSetupDeadlines.incomingDeadlineApplies(dualEndpoint = true, relayedCallsOn = false, allEndpoints = false))
+        // A relay helper keeps its own pre-setup watchdog in every arm.
+        for (dual in listOf(false, true)) for (all in listOf(false, true)) {
+            assertFalse(CallSetupDeadlines.incomingDeadlineApplies(dual, relayedCallsOn = true, allEndpoints = all))
+        }
+    }
+
+    @Test
+    fun theDefaultIsOnAndTheDeadlineLineNamesItsScopeWithoutAnIdentifier() {
+        assertTrue(DebugTunables.callHandshakeDeadlineAll)
+        assertEquals(
+            "incoming_handshake: event=deadline | closed=true | deadlineMs=20000 | scope=single",
+            CallSetupDeadlines.incomingDeadlineLine(dualEndpoint = false),
+        )
+        assertTrue(CallSetupDeadlines.incomingDeadlineLine(dualEndpoint = true).endsWith("scope=dual"))
+    }
 }

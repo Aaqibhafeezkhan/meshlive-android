@@ -398,31 +398,98 @@ internal class CallVideoPauseGovernor {
  * (the BME1 type byte is plaintext associated data); headers, lifecycle, codec configuration,
  * rotation, audio and terminal records always stay.
  */
-class RelayMediaAgeBound {
+class RelayMediaAgeBound internal constructor(
+    /**
+     * Experimental time-based shed target (Q31, DebugTunables.relayTimeQueue; null = the earlier fixed
+     * budget, the control arm). Sized in ms of media from the child's measured drain rate and the
+     * drain's own jitter, inside a latency budget; see [RelayTimeQueueSizer].
+     */
+    internal val timeSizer: RelayTimeQueueSizer?,
+    /**
+     * Experimental (DebugTunables.relayDrainSustained, `test_relay_drain_sustained`): the drain rate is the relay's
+     * own sustained delivery ([SustainedDeliveryMeter]) whenever it has one, and the child's arrival-train report
+     * only otherwise. Off: the train report alone (the control), and the sustained estimate is only logged.
+     */
+    internal val sustainedDrain: Boolean = false,
+) {
+    constructor() : this(null)
+
     internal val shedder = MediaAgeShedder(BoundedMediaAge.STREAM_SHED_COOLDOWN_NS)
     /** Paces this child's recovery keyframe requests (see [RelayRecoveryBackoff]). */
     internal val recovery = RelayRecoveryBackoff()
     val keyFrameRequests: Long get() = recovery.requests
     /** The child's reported added playout delay on this link (hop-local). */
     @Volatile var childAddedDelayMs: Int = 0
+    /** The child's arrival-train report on this link, kbps (0 = none yet; zero on slow GATT hops). The control estimator. */
+    @Volatile var trainKbps: Int = 0
+        private set
+    /** The relay's own sustained delivery to this child, kbps (0 = none); always measured, used only with [sustainedDrain]. */
+    @Volatile var sustainedKbps: Int = 0
+        private set
 
-    fun classify(envelope: MeshEnvelope): ShedClass {
-        if (envelope.isAudio || envelope.isControl ||
-            envelope.flags and (MeshEnvelope.FLAG_CODEC_CONFIG or MeshEnvelope.FLAG_TERMINAL or RELAY_ROTATION_FLAG) != 0
-        ) {
-            return ShedClass.KEEP
+    /** The drain rate in use, kbps: the sustained estimate when [sustainedDrain] and one exists, else the train report. */
+    val drainKbps: Int get() = if (sustainedDrain && sustainedKbps > 0) sustainedKbps else trainKbps
+
+    /** Which estimator feeds [drainKbps]: `sustained`, `train` or `none`. */
+    val drainSource: String
+        get() = when {
+            sustainedDrain && sustainedKbps > 0 -> "sustained"
+            trainKbps > 0 -> "train"
+            else -> "none"
         }
-        val type = runCatching { EndToEndContentProtocol.inspect(envelope.payload).type }.getOrNull()
-        if (type != EndToEndContentType.MEDIA_PACKET) return ShedClass.KEEP
-        return if (envelope.isKeyFrame) ShedClass.KEY_FRAME else ShedClass.VIDEO
+
+    fun classify(envelope: MeshEnvelope): ShedClass = relayEnvelopeShedClass(envelope)
+
+    /** The child's arrival report (train estimator). */
+    fun setDrainKbps(kbps: Int) {
+        trainKbps = kbps.coerceAtLeast(0)
+        timeSizer?.setDrainKbps(drainKbps)
     }
 
-    fun budgetMs(): Long = BoundedMediaAge.streamQueueBudgetMs(childAddedDelayMs)
-
-    private companion object {
-        /** Outer mesh flags mirror inner media flags except bits 4/5; bit 2 is display rotation. */
-        const val RELAY_ROTATION_FLAG = StreamProtocol.FLAG_DISPLAY_ROTATION
+    /** The relay's own sustained delivery rate to this child; 0 or less clears it. */
+    fun setSustainedDrainKbps(kbps: Int) {
+        sustainedKbps = kbps.coerceAtLeast(0)
+        timeSizer?.setDrainKbps(drainKbps)
     }
+
+    /** The earlier fixed budget: the stream age budget minus what the child's playout already holds. */
+    fun legacyBudgetMs(): Long = BoundedMediaAge.streamQueueBudgetMs(childAddedDelayMs)
+
+    fun budgetMs(): Long = legacyBudgetMs().let { legacy -> timeSizer?.targetMs(legacy) ?: legacy }
+
+    /** What the `relay_time_queue` line logs on a change: the drain source and whether the queue is overloaded. */
+    fun timeQueueState(): Pair<String, Boolean> =
+        drainSource to (timeSizer?.snapshot(legacyBudgetMs())?.overload ?: false)
+
+    /** `BENCHMARK relay_time_queue` fields, written in both arms (fixed: the earlier budget is the target). */
+    fun timeQueueSummary(queueAgeMs: Long): String {
+        val legacy = legacyBudgetMs()
+        val snapshot = timeSizer?.snapshot(legacy)
+        return "arm=${if (timeSizer != null) "time" else "fixed"} | queueAgeMs=$queueAgeMs | " +
+            "targetMs=${snapshot?.targetMs ?: legacy} | legacyBudgetMs=$legacy | " +
+            "drainKbps=${snapshot?.drainKbps ?: drainKbps} | drainSource=$drainSource | trainKbps=$trainKbps | " +
+            "sustainedKbps=$sustainedKbps | sustainedArm=$sustainedDrain | offeredKbps=${snapshot?.offeredKbps ?: -1} | " +
+            "jitterMs=${snapshot?.jitterMs ?: -1} | keyFrameDrainMs=${snapshot?.keyFrameDrainMs ?: -1} | " +
+            "overload=${snapshot?.overload ?: false} | shedEvents=${shedder.shedEvents} | shedFrames=${shedder.shedFrames}"
+    }
+}
+
+/**
+ * What a relay's child queue treats a stream envelope as: audio, control, configuration, rotation,
+ * terminal and every non-media record are KEEP (never dropped); media video is VIDEO or KEY_FRAME.
+ * Outer mesh flags mirror the inner media flags except bits 4/5; bit 2 is display rotation. The BME1
+ * type byte is plaintext associated data, so the relay can tell media from headers without a key.
+ */
+internal fun relayEnvelopeShedClass(envelope: MeshEnvelope): ShedClass {
+    if (envelope.isAudio || envelope.isControl ||
+        envelope.flags and (MeshEnvelope.FLAG_CODEC_CONFIG or MeshEnvelope.FLAG_TERMINAL or
+            StreamProtocol.FLAG_DISPLAY_ROTATION) != 0
+    ) {
+        return ShedClass.KEEP
+    }
+    val type = runCatching { EndToEndContentProtocol.inspect(envelope.payload).type }.getOrNull()
+    if (type != EndToEndContentType.MEDIA_PACKET) return ShedClass.KEEP
+    return if (envelope.isKeyFrame) ShedClass.KEY_FRAME else ShedClass.VIDEO
 }
 
 /** Largest value seen since the last [take]; for per-window BENCHMARK lines. */

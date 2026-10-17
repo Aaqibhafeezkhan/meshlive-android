@@ -1,0 +1,147 @@
+package com.example.bluetoothtest
+
+/**
+ * The switches of Naming v2 (Design G; docs/SWITCHES.md "Naming and identity display"). Each ships behind its own switch;
+ * a user who touched a switch keeps the explicit choice, an untouched switch follows the constant below, and a DEBUG
+ * benchmark launch (any `test_` extra) reads only its extras, default off, so measured case IDs stay valid
+ * ([FeatureCatalog.resolve]). Shipping a feature ON is the one-line change of its constant, made only after the phone
+ * check named beside it has passed.
+ */
+internal object NamingFeatureDefaults {
+    /** G2: generated stranger names for rotating-ID rows. Display only, no wire change (phone check N3). Off shows the handle. */
+    const val GENERATED_NAMES = true
+
+    /** Public stream title pages (G1 split). On since 2026-10-17, no Settings switch (design decision). */
+    const val TITLE_PAGES = true
+
+    /** "Show my name before they answer" (design decision G-Q1). Applies only while names are on; phone check N2. */
+    const val NAMES_BEFORE_ANSWER = true
+
+    /** G4: BVMID2 verification codes. Off until phone check N5 passes (no Android binding of the Meet flow yet). */
+    const val BVMID2 = false
+
+    /** G4: "Accept older verification codes" (BVMID1 gives the shield again). Off: the 0.2.0-beta compat decision. */
+    const val BVMID1_COMPAT = false
+
+    /** G5: Visible by name (window offer, name pages). Off until phone check N7 passes. */
+    const val VISIBLE_BY_NAME = false
+}
+
+internal object NamingFeatures {
+    const val GROUP = "naming"
+
+    val GENERATED_NAMES = FeatureSpec(
+        id = "generated_names",
+        prefKey = "feature_generated_names",
+        defaultEnabled = NamingFeatureDefaults.GENERATED_NAMES,
+        benchmarkExtra = "test_generated_names",
+        titleRes = R.string.feature_generated_names,
+        descriptionRes = R.string.feature_generated_names_description,
+        iconRes = R.drawable.ic_person,
+        group = GROUP,
+        phoneTest = "N3",
+    )
+
+    /**
+     * "Show my stream title to everyone nearby": the public title pages of a titled stream, split from the in-session
+     * names and subjects ([PeerLabelFeature.enabled], Settings "Names and subjects"). The title is a title, not a person.
+     */
+    val TITLE_PAGES = FeatureSpec(
+        id = "stream_title_pages",
+        prefKey = "feature_stream_title_pages_v2",
+        defaultEnabled = NamingFeatureDefaults.TITLE_PAGES,
+        benchmarkExtra = "test_title_pages",
+        group = GROUP,
+        phoneTest = "T5",
+    )
+
+    /** A sub-option of "Names and subjects" ([CallFeature.NAMES_AND_TITLES], id `names_and_titles`). */
+    val NAMES_BEFORE_ANSWER = FeatureSpec(
+        id = "names_before_answer",
+        prefKey = NamingSettings.PREF_BEFORE_ANSWER,
+        defaultEnabled = NamingFeatureDefaults.NAMES_BEFORE_ANSWER,
+        benchmarkExtra = NamingSettings.EXTRA_BEFORE_ANSWER,
+        titleRes = R.string.feature_names_before_answer,
+        descriptionRes = R.string.feature_names_before_answer_description,
+        iconRes = R.drawable.ic_call,
+        group = GROUP,
+        dependsOn = "names_and_titles",
+        phoneTest = "N2",
+    )
+
+    /** Expiring one-use verification codes on the Add contact screen (bound to the endpoint through [MeetBridge]). */
+    val BVMID2 = FeatureSpec(
+        id = "bvmid2",
+        prefKey = "feature_bvmid2",
+        defaultEnabled = NamingFeatureDefaults.BVMID2,
+        benchmarkExtra = "test_bvmid2",
+        titleRes = R.string.feature_bvmid2,
+        descriptionRes = R.string.feature_bvmid2_description,
+        iconRes = R.drawable.ic_schedule,
+        group = GROUP,
+        phoneTest = "N5",
+    )
+
+    val BVMID1_COMPAT = FeatureSpec(
+        id = "bvmid1_compat",
+        prefKey = "feature_bvmid1_compat",
+        defaultEnabled = NamingFeatureDefaults.BVMID1_COMPAT,
+        benchmarkExtra = "test_bvmid1_compat",
+        titleRes = R.string.feature_bvmid1_compat,
+        descriptionRes = R.string.feature_bvmid1_compat_description,
+        iconRes = R.drawable.ic_verified_user,
+        group = GROUP,
+        dependsOn = "bvmid2",
+        phoneTest = "N5",
+    )
+
+    val VISIBLE_BY_NAME = FeatureSpec(
+        id = "visible_by_name",
+        prefKey = "feature_visible_by_name",
+        defaultEnabled = NamingFeatureDefaults.VISIBLE_BY_NAME,
+        benchmarkExtra = "test_visible_by_name",
+        titleRes = R.string.feature_visible_by_name,
+        descriptionRes = R.string.feature_visible_by_name_description,
+        iconRes = R.drawable.ic_visibility,
+        group = GROUP,
+        phoneTest = "N7",
+    )
+
+    /** Registered in this order: parents first ([FeatureCatalog.register]). `names_and_titles` is registered by [CallFeatureSpecs]. */
+    val all: List<FeatureSpec> = listOf(GENERATED_NAMES, TITLE_PAGES, NAMES_BEFORE_ANSWER, BVMID2, BVMID1_COMPAT, VISIBLE_BY_NAME)
+
+    /** The switches that have a Settings row (Settings > Privacy). The three newest ship off. */
+    val settingsRows: List<FeatureSpec> =
+        listOf(GENERATED_NAMES, NAMES_BEFORE_ANSWER, BVMID2, BVMID1_COMPAT, VISIBLE_BY_NAME)
+
+    /** Idempotent. Needs [CallFeatureSpecs.registerAll] first (the parent of `names_before_answer`). */
+    fun registerAll() = all.forEach(FeatureCatalog::register)
+
+    /** Whether generated names are shown now (the last [FeatureCatalog.refresh]). */
+    fun generatedNamesOn(): Boolean = FeatureCatalog.isEnabled(GENERATED_NAMES.id)
+
+    fun bvmid2On(): Boolean = FeatureCatalog.isEnabled(BVMID2.id)
+
+    /** Whether version 7 pages and version 8 window offers are read (the last [FeatureCatalog.refresh]). */
+    fun visibleByNameOn(): Boolean = FeatureCatalog.isEnabled(VISIBLE_BY_NAME.id)
+
+    fun bvmid1CompatOn(): Boolean = FeatureCatalog.isEnabled(BVMID1_COMPAT.id)
+
+    /**
+     * Title pages for this launch. A DEBUG benchmark launch reads its own extra and, for the cases measured before the split,
+     * also `test_peer_labels` (which used to switch names, subjects and title pages together).
+     */
+    fun resolveTitlePages(benchmarkLaunch: Boolean, extra: (String) -> Boolean, stored: (String) -> Boolean?): Boolean =
+        FeatureCatalog.resolve(TITLE_PAGES, benchmarkLaunch, extra, stored) ||
+            (benchmarkLaunch && extra(PeerLabelFeature.EXTRA))
+}
+
+/** One-time carry-over of a choice made before Naming v2 split names and subjects from the public title pages. */
+internal object NamingMigration {
+    /**
+     * The value to store for the new title-pages switch, or null to store nothing. A user who explicitly decided the old
+     * combined "Names and titles" switch (on or off) and never touched the new one keeps that decision for the pages.
+     */
+    fun titlePagesFromLegacy(hasNewChoice: Boolean, legacyNamesChoice: Boolean?): Boolean? =
+        if (!hasNewChoice && legacyNamesChoice != null) legacyNamesChoice else null
+}

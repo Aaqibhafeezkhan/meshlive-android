@@ -212,8 +212,9 @@ class ShortEpochHarnessTest {
             short(seconds)
             assertEquals(instants.map { Math.floorDiv(it, 86_400L) }, instants.map { PresenceLeases.dayOf(RotatingDiscoveryIds.wallEpoch(it)) })
             assertEquals(86_400L / seconds, RotatingDiscoveryIds.epochsPerDay)
-            // Day-derived limits keep their real durations: one day of lead before a forward jump, 30 days of skew.
-            assertEquals(86_400L / seconds, DiscoveryEpochClock.MAX_AHEAD_EPOCHS)
+            // Day-derived limits keep their real durations (30 days of skew); the lead bound is the opening
+            // tolerance in epochs, so it is 2 epochs at every length.
+            assertEquals(DiscoverySelectionCheck.EPOCH_TOLERANCE, DiscoveryEpochClock.MAX_AHEAD_EPOCHS)
             assertEquals(30L * 86_400L / seconds, ContactPresence.MAX_SKEW_EPOCHS)
         }
         short(60)

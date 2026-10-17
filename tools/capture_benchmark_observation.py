@@ -15,6 +15,7 @@ import subprocess
 import time
 
 from benchmark_layout import original, output_path, resolve
+from child_process_guard import guard
 from extract_measurement_capture import digest, file_record, integer
 from score_audio_sync import number
 from score_physical_av import controls
@@ -178,8 +179,8 @@ class ObservationRecorder:
         self.log = (self.output / "recorder.log").open("wb")
         try:
             self.result["process_start_bracket_ns"] = [time.monotonic_ns(), None]
-            self.process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=self.log,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            self.process = guard(subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=self.log,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
             self.result["process_start_bracket_ns"][1] = time.monotonic_ns()
             self.result["process_pid"] = self.process.pid
             deadline = time.monotonic() + timeout_seconds

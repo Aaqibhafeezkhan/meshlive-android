@@ -79,6 +79,55 @@ internal class RelayChildStallGuard(
     }
 }
 
+/**
+ * Hold-off after the stall guard closed a child link (default on; DEBUG launch extra `test_relay_stall_holdoff=false` is the
+ * control arm). A dead child anchor ends with the child still holding the dead link: its own supervision timeout runs out
+ * about 5 s after its last reception, it then tears its receiver down and restarts discovery behind its route cooldown
+ * (8 to 13 s), and the advertisements it shows in between belong to the receiver that is going away.
+ *
+ * Why (b13-audio-chain-626c4b2c music, b5-audio-music-chain, same signature in all three failing audio chains, M31 relay to an
+ * A15s child): the guard closed the first link 2.0 s after the interval update (`relay_child_stall stage=hop`), the relay saw
+ * the child's advertisement 3.2 s later (the receiver was already stopping: its advertising set started and stopped within
+ * 6 ms) and dialed it twice, each dial a 5 s `status 133`; the stall plus the first 133 were the two establishment failures
+ * that withdrew the offer for 5 minutes, so a 16 percent dead-anchor attempt (9 of 55 in relayfix-0725a213) became a
+ * permanent chain failure. Dials to that child inside [HOLDOFF_MS] of a stall close are skipped (not counted); the child's
+ * real next request, after its cooldown, dials on a fresh anchor phase.
+ */
+internal class RelayStallHoldoff(private val holdoffMs: Long = HOLDOFF_MS) {
+    private val until = HashMap<String, Long>()
+
+    @Synchronized
+    fun onStall(key: String, nowMs: Long) {
+        until[key] = nowMs + holdoffMs
+    }
+
+    /** Milliseconds left on [key]'s hold-off (0 when none). */
+    @Synchronized
+    fun remainingMs(key: String, nowMs: Long): Long {
+        val end = until[key] ?: return 0L
+        if (nowMs >= end) {
+            until.remove(key)
+            return 0L
+        }
+        return end - nowMs
+    }
+
+    @Synchronized
+    fun onSuccess(key: String) {
+        until.remove(key)
+    }
+
+    companion object {
+        /** About the child's route cooldown (8 to 13 s) less the time its dead link needs to expire. */
+        const val HOLDOFF_MS = 10_000L
+    }
+}
+
+/** The relay's hold-off, kept across forwarders like [RelayChildEstablishment]. */
+internal object RelayChildStall {
+    val holdoff = RelayStallHoldoff()
+}
+
 /** Reports every successful read so [RelayChildStallGuard] sees inbound progress without touching the framing. */
 internal class ProgressInputStream(
     delegate: InputStream,

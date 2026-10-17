@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Shared empty state: icon, one-line title, one helpful line, one action (filled from code). -->
+<!-- Shared empty state: one title line, one short line, one action (filled from code). -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -10,10 +10,10 @@
 
     <ImageView
         android:id="@+id/emptyStateIcon"
-        android:layout_width="64dp"
-        android:layout_height="64dp"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
         android:importantForAccessibility="no"
-        app:tint="@color/outline" />
+        app:tint="@color/text_disabled" />
 
     <TextView
         android:id="@+id/emptyStateTitle"
@@ -27,7 +27,7 @@
         android:id="@+id/emptyStateText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="4dp"
         android:gravity="center"
         android:maxWidth="320dp"
         android:textAppearance="@style/TextAppearance.App.Body" />

@@ -85,6 +85,8 @@ def ended_proof(ended, available):
     return proof
 
 
+# BENCHMARK lines that list configuration (registry entries, proposals, switch names) and never report an event.
+CONFIGURATION_LISTINGS = ("BENCHMARK device_policy:", "BENCHMARK family_switches:")
 UNEXPECTED = re.compile(
     r"FATAL EXCEPTION|Fatal signal|Bluetooth.*(?:crash|died)|"
     r"Private call ended:|(?:connection|stream|link).*?(?:failed|lost|disconnected)|"
@@ -299,6 +301,7 @@ def apply_user_profile(gates, optical_gates, limits, context):
         timeline = sorted((timestamp(item["time"]), item["fps"]) for item in context["profiles"]
                           if item["kind"] == "received_display")
         ratios, degraded, total = [], 0.0, 0.0
+        below_seconds, rated_seconds = 0.0, 0.0
         for item in context["intervals"]:
             if item["planned_overlap"]:
                 continue
@@ -306,12 +309,30 @@ def apply_user_profile(gates, optical_gates, limits, context):
             effective, below = time_weighted_fps(timeline, requested, start, end)
             if effective:
                 ratios.append(item["visible_fps"] / effective)
+                rated_seconds += end - start
+                if item["visible_fps"] / effective < limits["effective_fps_fraction"]:
+                    below_seconds += end - start
             total += end - start
             degraded += below
-        cadence_gate = gate(min(ratios, default=None), limits["effective_fps_fraction"], "min",
+        # Q6 (2026-10-14): the decisive value is the share of scored time spent below the fraction of the FPS in force;
+        # the longest stall is its own decisive gate (longest_stall_ms). The old slowest-window rule is kept below.
+        below_share = below_seconds / rated_seconds * 100 if rated_seconds > 0 else None
+        cadence_gate = gate(below_share, limits["effective_fps_below_share_percent"], "max",
                             reason="Effective profile FPS or visible-FPS intervals absent")
-        cadence_gate.update(basis="Slowest clean report interval's visible FPS / FPS in force then (received stream header; "
-                                  "requested FPS before any header)", declared_effective_changes=len(timeline))
+        cadence_gate.update(
+            rule="time_share_below_fraction",
+            basis="Share of clean report time whose visible FPS was below "
+                  f"{limits['effective_fps_fraction']:.0%} of the FPS in force then (received stream header, time-weighted; "
+                  "requested FPS before any header); the time resolution is the report interval. The longest stall is "
+                  "judged by longest_stall_ms",
+            fraction=limits["effective_fps_fraction"], below_seconds=below_seconds, scored_seconds=rated_seconds,
+            longest_stall_ms=max((item["max"] for item in context["clean_cadence"]), default=None),
+            declared_effective_changes=len(timeline),
+            legacy_slowest_window={
+                **gate(min(ratios, default=None), limits["effective_fps_fraction"], "min",
+                       reason="Effective profile FPS or visible-FPS intervals absent"),
+                "label": "comparison only (rule before Q6): slowest clean report interval's visible FPS / FPS in force "
+                         "must reach the fraction; never decides"})
         gates["effective_profile_fps"] = cadence_gate
         visible = [item["visible_fps"] for item in context["intervals"] if not item["planned_overlap"]]
         if requested and visible:
@@ -549,6 +570,10 @@ def score_log(text, spec, manifest=None, thresholds=None):
                    for other in selected):
                 continue
             message = f"{ENDED_CALLBACK} {message[len(ENDED_UI):]}"
+        if message.startswith(CONFIGURATION_LISTINGS):
+            # Launch-time inventories name protections and proposals ("link-lost-after-change-rollback" since
+            # 71ef65b, 2026-10-14), not events: matching them counted one false unexpected event per launch.
+            continue
         if UNEXPECTED.search(message):
             # A normal hang-up is not proof of an unexpected failure.
             normal_end = re.search(r"Private call ended: (?:Call ended|Peer ended)", message, re.IGNORECASE)

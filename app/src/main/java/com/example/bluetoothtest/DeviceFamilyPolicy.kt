@@ -26,13 +26,50 @@ enum class SocFamily { QUALCOMM, EXYNOS, MEDIATEK, TENSOR, UNISOC, UNKNOWN }
 enum class OemSkin { ONE_UI, COLOROS, REALME_UI, OXYGENOS, MIUI_HYPEROS, ASUS, PIXEL, OTHER }
 
 /**
- * Which Bluetooth stack code base the platform ships. Android 10-12 build the stack from
- * platform/system/bt into the OS image. Android 13 builds it from packages/modules/Bluetooth as an
- * optional Mainline module, updatable from Android 16
- * (https://source.android.com/docs/core/ota/modular-system/bluetooth), so on newer phones a stack
- * fix can arrive without an SDK change and the security patch level matters too.
+ * Which Bluetooth stack code base the platform ships, by era (bluetooth.md entry 29; AOSP
+ * init_flags.rs of each release branch). Android 10-12 build the stack from platform/system/bt into
+ * the OS image. Android 13 builds it from packages/modules/Bluetooth as an optional Mainline module,
+ * updatable from Android 16 (https://source.android.com/docs/core/ota/modular-system/bluetooth), so
+ * on newer phones a stack fix can arrive without an SDK change and the security patch level matters
+ * too (see [DeviceMatcher.patchMin]).
+ *
+ * [PLATFORM_SYSTEM_BT] and [BLUETOOTH_MODULE] are umbrella values kept so existing matchers compile
+ * and keep their meaning: a matcher naming one matches every era it covers ([covers]). A phone's own
+ * lineage ([deriveStackLineage]) is always one of the five eras.
  */
-enum class BluetoothStackLineage { PLATFORM_SYSTEM_BT, BLUETOOTH_MODULE }
+enum class BluetoothStackLineage {
+    /** Umbrella: Android 12 and older (system/bt), i.e. [LEGACY_29_30] and [LEGACY_GD_OPTIONAL_31_32]. */
+    PLATFORM_SYSTEM_BT,
+
+    /** Umbrella: Android 13 and newer (modules/Bluetooth), i.e. [GD_CORE_33], [GD_FLAGGED_34] and [ACONFIG_35_PLUS]. */
+    BLUETOOTH_MODULE,
+
+    /** Android 10-11 (API 29-30, also anything older): legacy BTA/BTM/L2CAP stack only. */
+    LEGACY_29_30,
+
+    /** Android 12 (API 31-32): legacy stack with optional GD modules behind init flags that default off. */
+    LEGACY_GD_OPTIONAL_31_32,
+
+    /** Android 13 (API 33): GD HCI, controller, ACL manager, advertising and scanning always on. */
+    GD_CORE_33,
+
+    /** Android 14 (API 34): large behaviour-flag set with new defaults (finite_att_timeout, subrating...). */
+    GD_FLAGGED_34,
+
+    /** Android 15 and newer (API 35+): switches moved to aconfig flags, behaviour changes per QPR. */
+    ACONFIG_35_PLUS;
+
+    /** The umbrella value this era belongs to (an umbrella maps to itself). */
+    val umbrella: BluetoothStackLineage
+        get() = when (this) {
+            PLATFORM_SYSTEM_BT, LEGACY_29_30, LEGACY_GD_OPTIONAL_31_32 -> PLATFORM_SYSTEM_BT
+            BLUETOOTH_MODULE, GD_CORE_33, GD_FLAGGED_34, ACONFIG_35_PLUS -> BLUETOOTH_MODULE
+        }
+
+    /** True when a matcher naming this value accepts a phone whose lineage is [phone]. */
+    fun covers(phone: BluetoothStackLineage): Boolean =
+        this == phone || ((this == PLATFORM_SYSTEM_BT || this == BLUETOOTH_MODULE) && phone.umbrella == this)
+}
 
 /** Controller features the public BluetoothAdapter API reports; null when not read. */
 internal data class BluetoothControllerTraits(
@@ -93,6 +130,8 @@ internal data class DeviceTraits(
     val controller: BluetoothControllerTraits? = null,
     /** MediaCodec component names on this phone (encoders and decoders, no aliases). */
     val codecComponents: List<String> = emptyList(),
+    /** Facts read once by [DeviceTraitsProbe]; null until it ran (JVM tests, early start). */
+    val runtime: DeviceRuntimeTraits? = null,
     /**
      * Entries switched off for this view of the phone only (not a Build field): the experimental
      * legacy-call relief passes call paths a view without [DevicePolicyRegistry.LEGACY_QUALCOMM_CALL].
@@ -101,7 +140,11 @@ internal data class DeviceTraits(
 ) {
     val socFamily: SocFamily get() = deriveSocFamily(socManufacturer, hardware)
     val oemSkin: OemSkin get() = deriveOemSkin(manufacturer)
+    /** The finer stack era (one of the five eras, never an umbrella value). */
     val stackLineage: BluetoothStackLineage get() = deriveStackLineage(sdkInt)
+
+    /** The umbrella family of [stackLineage] (PLATFORM_SYSTEM_BT or BLUETOOTH_MODULE). */
+    val stackFamily: BluetoothStackLineage get() = stackLineage.umbrella
 
     fun describe(): String = listOf(
         "manufacturer=$manufacturer",
@@ -117,11 +160,14 @@ internal data class DeviceTraits(
         "stack=${stackLineage.name}",
         "controller=${controller?.describe() ?: "unread"}",
         "codecs=${codecComponents.size}",
+        // The runtime facts are flat key=value pairs of their own (rom=, abis=, pageSize=, ...).
+        runtime?.describe() ?: "runtime=unread",
     ).joinToString(";") + if (policyOff.isEmpty()) "" else ";viewOff=${policyOff.sorted().joinToString("+")}"
 
     companion object {
         @Volatile private var snapshot: DeviceTraits? = null
         @Volatile private var controllerTraits: BluetoothControllerTraits? = null
+        @Volatile private var runtimeTraits: DeviceRuntimeTraits? = null
 
         /** This phone (cached; Build fields and the codec list do not change while the app runs). */
         fun current(): DeviceTraits {
@@ -137,6 +183,7 @@ internal data class DeviceTraits(
                     socModel = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Build.SOC_MODEL.orEmpty() else "",
                     securityPatch = Build.VERSION.SECURITY_PATCH.orEmpty(),
                     controller = controllerTraits,
+                    runtime = runtimeTraits,
                     codecComponents = runCatching {
                         MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos
                             .filterNot { it.isAlias }
@@ -154,6 +201,15 @@ internal data class DeviceTraits(
             synchronized(this) {
                 controllerTraits = read
                 snapshot = snapshot?.copy(controller = read)
+            }
+        }
+
+        /** Adds the runtime facts [DeviceTraitsProbe] read (called by the probe; null changes nothing). */
+        fun attachRuntime(runtime: DeviceRuntimeTraits?) {
+            if (runtime == null) return
+            synchronized(this) {
+                runtimeTraits = runtime
+                snapshot = snapshot?.copy(runtime = runtime)
             }
         }
     }
@@ -193,8 +249,16 @@ internal fun deriveOemSkin(manufacturer: String): OemSkin = when (manufacturer.t
     else -> OemSkin.OTHER
 }
 
-internal fun deriveStackLineage(sdkInt: Int): BluetoothStackLineage =
-    if (sdkInt >= 33) BluetoothStackLineage.BLUETOOTH_MODULE else BluetoothStackLineage.PLATFORM_SYSTEM_BT
+/** The stack era for an SDK level (bluetooth.md entry 29). Never returns an umbrella value. */
+internal fun deriveStackLineage(sdkInt: Int): BluetoothStackLineage = when {
+    sdkInt <= 30 -> BluetoothStackLineage.LEGACY_29_30
+    sdkInt <= 32 -> BluetoothStackLineage.LEGACY_GD_OPTIONAL_31_32
+    sdkInt == 33 -> BluetoothStackLineage.GD_CORE_33
+    sdkInt == 34 -> BluetoothStackLineage.GD_FLAGGED_34
+    else -> BluetoothStackLineage.ACONFIG_35_PLUS
+}
+
+private val SECURITY_PATCH_FORMAT = Regex("\\d{4}-\\d{2}-\\d{2}")
 
 /** Controller feature constraints; an unread controller never satisfies a constraint. */
 internal data class ControllerMatcher(
@@ -237,7 +301,21 @@ internal data class DeviceMatcher(
     val controller: ControllerMatcher? = null,
     /** The phone has at least one codec component whose name starts with one of these. */
     val codecComponentPrefixes: Set<String> = emptySet(),
+    /**
+     * Build.VERSION.SECURITY_PATCH window, inclusive, ISO yyyy-MM-dd (compared as text, which orders
+     * correctly for that format). A phone whose patch is empty or not in that format never satisfies a
+     * patch-constrained matcher. Stack fixes land by patch level and QPR, not by SDK.
+     */
+    val patchMin: String? = null,
+    val patchMax: String? = null,
+    /** Runtime facts from [DeviceTraitsProbe]; an unread probe never satisfies a constraint. */
+    val runtime: RuntimeMatcher? = null,
 ) {
+    init {
+        require(patchMin == null || SECURITY_PATCH_FORMAT.matches(patchMin)) { "patchMin must be yyyy-MM-dd: $patchMin" }
+        require(patchMax == null || SECURITY_PATCH_FORMAT.matches(patchMax)) { "patchMax must be yyyy-MM-dd: $patchMax" }
+    }
+
     val universal: Boolean
         get() = this == DeviceMatcher()
 
@@ -257,7 +335,14 @@ internal data class DeviceMatcher(
         ) return false
         if (manufacturers.isNotEmpty() && manufacturers.none { it.equals(traits.manufacturer, ignoreCase = true) }) return false
         if (skins.isNotEmpty() && traits.oemSkin !in skins) return false
-        if (stackLineages.isNotEmpty() && traits.stackLineage !in stackLineages) return false
+        if (stackLineages.isNotEmpty() && stackLineages.none { it.covers(traits.stackLineage) }) return false
+        if (patchMin != null || patchMax != null) {
+            val patch = traits.securityPatch
+            if (!SECURITY_PATCH_FORMAT.matches(patch)) return false
+            if (patchMin != null && patch < patchMin) return false
+            if (patchMax != null && patch > patchMax) return false
+        }
+        if (runtime != null && !runtime.matches(traits.runtime)) return false
         if (controller != null && !controller.matches(traits.controller)) return false
         if (codecComponentPrefixes.isNotEmpty() &&
             traits.codecComponents.none { name -> codecComponentPrefixes.any { name.startsWith(it, ignoreCase = true) } }
@@ -284,6 +369,14 @@ internal data class DeviceMatcher(
             manufacturers.takeIf { it.isNotEmpty() }?.let { "manufacturer ${it.sorted()}" },
             skins.takeIf { it.isNotEmpty() }?.let { "skin ${it.map(OemSkin::name).sorted()}" },
             stackLineages.takeIf { it.isNotEmpty() }?.let { "stack ${it.map(BluetoothStackLineage::name).sorted()}" },
+            (patchMin != null || patchMax != null).takeIf { it }?.let {
+                when {
+                    patchMin != null && patchMax != null -> "security patch $patchMin..$patchMax"
+                    patchMin != null -> "security patch >= $patchMin"
+                    else -> "security patch <= $patchMax"
+                }
+            },
+            runtime?.let { "runtime ${it.describe()}" },
             controller?.let { "controller ${it.describe()}" },
             codecComponentPrefixes.takeIf { it.isNotEmpty() }?.let { "has codec ${it.sorted()}" },
         ).joinToString("; ")
@@ -426,10 +519,10 @@ enum class PolicyConfidence { HIGH, MEDIUM, LOW }
 /**
  * Component policy an entry belongs to (one registry, organised by pipeline component). Each area
  * contributes its entries from its own file (CodecPolicy, YuvPolicy, BluetoothTransportPolicy,
- * BackgroundPolicy, MemoryThermalPolicy, NativeCompat); core Bluetooth-stack and call entries stay
- * in DevicePolicyRegistry.
+ * BackgroundPolicy, MemoryThermalPolicy, NativeCompat, and from the camera/audio batches CameraPolicy
+ * and AudioCapturePolicy); core Bluetooth-stack and call entries stay in DevicePolicyRegistry.
  */
-enum class PolicyArea { CODEC, YUV, BLUETOOTH_TRANSPORT, GRAPHICS, BACKGROUND, MEMORY_THERMAL, NATIVE }
+enum class PolicyArea { CODEC, YUV, BLUETOOTH_TRANSPORT, GRAPHICS, BACKGROUND, MEMORY_THERMAL, NATIVE, CAMERA, AUDIO }
 
 /**
  * How far the entry's premise is validated. UPSTREAM_DOCUMENTED: an upstream source documents the
@@ -532,7 +625,7 @@ internal class ResolvedDevicePolicy(
 
 internal object DeviceFamilyPolicy {
     /** Bump when entries, matchers or effects change. */
-    const val REVISION = "2026-10-11.2"
+    const val REVISION = "2026-10-14.2"
 
     val entries: List<DevicePolicyEntry> get() = DevicePolicyRegistry.entries
 

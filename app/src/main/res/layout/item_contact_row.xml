@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One saved contact on the Contacts tab: name (+ "Nearby now"), then video call, voice call and info.
+     Every saved contact is verified, so the row carries no check mark or initial. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/selectableItemBackground"
+    android:descendantFocusability="blocksDescendants"
+    android:gravity="center_vertical"
+    android:minHeight="72dp"
+    android:orientation="horizontal"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/contactRowTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textAppearance="@style/TextAppearance.App.RowLabel" />
+
+        <TextView
+            android:id="@+id/contactRowSubtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="@style/TextAppearance.App.Body"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/contactRowVideoButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/contact_sheet_video"
+        android:padding="12dp"
+        android:src="@drawable/ic_videocam"
+        app:tint="@color/text_primary" />
+
+    <ImageButton
+        android:id="@+id/contactRowVoiceButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/contact_sheet_voice"
+        android:padding="12dp"
+        android:src="@drawable/ic_call"
+        app:tint="@color/text_primary" />
+
+    <ImageButton
+        android:id="@+id/contactRowInfoButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/info_more"
+        android:padding="12dp"
+        android:src="@drawable/ic_info"
+        app:tint="@color/text_secondary" />
+</LinearLayout>

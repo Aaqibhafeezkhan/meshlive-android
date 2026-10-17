@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One audio output in the output sheet: icon, name, a check on the one in use. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    style="@style/Widget.App.Row"
+    android:minHeight="56dp">
+
+    <ImageView
+        android:id="@+id/outputIcon"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:importantForAccessibility="no"
+        app:tint="@color/text_primary" />
+
+    <TextView
+        android:id="@+id/outputName"
+        style="@style/Widget.App.RowTitle"
+        android:layout_marginStart="16dp"
+        android:importantForAccessibility="no" />
+
+    <ImageView
+        android:id="@+id/outputCheck"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:importantForAccessibility="no"
+        android:src="@drawable/ic_check"
+        android:visibility="invisible"
+        app:tint="@color/text_primary" />
+</LinearLayout>

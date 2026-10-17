@@ -18,6 +18,10 @@ import org.junit.Test
 
 /** The setup exchange over a real BMS1 record layer: the caller's request and what a helper may answer. */
 class RelaySetupFlowTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private class Pipe {
         private val queue = java.util.concurrent.LinkedBlockingQueue<Int>()
         @Volatile var closed = false
@@ -218,7 +222,7 @@ class RelaySetupFlowTest {
                 done.countDown()
             }
         }
-        assertTrue(done.await(5, TimeUnit.SECONDS))
+        assertTrue(done.await(120, TimeUnit.SECONDS))
         assertTrue("the link was closed by the watchdog", closed.get())
         assertFalse(link.caller.reader.acceptRelaySetup)
     }

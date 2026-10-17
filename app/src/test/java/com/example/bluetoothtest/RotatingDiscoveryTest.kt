@@ -362,14 +362,76 @@ class RotatingDiscoveryTest {
         assertTrue(recovered.newGeneration)
         assertEquals(2L, clock.state.generation)
         assertEquals(RotatingDiscoveryIds.wallEpoch((t0 + end - 301_000) / 1000), recovered.epoch)
-        // A small offset (within one day) never triggers a new generation.
+        // A lead inside the opening tolerance never triggers a new generation: the wall steps back one epoch
+        // and E (which ticks once more, never repeating) ends 2 epochs ahead.
         val small = DiscoveryEpochClock(EpochClockState(), "boot1") { }
-        small.read(t0 + 20 * 3_600_000L, 0)
+        small.read(t0 + 900_000L, 0)
         var newGeneration = false
         for (minute in 0..180) {
             newGeneration = newGeneration || small.read(t0 + minute * 60_000L, 1_000 + minute * 60_000L).newGeneration
         }
         assertFalse(newGeneration)
+    }
+
+    /** Q33: the recovery bound is the opening tolerance, so a backward wall step of 3 epochs recovers. */
+    @Test
+    fun theLeadBoundIsTheOpeningToleranceNotADay() {
+        assertEquals(DiscoverySelectionCheck.EPOCH_TOLERANCE, DiscoveryEpochClock.MAX_AHEAD_EPOCHS)
+        assertEquals(2L, DiscoveryEpochClock.MAX_AHEAD_EPOCHS)
+    }
+
+    @Test
+    fun aBackwardWallStepBeyondTheToleranceStartsANewGenerationAfterAnHourOfConsistentWall() {
+        val t0 = 1_791_590_400_000L
+        val saved = ArrayList<EpochClockState>()
+        val clock = DiscoveryEpochClock(EpochClockState(), "boot1") { saved += it }
+        assertEquals(epoch, clock.read(t0, 0).epoch)
+        // A manual fix moves the wall back 2 epochs (30 min) at elapsed 1 s. E must still tick forward (an epoch is
+        // never advertised twice), so it ends 3 epochs ahead of the wall. The app reads once a minute.
+        val wallAfterStep = t0 - 2 * 900_000L
+        fun readAt(minute: Int) = clock.read(wallAfterStep + minute * 60_000L, 1_000 + minute * 60_000L)
+        var firstGenerationMinute = -1
+        var maxLead = 0L
+        for (minute in 0..180) {
+            val reading = readAt(minute)
+            maxLead = maxOf(maxLead, reading.epoch - RotatingDiscoveryIds.wallEpoch((wallAfterStep + minute * 60_000L) / 1000))
+            if (reading.newGeneration && firstGenerationMinute < 0) firstGenerationMinute = minute
+            // E never goes down and is never advertised twice across epochs.
+        }
+        // E stayed 3 epochs ahead (beyond the tolerance of 2) until the hour of steady wall time ended at minute 60.
+        assertEquals(3L, maxLead)
+        assertEquals(60, firstGenerationMinute)
+        assertEquals(2L, clock.state.generation)
+        assertEquals(2L, saved.last().generation)
+        // After the recovery E equals the wall epoch and nothing further starts.
+        assertEquals(RotatingDiscoveryIds.wallEpoch((wallAfterStep + 180 * 60_000L) / 1000), clock.state.lastEpoch)
+    }
+
+    @Test
+    fun aLeadOfExactlyTheToleranceOrAnUnsteadyWallClockStartsNothing() {
+        val t0 = 1_791_590_400_000L
+        // Exactly 2 epochs ahead (not "exceeds"): no recovery however long it lasts.
+        val edge = DiscoveryEpochClock(EpochClockState(), "boot1") { }
+        edge.read(t0 + 900_000L, 0)
+        var started = false
+        var lead = 0L
+        for (minute in 0..240) {
+            val reading = edge.read(t0 + minute * 60_000L, 1_000 + minute * 60_000L)
+            lead = reading.epoch - RotatingDiscoveryIds.wallEpoch((t0 + minute * 60_000L) / 1000)
+            started = started || reading.newGeneration
+        }
+        assertEquals(2L, lead)
+        assertFalse(started)
+        // Ahead by 3 or more, but the wall keeps being corrected (its offset moves 3 min every 30 min): the hour restarts.
+        val unsteady = DiscoveryEpochClock(EpochClockState(), "boot1") { }
+        unsteady.read(t0, 0)
+        for (minute in 0..240) {
+            val wall = t0 - 3 * 900_000L + minute * 60_000L - (minute / 30) * 180_000L
+            val reading = unsteady.read(wall, 1_000 + minute * 60_000L)
+            started = started || reading.newGeneration
+        }
+        assertFalse(started)
+        assertEquals(1L, unsteady.state.generation)
     }
 
     @Test

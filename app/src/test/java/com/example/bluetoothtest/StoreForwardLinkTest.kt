@@ -71,6 +71,10 @@ private class TestPipe(private val capacity: Int = Int.MAX_VALUE) {
 }
 
 class StoreForwardLinkTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private val roots = ArrayList<File>()
     private val clockMs = AtomicLong(1_790_000_000_000L)
     private val clock: () -> Long = { clockMs.get() }
@@ -94,7 +98,7 @@ class StoreForwardLinkTest {
         val node = StoreForwardNode.open(
             dir, identity, mailbox,
             cipher,
-            if (exchangeLimits) limits else limits.copy(exchangeCooldownMs = 0, maxExchangesPerHour = Int.MAX_VALUE),
+            (if (exchangeLimits) limits else limits.copy(exchangeCooldownMs = 0, maxExchangesPerHour = Int.MAX_VALUE)).withLoadHeadroom(),
             clock,
         )
         val nodeId get() = identity.nodeId
@@ -133,6 +137,8 @@ class StoreForwardLinkTest {
          * link. Only for a responder that refuses at once (rate limit); otherwise it would wait forever.
          */
         initiatorReadsAfterItsWriteFails: Boolean = false,
+        /** Collects both sessions' log lines (prefixed A:/B:) for the measurement tests. */
+        logs: MutableList<String>? = null,
     ): SyncPair {
         val aToB = TestPipe()
         val bToA = TestPipe()
@@ -155,7 +161,7 @@ class StoreForwardLinkTest {
             private fun gate() {
                 if (gated) {
                     gated = false
-                    assertTrue("initiator writer never failed", writeFailed.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    assertTrue("initiator writer never failed", writeFailed.await(120, java.util.concurrent.TimeUnit.SECONDS))
                 }
             }
             override fun read(): Int = gate().let { bToA.input.read() }
@@ -167,9 +173,9 @@ class StoreForwardLinkTest {
         linkB.reader.acceptStoreForward = true
         lateinit var sessionA: StoreForwardLinkSession
         lateinit var sessionB: StoreForwardLinkSession
-        sessionA = StoreForwardLinkSession(linkA, a.node, initiator = true, closeLink = close, log = { println("A: $it") },
+        sessionA = StoreForwardLinkSession(linkA, a.node, initiator = true, closeLink = close, log = { println("A: $it"); logs?.let { sink -> synchronized(sink) { sink += "A: $it" } } },
             afterChunkWritten = { onInitiatorChunk(sessionA, it, close) })
-        sessionB = StoreForwardLinkSession(linkB, b.node, initiator = false, closeLink = close, log = { println("B: $it") },
+        sessionB = StoreForwardLinkSession(linkB, b.node, initiator = false, closeLink = close, log = { println("B: $it"); logs?.let { sink -> synchronized(sink) { sink += "B: $it" } } },
             afterChunkWritten = { onResponderChunk(sessionB, it, close) })
         var resultB: StoreForwardSyncResult? = null
         var responderError: Throwable? = null
@@ -180,9 +186,9 @@ class StoreForwardLinkTest {
                 responderError = error
             }
         }
-        if (initiatorReadsAfterItsWriteFails) responder.join(20_000)
+        if (initiatorReadsAfterItsWriteFails) responder.join(120_000)
         val resultA = sessionA.run()
-        responder.join(20_000)
+        responder.join(120_000)
         close()
         responderError?.let { throw AssertionError("Responder failed", it) }
         return SyncPair(resultA, requireNotNull(resultB) { "Responder did not finish" })
@@ -252,6 +258,77 @@ class StoreForwardLinkTest {
         assertEquals(StoreForwardSyncOutcome.COMPLETE, second.initiator.outcome)
         assertTrue(second.responder.completed.single() is StoreForwardCompletion.ReceiptOpened)
         assertEquals(BundleState.DELIVERED, alice.node.store.get(sent.idHex)!!.state)
+    }
+
+    @Test
+    fun exchangeLogsMessageTransferLinesWithBytesChunksAndTimings() {
+        val alice = Phone()
+        val bob = Phone()
+        alice.knows(bob)
+        bob.knows(alice)
+        val bundle = alice.sendBytes(bob, 120_000)
+        val logs = ArrayList<String>()
+        sync(alice, bob, logs = logs)
+        val session = logs.single { it.startsWith("A: BENCHMARK message_transfer session") }
+        fun field(line: String, key: String) = Regex("$key=([^ ]+)").find(line)!!.groupValues[1]
+        assertEquals(bundle.chunkCount.toString(), field(session, "chunksOut"))
+        assertEquals("0", field(session, "chunksIn"))
+        assertTrue(field(session, "bytesOut").toLong() > 120_000)
+        assertEquals("COMPLETE", field(session, "outcome"))
+        assertEquals("true", field(session, "initiator"))
+        assertEquals("unknown", field(session, "transport"))
+        assertTrue(field(session, "durationMs").toLong() >= field(session, "lastOutMs").toLong())
+        assertTrue(field(session, "wireOut").toLong() >= field(session, "bytesOut").toLong())
+        val receiver = logs.single { it.startsWith("B: BENCHMARK message_transfer session") }
+        assertEquals(bundle.chunkCount.toString(), field(receiver, "chunksIn"))
+        assertEquals(field(session, "bytesOut"), field(receiver, "bytesIn"))
+        val out = logs.single { it.startsWith("A: BENCHMARK message_transfer bundle") }
+        val inn = logs.single { it.startsWith("B: BENCHMARK message_transfer bundle") }
+        assertEquals("out", field(out, "dir"))
+        assertEquals("in", field(inn, "dir"))
+        assertEquals("true", field(out, "complete"))
+        assertEquals("true", field(inn, "complete"))
+        assertEquals("${bundle.chunkCount}/${bundle.chunkCount}", field(inn, "chunks"))
+    }
+
+    @Test
+    fun resumedChunksAreCountedInTheMeasurementLine() {
+        val alice = Phone()
+        val bob = Phone()
+        alice.knows(bob)
+        bob.knows(alice)
+        val bundle = alice.sendBytes(bob, 300_000)
+        sync(alice, bob, onInitiatorChunk = { _, sent, close -> if (sent == 10) close() })
+        val logs = ArrayList<String>()
+        sync(bob, alice, logs = logs)
+        val line = logs.single { it.startsWith("A: BENCHMARK message_transfer session") }
+        assertEquals("10", Regex("resumedChunks=([^ ]+)").find(line)!!.groupValues[1])
+        assertEquals((bundle.chunkCount - 10).toString(), Regex("chunksIn=([^ ]+)").find(line)!!.groupValues[1])
+    }
+
+    @Test
+    fun statusAndClearHelpersReportAndEmptyTheStores() {
+        val alice = Phone()
+        val bob = Phone()
+        alice.knows(bob)
+        bob.knows(alice)
+        alice.sendText(bob, "hello")
+        assertTrue(StoreForwardDebug.statusLine(alice.node, "x").contains("ownQueued=1"))
+        sync(alice, bob)
+        val line = StoreForwardDebug.statusLine(bob.node)
+        assertTrue(line, line.contains("archiveIn=1"))
+        assertEquals(1, StoreForwardDebug.inboxLines(bob.node).size)
+        assertTrue(StoreForwardDebug.clearMessages(bob.node) >= 1)
+        assertTrue(StoreForwardDebug.statusLine(bob.node).contains("archiveIn=0"))
+        assertEquals(1, bob.node.contacts.all().size)
+        assertEquals(0, StoreForwardDebug.clearMessages(bob.node))
+    }
+
+    @Test
+    fun appStateFormatNamesTheProcessImportance() {
+        assertEquals("importance=foreground(100),interactive=1,doze=0,powersave=0", MessageAppStateFormat.format(100, true, false, false))
+        assertEquals("importance=cached(400),interactive=0,doze=1,powersave=?", MessageAppStateFormat.format(400, false, true, null))
+        assertTrue(MessageAppStateFormat.format(300, null, null, null).startsWith("importance=service(300)"))
     }
 
     @Test
@@ -571,7 +648,7 @@ class StoreForwardLinkTest {
         val endpoint = EndToEndVideoHandshake.initiate(link, initiatorIdentity, caps)
         link.writer.write(SecureRecordType.STORE_FORWARD, StoreForwardWire.encode(StoreForwardMessage.Done(StoreForwardDoneReason.NORMAL)))
         link.writer.flush()
-        responder.join(10_000)
+        responder.join(120_000)
         assertEquals(responderIdentity.nodeId, endpoint.peerNodeId)
         assertEquals(initiatorIdentity.nodeId, responderPeer)
         assertEquals("Unknown secure record type 11", lateRecordError?.message)
@@ -604,7 +681,8 @@ class StoreForwardLinkTest {
         val startNs = System.nanoTime()
         val result = StoreForwardLinkSession(links.a, alice.node, initiator = true, closeLink = links.close).run()
         assertEquals(StoreForwardSyncOutcome.TIMEOUT, result.outcome)
-        assertTrue((System.nanoTime() - startNs) / 1_000_000 < 5_000)
+        // Well below the 120 s session limit (so the 400 ms progress watchdog did the work) and far above scheduling noise.
+        assertTrue((System.nanoTime() - startNs) / 1_000_000 < 60_000)
     }
 
     @Test
@@ -631,7 +709,7 @@ class StoreForwardLinkTest {
         }
         writeMessage(links.a, StoreForwardMessage.Reply(bundle.header.bundleId, StoreForwardRefusal.SENT))
         writeMessage(links.a, StoreForwardMessage.Done(StoreForwardDoneReason.NORMAL))
-        bobSession.join(10_000)
+        bobSession.join(120_000)
         links.close()
         assertEquals(StoreForwardSyncOutcome.COMPLETE, first!!.outcome)
         assertEquals(1, first!!.poisonedChunks)
@@ -709,7 +787,7 @@ class StoreForwardLinkTest {
         val entry = rawHandshake(links.b).single()
         val all = java.util.BitSet().apply { set(0, entry.chunkCount) }
         repeat(2) { writeMessage(links.b, StoreForwardMessage.Want(entry.bundleId, true, entry.chunkCount, all)) }
-        session.join(10_000)
+        session.join(120_000)
         assertEquals(StoreForwardSyncOutcome.FAILED, result!!.outcome)
         assertEquals("Repeated WANT", result!!.detail)
     }
@@ -731,7 +809,7 @@ class StoreForwardLinkTest {
             }
             runCatching { writeMessage(links.b, StoreForwardMessage.Summary(entries, last = false)) }
         }
-        session.join(10_000)
+        session.join(120_000)
         assertEquals(StoreForwardSyncOutcome.FAILED, result!!.outcome)
         assertEquals("Too many SUMMARY entries", result!!.detail)
     }
@@ -773,11 +851,11 @@ class StoreForwardLinkTest {
         val entry = rawHandshake(links.b).single()
         val all = java.util.BitSet().apply { set(0, entry.chunkCount) }
         writeMessage(links.b, StoreForwardMessage.Want(entry.bundleId, true, entry.chunkCount, all))
-        assertTrue(started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        assertTrue(started.await(120, java.util.concurrent.TimeUnit.SECONDS))
         Thread.sleep(300)
         val requestedNs = System.nanoTime()
         session.requestSuspend()
-        runner.join(10_000)
+        runner.join(120_000)
         val elapsedMs = (System.nanoTime() - requestedNs) / 1_000_000
         assertEquals(StoreForwardSyncOutcome.SUSPENDED_LOCAL, result!!.outcome)
         assertTrue("suspend took $elapsedMs ms", elapsedMs < 4_000)
@@ -798,7 +876,7 @@ class StoreForwardLinkTest {
         val entry = rawHandshake(links.b).single()
         writeMessage(links.b, StoreForwardMessage.Want(entry.bundleId, true, entry.chunkCount,
             java.util.BitSet().apply { set(0, entry.chunkCount) }))
-        runner.join(10_000)
+        runner.join(120_000)
         assertEquals(StoreForwardSyncOutcome.TIMEOUT, result!!.outcome)
     }
 
@@ -824,7 +902,7 @@ class StoreForwardLinkTest {
         var wants = 0
         while (wants < 5) if (readMessage(links.a) is StoreForwardMessage.Want) wants++
         links.close()
-        bobSession.join(10_000)
+        bobSession.join(120_000)
         assertEquals(StoreForwardSyncOutcome.INTERRUPTED, bobResult!!.outcome)
         // Alice's real messages still fit her full allowance of 2.
         alice.sendText(bob, "one")

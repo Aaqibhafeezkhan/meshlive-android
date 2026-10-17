@@ -98,6 +98,20 @@ enum class PlaybackDelayProfile(
         adaptiveMaxDelayMs = 400,
     ),
 
+    /**
+     * Audio-only live (Design AL "radio"): one-way, no picture to keep in sync, so a higher start delay than
+     * streams (600 ms) that adapts up to 3 s while this link delivers late and shrinks after 60 s without late
+     * media (the stream calm period). Catch-up uses the existing pitch-preserving speed change (up to 1.06x).
+     */
+    RADIO(
+        "Radio",
+        "Radio",
+        "Starts at 600 ms and grows up to 3 s while this Bluetooth link delivers late.",
+        delayMs = 600,
+        audioBufferMs = 600,
+        adaptiveMaxDelayMs = 3_000,
+    ),
+
     /** Calls on legacy-constrained links start with more buffer. */
     CALL_STABLE(
         "Call (constrained link)",
@@ -124,6 +138,8 @@ enum class PlaybackDelayProfile(
             } else {
                 MediaPlayoutClock.STREAM_CALM_BEFORE_SHRINK_MS
             },
+            // Experimental time-based target: streams only; calls keep their conversational bounds.
+            timeTarget = if (stabilityLabel == "Call") null else PlayoutJitterTarget.fromTunables(),
         )
     }
 

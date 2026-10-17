@@ -36,7 +36,12 @@ internal class AdaptivePhyPolicy(
     private val windowMs: Long = WINDOW_MS,
     private val slowWindows: Int = SLOW_WINDOWS,
 ) {
-    enum class Verdict { NONE, KEEP, MOVE_TO_1M }
+    /**
+     * [STALLED]: the backlogged writer carried less than a quarter of one PDU per event for the whole decision (3 windows).
+     * Not the one-PDU-per-event pattern, so [MOVE_TO_1M] does not apply; whether it is a relay's scheduling collision or a
+     * link that is alive but sending almost nothing is for the caller to say ([AdaptivePhyLink]).
+     */
+    enum class Verdict { NONE, KEEP, MOVE_TO_1M, STALLED }
 
     private var windowStartMs = -1L
     private var bytes = 0L
@@ -96,7 +101,7 @@ internal class AdaptivePhyPolicy(
         // Far below one PDU per event is a stalled link, not the one-PDU-per-event pattern: mesh4-7a6c401c
         // 0001 moved ASUS -> M31 at 8 kbps (a relay's downstream link while it was peripheral upstream)
         // and remembered the M31 as a bad-2M peer. Keep 2M and record nothing for such links.
-        if (meanKbps * 4 < oneEventKbps) return Verdict.KEEP
+        if (meanKbps * 4 < oneEventKbps) return Verdict.STALLED
         return if (meanKbps * 4 <= oneEventKbps * 5) Verdict.MOVE_TO_1M else Verdict.KEEP
     }
 
@@ -122,18 +127,102 @@ internal class AdaptivePhyLink(
     private val clock: () -> Long = SystemClock::elapsedRealtime,
     /** Priority this link asked for; restored after a relay re-anchor. */
     private val restorePriority: BleConnectionPriority = BleConnectionPriority.HIGH,
+    /**
+     * True while the peer's data is still arriving on this link. A stalled writer ([AdaptivePhyPolicy.Verdict.STALLED]) on a link
+     * the peer is still heard on is a one-way 2M stall (b10 1-defaults/d2: 7 to 10 kbps written for 90 s while 95 authenticated
+     * heartbeats arrived); without it the stall is left to the supervision and heartbeat timeouts.
+     */
+    private val peerHeard: () -> Boolean = { false },
+    /** Called after this link asked for 1M on its own measurement (not a relay move): the stream sender's backlog skip. */
+    private val onMovedTo1M: () -> Unit = {},
+    /**
+     * The link's [LlProcedureGate] (BACKLOG P-01). With it, the move to 1M and the relay re-anchor's priority
+     * requests enter the gate's queue instead of going straight to the stack; null, or a gate that is off, is the
+     * old behaviour. The call site that owns the gate also feeds it the MTU, discovery and priority callbacks.
+     */
+    private val gate: LlProcedureGate? = null,
+    /**
+     * Follows the move to 1M with readPhy polls when the stack may not call onPhyUpdate (Android 13, CONN-09). The
+     * default applies the plan only where the `android13-phy-update-callback-backstop` entry applies.
+     */
+    private val waitPlan: PhyWaitPlan? = defaultBackstopPlan(),
 ) {
     private var policy = AdaptivePhyPolicy()
     @Volatile private var txPhy = 0
     @Volatile private var moved = false
+
+    /** Experimental adaptive split ([adaptiveSplitFor]): the split this link was moved to, or null (not tried). */
+    @Volatile private var splitApplied: GattPhySplit? = null
+    @Volatile private var splitMover: PhyMoveRequester? = null
     private var reanchors = 0
 
+    private val phyChanges = PhyChangeTracker()
+
+    private val mover = PhyMoveRequester(
+        link = link,
+        requestPhy = {
+            gatt.setPreferredPhy(
+                BluetoothDevice.PHY_LE_1M_MASK,
+                BluetoothDevice.PHY_LE_1M_MASK,
+                BluetoothDevice.PHY_OPTION_NO_PREFERRED,
+            )
+            gatt.readPhy()
+        },
+        readPhy = { gatt.readPhy(); true },
+        targetTx = LePhy.ONE_M,
+        gate = gate,
+        plan = waitPlan,
+        scheduleAt = { delayMs, action -> android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ action() }, delayMs) },
+        nowMs = clock,
+        log = { Log.i("BluetoothVideo", it) },
+    )
+
+    /** The PHY the stack last REPORTED for this link with status 0 (update or read), or null before any report. */
+    val confirmedTxPhy: Int? get() = txPhy.takeIf { it != 0 }
+
+    /** onPhyUpdate: the stack's answer to a PHY request (BACKLOG P-01: also completes the gate's PHY step). */
+    fun onPhyUpdate(tx: Int, status: Int) {
+        mover.onUpdate(tx, status)
+        splitMover?.onUpdate(tx, status)
+        trackPhy(tx, status)
+    }
+
+    /** onPhyRead (a poll or any readPhy): ends the follower and the gate step only when it shows the requested PHY. */
+    fun onPhyRead(tx: Int, status: Int) {
+        mover.onRead(tx, status)
+        splitMover?.onRead(tx, status)
+        trackPhy(tx, status)
+    }
+
+    /**
+     * A PHY report whose source the caller did not say (the existing call sites pass onPhyUpdate and onPhyRead
+     * here alike). Tracks the transmit PHY and lets the backstop follower and the gate see a report that matches
+     * the requested PHY; a mismatch could be a read taken before the update, so it ends nothing.
+     */
     fun onPhy(tx: Int, status: Int) {
-        if (status == BluetoothGatt.GATT_SUCCESS) txPhy = tx
+        mover.onRead(tx, status)
+        splitMover?.onRead(tx, status)
+        trackPhy(tx, status)
+    }
+
+    private fun trackPhy(tx: Int, status: Int) {
+        if (status != BluetoothGatt.GATT_SUCCESS) return
+        txPhy = tx
+        // A real PHY change makes the evidence gathered before it stale (LinkChangeEvents).
+        if (phyChanges.onPhy(tx)) {
+            LinkChangeEvents.phyChanged()
+            Log.i(
+                "BluetoothVideo",
+                "BENCHMARK link_change: kind=phy | link=$link | peer=...${address?.takeLast(5) ?: "unknown"} | txPhy=$tx | " +
+                    "epoch=${LinkChangeEvents.epoch}",
+            )
+        }
     }
 
     @SuppressLint("MissingPermission")
     fun onWrite(writeBytes: Int, blockedMs: Long) {
+        // Dual-role probe (BACKLOG P-03): a child link of a relay carries data while its parent link is up.
+        if (RelayUpstream.active) DualRoleProbes.onChildData(address, writeBytes, peerHeard())
         val reanchorOn = DebugTunables.relayReanchor && RelayUpstream.active
         if (moved || (!DebugTunables.adaptivePhy && !reanchorOn)) return
         val intervalMs = LeConnectionParameterLog.latest(address)?.intervalMs?.takeIf { it > 0 }
@@ -143,7 +232,7 @@ internal class AdaptivePhyLink(
             clock(),
             writeBytes,
             blockedMs,
-            txPhy == BluetoothDevice.PHY_LE_2M,
+            adaptiveLinkOnTwoM(txPhy, splitApplied),
             oneEvent,
             sharedAirtime = adaptivePhySharedAirtime(link),
         )
@@ -152,7 +241,7 @@ internal class AdaptivePhyLink(
         ) {
             reanchors++
             policy = AdaptivePhyPolicy()
-            val queued = RelayReanchor.request(gatt, restorePriority)
+            val queued = RelayReanchor.request(gatt, restorePriority, gate)
             log("phy=unchanged", "relay_reanchor | attempt=$reanchors | queued=$queued", intervalMs, oneEvent)
             return
         }
@@ -160,6 +249,20 @@ internal class AdaptivePhyLink(
         when (verdict) {
             AdaptivePhyPolicy.Verdict.NONE -> Unit
             AdaptivePhyPolicy.Verdict.KEEP -> log("from=2M to=2M", "kept", intervalMs, oneEvent)
+            AdaptivePhyPolicy.Verdict.STALLED -> if (
+                stalledTwoMShouldMove(DebugTunables.stalledTwoMMove, RelayUpstream.active && DebugTunables.relayPhyGuard, peerHeard())
+            ) {
+                if (trySplit("stalled_one_way", intervalMs, oneEvent)) return
+                moved = true
+                val queued = moveTo1M()
+                log("from=2M to=1M", "stalled_one_way | queued=$queued$afterSplit", intervalMs, oneEvent)
+                AdaptivePhyMemory.recordBadForAddress(address, "stalled_one_way")
+                if (queued) runCatching { onMovedTo1M() }
+            } else {
+                // A relay's downstream link (mesh4-7a6c401c 0001: 8 kbps, scheduling collision) or a link the peer is no
+                // longer heard on: no PHY evidence, keep 2M and remember nothing.
+                log("from=2M to=2M", "kept", intervalMs, oneEvent)
+            }
             AdaptivePhyPolicy.Verdict.MOVE_TO_1M -> if (RelayUpstream.active && DebugTunables.relayPhyGuard) {
                 moved = true
                 if (DebugTunables.relayOnePduMove && relayOnePduBand(policy.lastKbps, oneEvent)) {
@@ -175,23 +278,64 @@ internal class AdaptivePhyLink(
                     log("from=2M to=2M", "relay_scheduling | action=none", intervalMs, oneEvent)
                 }
             } else {
+                if (trySplit("one_pdu_per_event", intervalMs, oneEvent)) return
                 moved = true
                 val queued = moveTo1M()
-                log("from=2M to=1M", "one_pdu_per_event | queued=$queued", intervalMs, oneEvent)
+                log("from=2M to=1M", "one_pdu_per_event | queued=$queued$afterSplit", intervalMs, oneEvent)
                 AdaptivePhyMemory.recordBadForAddress(address, "one_pdu_per_event")
+                if (queued) runCatching { onMovedTo1M() }
             }
         }
     }
 
+    companion object {
+        /** A peer whose data arrived within this window is "heard": authenticated heartbeats come about every 1 to 2 s. */
+        const val PEER_HEARD_MS = 4_000L
+    }
+
+    /** Log suffix of a full move that follows a split on the same link; empty (the old line) when no split was tried. */
+    private val afterSplit: String
+        get() = if (splitApplied != null) " | after_split=true" else ""
+
+    /**
+     * Experimental adaptive split ([adaptiveSplitFor]): instead of the full move to 1M, asks this central for the split once per
+     * link, so only the peripheral -> central direction goes to 1M. Returns true when the split was queued (the decision is then
+     * re-armed, so a link that still fails moves to full 1M with `after_split=true`, memory as before); false leaves the full move
+     * to the caller. The peer is not remembered bad on 2M here, because the link was repaired without leaving 2M in the media
+     * direction. Line: `BENCHMARK adaptive_phy: link=gatt ... to=split-tx2m-rx1m | reason=<verdict> | queued=true | memory=none`.
+     */
     @SuppressLint("MissingPermission")
-    private fun moveTo1M(): Boolean = runCatching {
-        gatt.setPreferredPhy(
-            BluetoothDevice.PHY_LE_1M_MASK,
-            BluetoothDevice.PHY_LE_1M_MASK,
-            BluetoothDevice.PHY_OPTION_NO_PREFERRED,
+    private fun trySplit(verdict: String, intervalMs: Double, oneEvent: Int): Boolean {
+        val split = adaptiveSplitFor(
+            DebugTunables.adaptivePhySplit, link, DebugTunables.experimentalPhySplit, DebugTunables.experimentalBlePhy, splitApplied != null,
+        ) ?: return false
+        val requester = PhyMoveRequester(
+            link = link,
+            requestPhy = {
+                gatt.setPreferredPhy(split.txMask, split.rxMask, BluetoothDevice.PHY_OPTION_NO_PREFERRED)
+                gatt.readPhy()
+            },
+            readPhy = { gatt.readPhy(); true },
+            targetTx = LePhy.valueForMask(split.txMask) ?: LePhy.TWO_M,
+            gate = gate,
+            plan = waitPlan,
+            scheduleAt = { delayMs, action -> android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ action() }, delayMs) },
+            nowMs = clock,
+            log = { Log.i("BluetoothVideo", it) },
         )
-        gatt.readPhy()
-    }.isSuccess
+        val queued = requester.move()
+        if (!queued) return false
+        splitMover = requester
+        splitApplied = split
+        log("from=2M to=${adaptiveSplitLabel(split)}", "$verdict | queued=true | memory=none", intervalMs, oneEvent)
+        policy = AdaptivePhyPolicy()
+        runCatching { onMovedTo1M() }
+        return true
+    }
+
+    /** Asks for 1M: through the LL procedure gate when there is one (and it is on), else straight to the stack. */
+    @SuppressLint("MissingPermission")
+    private fun moveTo1M(): Boolean = mover.move()
 
     private fun log(change: String, reason: String, intervalMs: Double, oneEvent: Int) {
         Log.i(
@@ -278,6 +422,10 @@ internal object AdaptivePhyMemory {
     private val addressHops = ConcurrentHashMap<String, Pair<BluetoothTransportOption, String>>()
 
     fun attach(context: Context) {
+        // The persistent link-change rollback memory (Experimental test_link_change_rollback) and the learned
+        // child-link limit share this startup hook.
+        runCatching { LinkChangeRollbacks.attach(context) }
+        runCatching { DualRoleProbes.attach(context) }
         prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs?.let { store ->
             val stale = store.all.keys.filter { it.startsWith("bad2m.") }
@@ -399,6 +547,9 @@ internal object AdaptivePhyMemory {
     /** Addresses whose bound hop peer forwards this session onward (a relayed call's relay hop). */
     private val relayingHops: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+    /** The authenticated hop node bound to [address] (12 hex), or [address] itself; the rollback memories key by this. */
+    fun peerKey(address: String?): String? = address?.let { addressHops[it]?.second ?: it }
+
     fun recordBadForAddress(address: String?, reason: String) {
         val (transport, node) = address?.let(addressHops::get) ?: return
         if (skipsRelayingHop(address in relayingHops, DebugTunables.relayPhyGuard)) {
@@ -442,7 +593,21 @@ internal object AdaptivePhyMemory {
         // A relayed offer is advertised by the hop relay with the far callee's prefix, so the hop's own
         // node is unknown before connecting; its entry is kept under that advertised prefix instead.
         val bad = if (relayedOffer) isBadVia(transport, node) else isBad(transport, node)
-        if (!bad) return default
+        // A link that was lost within seconds of a PHY update stays on 1M for this peer (Experimental
+        // test_ll_gate session memory / test_link_change_rollback persistent memory, BACKLOG P-01/P-02). Both
+        // memories key by the advertised node prefix here; the authenticated hop node ID is what they record
+        // when it is bound, which for a direct peer is the same 12-hex node whose prefix this is.
+        val rolledBack = !bad && !relayedOffer && LinkChangeRollbacks.isDowngraded(node, LinkChangeKind.PHY)
+        if (!bad && !rolledBack) return default
+        if (rolledBack) {
+            runCatching {
+                Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK adaptive_phy: link=$link | node=$node | from=2M to=1M | reason=link_lost_after_phy_change | at=connect",
+                )
+            }
+            return BlePhyPreference.ONE_M_ADAPTIVE
+        }
         Log.i(
             "BluetoothVideo",
             "BENCHMARK adaptive_phy: link=$link | node=$node | from=2M to=1M | reason=remembered | " +
@@ -452,6 +617,20 @@ internal object AdaptivePhyMemory {
     }
 
     internal fun prefixLabel(nodePrefix: ByteArray): String = nodePrefix.joinToString("") { "%02x".format(it) }
+
+    /**
+     * The memory key (the advertised node prefix label, as [phyFor] looks it up) to record when a first 2M call setup stalled, or
+     * null. Only a stalled setup (hop authentication unfinished after the guard), a direct offer (a relayed offer's hop is the
+     * relay, which [skipsRelayingHop] keeps out of the memory) and a stable advertised prefix (a rotating pseudonym changes with
+     * its epoch, so an entry under it could never be found again).
+     */
+    internal fun advertisedPeerToRemember(
+        enabled: Boolean,
+        stalled: Boolean,
+        direct: Boolean,
+        rotating: Boolean,
+        nodePrefix: ByteArray,
+    ): String? = if (enabled && stalled && direct && !rotating && nodePrefix.isNotEmpty()) prefixLabel(nodePrefix) else null
 
     internal fun viaKey(transport: BluetoothTransportOption, advertisedPrefix: String) =
         "bad2m${FORMAT}via.${transport.name}.$advertisedPrefix"
@@ -493,11 +672,12 @@ internal object RelayUpstream {
         get() = relays.get() > 0
 
     fun enter() {
-        relays.incrementAndGet()
+        // The first forwarder means a parent link is up: the dual-role probe starts watching (BACKLOG P-03).
+        if (relays.incrementAndGet() == 1) runCatching { DualRoleProbes.onParentUp() }
     }
 
     fun exit() {
-        relays.updateAndGet { (it - 1).coerceAtLeast(0) }
+        if (relays.updateAndGet { (it - 1).coerceAtLeast(0) } == 0) runCatching { DualRoleProbes.onParentLost() }
     }
 }
 
@@ -508,6 +688,13 @@ internal object RelayUpstream {
  */
 internal fun relayOnePduBand(meanKbps: Int, oneEventKbps: Int): Boolean =
     oneEventKbps > 0 && meanKbps * 2 >= oneEventKbps
+
+/**
+ * A stalled 2M writer ([AdaptivePhyPolicy.Verdict.STALLED]) moves to 1M and remembers the peer only on a link that is not a
+ * relay's own (scheduling collision, not the pair's 2M) and whose peer is still heard (a dead link is the supervision timeout's).
+ */
+internal fun stalledTwoMShouldMove(enabled: Boolean, relayGuarded: Boolean, peerHeard: Boolean): Boolean =
+    enabled && !relayGuarded && peerHeard
 
 /** A relay child link carrying at most about one PDU per event while backlogged (or stalled). */
 internal fun relayChildStarved(meanKbps: Int, oneEventKbps: Int): Boolean =
@@ -527,16 +714,54 @@ internal object RelayReanchor {
     const val MAX_ATTEMPTS = 3
     const val RESTORE_DELAY_MS = 1_000L
 
+    /**
+     * Wall-clock-free marker (System.nanoTime based) until which this process is changing a link's priority on purpose:
+     * the interval-drift reassert of [LeConnectionPriorityKeeper] must not fight the BALANCED step.
+     */
+    @Volatile private var inProgressUntilMs = 0L
+
+    /** True from a re-anchor request until its restore request had time to be answered. */
+    val inProgress: Boolean get() = System.nanoTime() / 1_000_000L < inProgressUntilMs
+
+    /** The restore request is answered within this time after it is sent (a connection update takes a few intervals). */
+    const val SETTLE_AFTER_RESTORE_MS = 4_000L
+
+    /**
+     * With a [gate] the BALANCED and restore requests are gate steps (never overlapping a PHY or MTU request on the
+     * link); a gate that is off, or no gate, sends them straight out as before.
+     */
     @SuppressLint("MissingPermission")
-    fun request(gatt: BluetoothGatt, restore: BleConnectionPriority): Boolean {
-        val queued = runCatching { gatt.requestConnectionPriority(BleConnectionPriority.BALANCED.requestValue) }.getOrDefault(false)
+    fun request(gatt: BluetoothGatt, restore: BleConnectionPriority, gate: LlProcedureGate? = null): Boolean {
+        inProgressUntilMs = System.nanoTime() / 1_000_000L + RESTORE_DELAY_MS + SETTLE_AFTER_RESTORE_MS
+        val queued = send(gatt, BleConnectionPriority.BALANCED, "reanchor_balanced", gate)
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
-            { runCatching { gatt.requestConnectionPriority(restore.requestValue) } },
+            { send(gatt, restore, "reanchor_restore", gate) },
             RESTORE_DELAY_MS,
         )
         return queued
     }
+
+    @SuppressLint("MissingPermission")
+    private fun send(gatt: BluetoothGatt, priority: BleConnectionPriority, label: String, gate: LlProcedureGate?): Boolean {
+        val start = { runCatching { gatt.requestConnectionPriority(priority.requestValue) }.getOrDefault(false) }
+        if (gate == null) return start()
+        return when (gate.submit(LlProcedure.CONNECTION_PARAMS, label) { start() }) {
+            GateAdmission.IMMEDIATE_OK, GateAdmission.QUEUED -> true
+            else -> false
+        }
+    }
 }
+
+/**
+ * Plan for [AdaptivePhyLink]'s readPhy backstop: Android 13's polling plan where the
+ * `android13-phy-update-callback-backstop` entry applies (SDK 33, not switched off), else null (the single
+ * read of the move itself, as before).
+ */
+internal fun defaultBackstopPlan(): PhyWaitPlan? = runCatching {
+    PhyWaitPlan.ANDROID_13.takeIf {
+        PhyLinkPolicy.phyCallbackBackstopActive(android.os.Build.VERSION.SDK_INT, DeviceFamilyPolicy.switchedOff)
+    }
+}.getOrNull()
 
 /**
  * This phone sends to two or more media links at once (on either LE transport). GATT links counted
@@ -564,4 +789,35 @@ internal object CallRelayHopLoss {
         val stalledMs = maxOf(stalledAtNs / 1_000_000, startMs)
         return AdaptivePhyMemory.isEarlyLoss(startMs, stalledMs, linkWasTwoM(phySummary, requestedTwoM), sendLinks)
     }
+}
+
+/**
+ * Experimental `test_stall_rediscover_ms` (default 8000 = the earlier behaviour): how long the 1M retry after a
+ * setup stall keeps scanning for the callee's new advertisement. The 2M stall closes the link, but when the
+ * A15s controller never delivers LL_TERMINATE the ASUS only sees its supervision timeout 7-9 s later and
+ * re-advertises 1.6 s after that, so 8.6-12.6 s after the close (lane11 b2-calls-a15s-asus); the 8 s scan,
+ * clamped further by [AdaptivePhyMemory.EARLY_LOSS_MS] minus the elapsed time, ended with `none` and the retry
+ * dialed the stale address (a 12 s connect timeout). In all seven successful rediscoveries of that evidence the
+ * address had changed. A value above [AdaptivePhyMemory.REDISCOVER_MS] applies only after a
+ * [CallSetupStalledException] and replaces the clamp for that path with the configured total.
+ */
+internal object StallRediscover {
+    const val DEFAULT_MS = AdaptivePhyMemory.REDISCOVER_MS
+    const val MAX_MS = 60_000L
+
+    /** The configured total, kept in 8 s..60 s (8 s is the earlier behaviour). */
+    fun normalize(valueMs: Long): Long = valueMs.coerceIn(DEFAULT_MS, MAX_MS)
+
+    /** Scan budget: the earlier clamp, or the configured total after a stall when the arm is on. */
+    fun budgetMs(armMs: Long, stalled: Boolean, earlyLossRemainingMs: Long): Long {
+        val arm = normalize(armMs)
+        return if (stalled && arm > DEFAULT_MS) arm else earlyLossRemainingMs.coerceIn(0L, DEFAULT_MS)
+    }
+
+    /** Which address the retry dials: the fresh advertisement when one arrived within the budget, else the stale one. */
+    fun dialsFresh(budgetMs: Long, foundAfterMs: Long?): Boolean = foundAfterMs != null && foundAfterMs in 0..budgetMs
+
+    fun line(budgetMs: Long, waitedMs: Long, found: Boolean, sameAddress: Boolean, stalled: Boolean, armMs: Long): String =
+        "BENCHMARK call_rediscover: budgetMs=$budgetMs | waitedMs=$waitedMs | found=$found | sameAddress=$sameAddress | " +
+            "dialed=${if (found) "fresh" else "stale"} | stalled=$stalled | armMs=${normalize(armMs)}"
 }

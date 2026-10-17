@@ -2,6 +2,7 @@ package com.example.bluetoothtest
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,9 +13,40 @@ class NotificationPrivacyTest {
     private val secret = -1
 
     @Test
-    fun sessionNotificationsArePrivateWhateverTheOptIn() {
+    fun sessionNotificationsAreHiddenOnTheLockScreenUntilNamedAndOptedIn() {
+        // The service passes peerNamesOptIn = (a name is carried && the user allowed names on the lock screen).
         assertEquals(private, NotificationPrivacy.visibility(NotificationKind.SESSION, peerNamesOptIn = false))
-        assertEquals(private, NotificationPrivacy.visibility(NotificationKind.SESSION, peerNamesOptIn = true))
+        assertEquals(public, NotificationPrivacy.visibility(NotificationKind.SESSION, peerNamesOptIn = true))
+        // Audio-only live is never named and never public.
+        assertEquals(private, NotificationPrivacy.visibility(NotificationKind.AUDIO_LISTEN, peerNamesOptIn = true))
+        assertEquals(private, NotificationPrivacy.visibility(NotificationKind.AUDIO_BROADCAST, peerNamesOptIn = true))
+    }
+
+    @Test
+    fun anOngoingCallShowsThePeerNameOnlyInTheFullNotification() {
+        assertEquals("Asha", NotificationPrivacy.ongoingPersonName("Encrypted private video call", " Asha "))
+        assertEquals("Encrypted private video call", NotificationPrivacy.ongoingPersonName("Encrypted private video call", null))
+        assertEquals("Encrypted private video call", NotificationPrivacy.ongoingPersonName("Encrypted private video call", "  "))
+        assertEquals(CallNotificationActions.NEUTRAL_PERSON, NotificationPrivacy.ongoingPersonName(null, null))
+        assertEquals(CallNotificationActions.NEUTRAL_PERSON, NotificationPrivacy.ongoingPersonName(" ", ""))
+        // The CallStyle title is the name, so the text stays the status.
+        assertEquals("Encrypted private voice call", NotificationPrivacy.sessionContentText("Encrypted private voice call", "Asha", true))
+    }
+
+    @Test
+    fun aStreamViewerNotificationPutsTheNameInFrontOfTheStatus() {
+        assertEquals("Bluetooth stream connected", NotificationPrivacy.sessionContentText("Bluetooth stream connected", null, false))
+        assertEquals("Bluetooth stream connected", NotificationPrivacy.sessionContentText("Bluetooth stream connected", "  ", false))
+        assertEquals("Asha \u00B7 Bluetooth stream connected", NotificationPrivacy.sessionContentText("Bluetooth stream connected", "Asha", false))
+    }
+
+    @Test
+    fun aPeerNameIsCleanedAndCutBeforeItReachesTheShade() {
+        assertEquals("Asha", NotificationPrivacy.sessionPeerName("\u0000As\nha\t"))
+        assertNull(NotificationPrivacy.sessionPeerName("\u0007 \n"))
+        assertNull(NotificationPrivacy.sessionPeerName(null))
+        val cut = NotificationPrivacy.sessionPeerName("x".repeat(100) + "   ")!!
+        assertEquals(NotificationPrivacy.MAX_PEER_NAME_CHARS, cut.length)
     }
 
     @Test

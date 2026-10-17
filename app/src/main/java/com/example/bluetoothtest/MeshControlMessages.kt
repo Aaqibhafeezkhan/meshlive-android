@@ -82,10 +82,15 @@ data class DiscoveryAnnouncement(
     val version: Int = FIXED_PREFIX_VERSION,
 ) {
     /** True when the 6 prefix bytes are a rotating ID that only an opening can bind to an identity. */
-    val rotating: Boolean get() = version == ROTATING_VERSION
+    val rotating: Boolean get() = version == ROTATING_VERSION || version == WINDOW_VERSION
+
+    /** Visible by name: the connectable window offer on the role 3 ID, `streamToken` = the name hash (PROTOCOL). */
+    val isWindowOffer: Boolean get() = version == WINDOW_VERSION
 
     init {
-        require(version == FIXED_PREFIX_VERSION || version == ROTATING_VERSION) { "Unsupported announcement version" }
+        require(version == FIXED_PREFIX_VERSION || version == ROTATING_VERSION || version == WINDOW_VERSION) {
+            "Unsupported announcement version"
+        }
         require(nodeIdPrefix.size == NODE_PREFIX_BYTES)
         require(flags in 0..0xff)
         require(capabilitySummary in 0..0xff)
@@ -104,6 +109,9 @@ data class DiscoveryAnnouncement(
     companion object {
         const val FIXED_PREFIX_VERSION = 2
         const val ROTATING_VERSION = 5
+
+        /** Visible by name (Naming v2): the window offer. Layout identical to version 5; rejected by every 0.2.0-beta decoder. */
+        const val WINDOW_VERSION = 8
         const val NODE_PREFIX_BYTES = 6
         const val FLAG_ACCEPTING_CONNECTIONS = 1
         const val FLAG_RELAY_CAPABLE = 1 shl 1
@@ -117,6 +125,13 @@ data class DiscoveryAnnouncement(
         /** Stream offers: top bit of [sequence] = no free viewer slot; low bits = capacity generation. */
         const val SEQUENCE_SOURCE_FULL = 0x80
         const val SEQUENCE_GENERATION_MASK = 0x7f
+
+        /**
+         * Experimental audio-only live streams (PROTOCOL "Experimental audio-only live streams"): the whole
+         * `capabilitySummary` of a stream offer is exactly this value (bit 6, no codec bits). Older readers
+         * find no decoder overlap and list the row as unsupported.
+         */
+        const val SUMMARY_AUDIO_ONLY = 0x40
     }
 }
 
@@ -151,14 +166,18 @@ object DiscoveryAnnouncementCodec {
         return data.putShort(value.streamBitrateKbps.toShort()).array()
     }
 
-    /** [acceptRotating] false (feature off): version 5 is rejected exactly as by old builds. */
-    fun decode(bytes: ByteArray, acceptRotating: Boolean = false): DiscoveryAnnouncement {
+    /**
+     * [acceptRotating] false (feature off): version 5 is rejected exactly as by old builds. [acceptWindow] false (Visible by
+     * name off, the default): the window offer, version 8, is rejected the same way.
+     */
+    fun decode(bytes: ByteArray, acceptRotating: Boolean = false, acceptWindow: Boolean = false): DiscoveryAnnouncement {
         require(bytes.size == ENCODED_BYTES) { "Invalid discovery announcement length" }
         val data = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
         val version = data.get().toInt() and 0xff
         require(
             version == DiscoveryAnnouncement.FIXED_PREFIX_VERSION ||
-                (acceptRotating && version == DiscoveryAnnouncement.ROTATING_VERSION),
+                (acceptRotating && version == DiscoveryAnnouncement.ROTATING_VERSION) ||
+                (acceptRotating && acceptWindow && version == DiscoveryAnnouncement.WINDOW_VERSION),
         ) { "Unsupported announcement version" }
         val prefix = ByteArray(DiscoveryAnnouncement.NODE_PREFIX_BYTES).also(data::get)
         val flags = data.get().toInt() and 0xff

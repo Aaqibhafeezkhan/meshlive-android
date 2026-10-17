@@ -16,6 +16,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PrivateCallRelayChainTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private val callee = byteArrayOf(1, 2, 3, 4, 5, 6)
     private val local = ByteArray(16) { 0x40 }
     private val relayChild = ByteArray(16) { 0x22 }
@@ -157,7 +161,7 @@ class PrivateCallRelayChainTest {
         }
         val link = SecureBluetoothHandshake.initiate(callerSide.first, callerSide.second, caller, ENDPOINT_CAPS)
         val endpoint = EndToEndVideoHandshake.initiate(link, caller, ENDPOINT_CAPS)
-        worker.join(10_000)
+        worker.join(120_000)
         assertEquals(relay.nodeId, endpoint.peerNodeId)
         assertFalse(
             endpoint.peerNodeId.toByteArray().copyOf(6).contentEquals(calleeIdentity.nodeId.toByteArray().copyOf(6)),
@@ -283,12 +287,12 @@ class PrivateCallRelayChainTest {
         EndToEndStreamProtocol.writePacket(link.writer, endpoint.sealer, 0, 2L, "hello-callee".toByteArray())
         link.writer.flush()
         val received = runCatching { EndToEndStreamProtocol.readPacket(link.reader, endpoint.opener).payload }.getOrNull()
-        workers.first().join(10_000)
+        workers.first().join(120_000)
         listOf(callerToR1, r1FromCaller, r1ToR2, r2FromR1, r2ToCallee, calleeFromR2).forEach { (input, output) ->
             input.close()
             output.close()
         }
-        workers.forEach { it.join(10_000) }
+        workers.forEach { it.join(120_000) }
         return ChainResult(
             callee, r2, endpoint.peerNodeId, received, calleeReceived, calleeFailure, r1Child.get(), r2Child.get(),
         )

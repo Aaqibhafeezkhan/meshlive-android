@@ -7,7 +7,7 @@ token and the other phone's fingerprint. It performs no other phone action: it d
 harness launches each phone with the printed extras (`--es test_verify_contact <token>`), the app consumes and
 deletes the file, marks the contact verified exactly as the QR flow would and logs
 `BENCHMARK contact_verified source=debug fingerprint_prefix=...`. `--forget` writes the forget files instead
-(`test_forget_contact`), which the app handles like the Forget action. See README "Debug contact verification".
+(`test_forget_contact`), which the app handles like the Forget action. See docs/SWITCHES.md "Debug contact verification".
 
     python tools/debug_verify_contacts.py --phones s24,s22          # mutual verify, prints the launch extras
     python tools/debug_verify_contacts.py --phones s24,s22 --forget

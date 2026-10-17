@@ -1,31 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Monochrome dark (UI v8, user request "dark theme, black and white"). White is the only accent;
-     red is reserved for live / recording / end / destructive, muted green for "connected". The app
-     is dark in every system mode, so there is no values-night variant. -->
+<!-- "Plain Signal" tokens (docs: ui-spec). Black ground, white text and actions. Red is reserved for
+     live / hang up / decline / end broadcast, green for the answer button and the verified check.
+     Nothing else is coloured. The app is dark in every system mode, so there is no values-night. -->
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <!-- Surfaces: true black ground, near-black raised surfaces, hairline dividers. -->
+    <!-- Surfaces: ground, sheets/dialogs, raised controls, dividers. -->
     <color name="app_background">#000000</color>
-    <color name="surface">#0B0B0B</color>
-    <color name="surface_variant">#161616</color>
-    <color name="outline">#1F1F1F</color>
+    <color name="surface">#121212</color>
+    <color name="surface_variant">#1E1E1E</color>
+    <color name="surface_raised">#1E1E1E</color>
+    <color name="outline">#262626</color>
     <color name="outline_strong">#3A3A3A</color>
+    <color name="pressed_overlay">#14FFFFFF</color>
     <!-- Text -->
     <color name="text_primary">#FFFFFF</color>
-    <color name="text_secondary">#9A9A9A</color>
-    <!-- Accent = white (primary button white with black text). -->
+    <color name="text_secondary">#A3A3A3</color>
+    <color name="text_disabled">#5C5C5C</color>
+    <!-- Accent = white (primary action white with black text). -->
     <color name="accent">#FFFFFF</color>
     <color name="on_accent">#000000</color>
-    <color name="accent_container">#1A1A1A</color>
+    <color name="accent_container">#262626</color>
     <color name="on_accent_container">#FFFFFF</color>
     <!-- Semantic only -->
-    <color name="success">#5FA77A</color>
-    <color name="success_container">#0F1D14</color>
+    <color name="success">#34C759</color>
+    <color name="success_container">#1E1E1E</color>
     <color name="warning">#FFFFFF</color>
-    <color name="warning_container">#161616</color>
-    <color name="danger">#FF453A</color>
-    <color name="danger_container">#2A0E0C</color>
+    <color name="warning_container">#1E1E1E</color>
+    <color name="danger">#FF3B30</color>
+    <color name="danger_container">#1E1E1E</color>
     <color name="record_red">#FF3B30</color>
     <!-- Over video -->
     <color name="overlay_scrim">#B3000000</color>
@@ -33,10 +36,11 @@
     <color name="overlay_button_on">#F2FFFFFF</color>
     <color name="overlay_text">#FFFFFFFF</color>
     <color name="overlay_text_on_light">#FF000000</color>
-    <color name="call_accept">#2E9E5B</color>
+    <color name="call_accept">#34C759</color>
     <color name="call_end">#FF3B30</color>
     <color name="live_red">#FF3B30</color>
     <color name="mismatch_red">#FF3B30</color>
-    <color name="call_ground_top">#FF0B0B0B</color>
+    <color name="call_ground_top">#FF000000</color>
     <color name="call_ground_bottom">#FF000000</color>
+    <color name="switch_track_off">#3A3A3A</color>
 </resources>

@@ -979,6 +979,17 @@ class RelayChainPrivateCallTest(unittest.TestCase):
         self.assertEqual(hops[0]["gates"]["requested_relay_route"]["status"], "FAIL")
         self.assertEqual(hops[1]["gates"]["relay_adjacent_parent_identity"]["status"], "FAIL")
 
+class SelectedProfileAnnotationTest(unittest.TestCase):
+    # 2026-10-17: every relayed and direct call since fe2acce (2026-10-10) scored selected_profile_mismatches=2 because the
+    # app logs "thermalReduction=false (setting=false)" and the whole string was compared with "false".
+    def test_annotation_is_not_a_mismatch(self):
+        requested = {"codec": "libaom-native", "width": 352, "height": 288, "fps": 15, "bitrate_kbps": 180,
+                     "rate_control": "automatic", "playback": "balanced", "thermal_reduction": False}
+        observed = {"encoder": "libaom-native", "width": "352", "height": "288", "fps": "15", "bitrateKbps": "180",
+                    "playbackMs": "250", "rateControl": "AUTOMATIC", "thermalReduction": "false (setting=false)"}
+        self.assertEqual(runner.requested_matches(requested, observed), 0)
+        self.assertEqual(runner.requested_matches(requested, {**observed, "thermalReduction": "true (setting=true)"}), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

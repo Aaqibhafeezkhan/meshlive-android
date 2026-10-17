@@ -3,25 +3,32 @@ package com.example.bluetoothtest
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.w3c.dom.Element
 
 /**
- * Regression for the M31 home screen (font scale 1.1): Call and Push-to-talk keys stretched to
- * two thirds of the screen because they were match_parent with a weighted spacer inside a
- * fill-viewport ScrollView, pushing Go live and Watch below the fold. The keys must size to their
- * content (wrap_content plus a minimum height) and contain no weighted children.
+ * Structure of the four tab screens after the "Plain Signal" redesign.
+ *
+ * - Live is the stream browser itself: the list of nearby live streams, and Go live as the one primary
+ *   action, pinned below the list. Contacts pins Add contact the same way. Calls (Nearby | Recent) has none.
+ * - No cards or boxes on the tab screens: plain rows on the black ground.
+ * - Go live is the solid red live button, never a white button with a dot.
+ * - The bottom navigation offers exactly Live, Calls, Contacts and Settings; every tab title bar ends with
+ *   the status indicator.
  */
 class HomeLayoutTest {
     private val androidNs = "http://schemas.android.com/apk/res/android"
 
-    private fun layout(): Element {
-        val file = listOf("src/main/res/layout/activity_main.xml", "app/src/main/res/layout/activity_main.xml")
-            .map(::File).first { it.isFile }
+    private fun parse(relative: String): Element {
+        val file = listOf("src/main/res/$relative", "app/src/main/res/$relative").map(::File).first { it.isFile }
         val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
         return factory.newDocumentBuilder().parse(file).documentElement
     }
+
+    private fun layout(): Element = parse("layout/activity_main.xml")
 
     private fun Element.descendants(): Sequence<Element> = sequence {
         val children = childNodes
@@ -32,53 +39,268 @@ class HomeLayoutTest {
         }
     }
 
+    private fun idOf(element: Element) = element.getAttributeNS(androidNs, "id").removePrefix("@+id/")
+
     private fun byId(root: Element, id: String): Element =
-        root.descendants().first { it.getAttributeNS(androidNs, "id") == "@+id/$id" }
+        root.descendants().first { idOf(it) == id }
+
+    private fun order(root: Element): List<String> = root.descendants().map(::idOf).toList()
 
     @Test
-    fun homeKeysSizeToTheirContent() {
+    fun liveTabIsTheStreamBrowserWithOneGoLive() {
         val root = layout()
-        listOf("privateCallButton", "streamModeButton", "receiveModeButton").forEach { id ->
-            val key = byId(root, id)
-            assertEquals("$id height", "wrap_content", key.getAttributeNS(androidNs, "layout_height"))
-            key.descendants().forEach { child ->
-                assertTrue(
-                    "$id has a weighted child, which stretches inside a ScrollView",
-                    child.getAttributeNS(androidNs, "layout_weight").isEmpty(),
-                )
-                assertTrue(
-                    "$id has a match_parent-height child",
-                    child.getAttributeNS(androidNs, "layout_height") != "match_parent",
-                )
+        val live = byId(root, "receiverBrowserScreen")
+        val ids = order(live)
+        assertTrue("stream list on the Live tab", "streamList" in ids)
+        // Go live is pinned below the list, and it is the only primary button on the tab (white with a red live
+        // icon since 2026-10-17: filled red is kept for being live and for Wipe).
+        assertTrue(ids.indexOf("streamModeButton") > ids.indexOf("streamList"))
+        val liveButtons = live.descendants().filter { it.getAttribute("style") == "@style/Widget.App.Button.Primary" }.toList()
+        assertEquals(1, liveButtons.size)
+        assertEquals("streamModeButton", idOf(liveButtons.single()))
+        assertEquals("wrap_content", liveButtons.single().getAttributeNS(androidNs, "layout_height"))
+        // No separate "find streams" row or Home screen any more.
+        assertNull(root.descendants().firstOrNull { idOf(it) == "receiveModeButton" })
+        assertNull(root.descendants().firstOrNull { idOf(it) == "homeScreen" })
+    }
+
+    @Test
+    fun goLiveIsWhiteWithARedIconAndTheBroadcastToggleStaysRed() {
+        val root = layout()
+        val goLive = byId(root, "streamModeButton")
+        assertEquals("@style/Widget.App.Button.Primary", goLive.getAttribute("style"))
+        assertEquals("@color/live_red", goLive.getAttribute("app:iconTint"))
+        // On the camera screen the start/stop toggle is the live control itself and stays filled red.
+        assertEquals("@style/Widget.App.Button.Live", byId(root, "streamToggleButton").getAttribute("style"))
+    }
+
+    @Test
+    fun contactsPinsAddContactAndCallsPinsNothing() {
+        val root = layout()
+        val contacts = order(byId(root, "contactsTabScreen"))
+        assertTrue(contacts.indexOf("contactsAddButton") > contacts.indexOf("contactsList"))
+        assertEquals(1, order(root).count { it == "contactsAddButton" })
+        // Both Calls screens (Nearby, Recent) have no button of their own.
+        listOf("callsTabScreen", "callBrowserScreen").forEach { id ->
+            assertTrue(byId(root, id).descendants().none { it.tagName.endsWith("Button") })
+            // and the Nearby | Recent switch
+            assertTrue(byId(root, id).descendants().any { it.getAttribute("layout") == "@layout/view_segments" })
+        }
+    }
+
+    @Test
+    fun tabScreensHaveNoCards() {
+        val root = layout()
+        listOf("receiverBrowserScreen", "callsTabScreen", "callBrowserScreen", "contactsTabScreen", "settingsScreen").forEach { id ->
+            val cards = byId(root, id).descendants().filter { it.tagName.endsWith("CardView") }.toList()
+            assertTrue("$id should have no cards, found ${cards.size}", cards.isEmpty())
+        }
+    }
+
+    @Test
+    fun oldHomeViewsAreKeptButHidden() {
+        val root = layout()
+        // Views the code still reads and writes sit in a hidden container on the Live tab.
+        listOf("statusText", "homeReadinessCard", "homePushToTalkButton", "homeIdentityCard", "homeChangeSettingsButton")
+            .forEach { id ->
+                var node: org.w3c.dom.Node? = byId(root, id)
+                var hidden = false
+                while (node is Element) {
+                    if (node.getAttributeNS(androidNs, "visibility") == "gone") hidden = true
+                    node = node.parentNode
+                }
+                assertTrue("$id should be hidden", hidden)
             }
-        }
     }
 
     @Test
-    fun actionsSitInTheThumbZoneBelowAFlexibleGap() {
+    fun bottomNavigationOffersLiveCallsContactsAndSettings() {
+        val menu = parse("menu/main_nav.xml")
+        val items = menu.descendants().map { it.getAttributeNS(androidNs, "id") }.toList()
+        assertEquals(listOf("@+id/navLive", "@+id/navCalls", "@+id/navContacts", "@+id/navSettings"), items)
+        val nav = byId(layout(), "mainNav")
+        assertEquals("gone", nav.getAttributeNS(androidNs, "visibility"))
+        assertFalse(nav.getAttribute("app:menu").isEmpty())
+    }
+
+    @Test
+    fun everyTabTitleBarHasTheStatusIndicator() {
         val root = layout()
-        val home = byId(root, "homeScreen")
-        val column = home.descendants().first()
-        val children = (0 until column.childNodes.length).mapNotNull { column.childNodes.item(it) as? Element }
-        val gap = children.indexOfFirst { it.getAttributeNS(androidNs, "layout_weight").isNotEmpty() && it.tagName == "View" }
-        assertTrue("home needs one flexible gap above the actions", gap >= 0)
-        listOf("receiveModeButton", "streamModeButton", "privateCallButton").forEach { id ->
-            val index = children.indexOfFirst { it.getAttributeNS(androidNs, "id") == "@+id/$id" }
-            assertTrue("$id must be below the gap (thumb zone)", index > gap)
+        listOf("tabStatusReceiver", "tabStatusCalls", "tabStatusNearby", "tabStatusContacts", "tabStatusSettings").forEach { id ->
+            byId(root, id)
         }
-        // Push-to-talk is a call feature (walkie-talkie), not a Home action.
-        assertEquals("gone", byId(root, "homePushToTalkButton").getAttributeNS(androidNs, "visibility"))
-        // The old status line stays for setStatus but is never shown on Home.
-        assertEquals("gone", byId(root, "statusText").getAttributeNS(androidNs, "visibility"))
     }
 
     @Test
-    fun compactTopFitsWithAllActionsOnASmallPhone() {
-        // 6.4" phone (1080 x 2340 at 420 dpi = 891 dp tall) minus status and navigation bars
-        // (about 72 dp) leaves about 819 dp. Heights below are at font scale 1.3: title 48, status
-        // line on two lines 48, ID 48, Recent header 40 + HOME_RECENT_ROWS rows of ~85, gap 24,
-        // two action rows of ~90, call caption 50, Call button 72, paddings 24.
-        val estimated = 48 + 48 + 48 + 40 + HOME_RECENT_ROWS * 85 + 24 + 2 * 90 + 50 + 72 + 24
-        assertTrue("home needs $estimated dp", estimated <= 800)
+    fun incomingCallDeclineAndAcceptShareOneRow() {
+        val root = layout()
+        val controls = byId(root, "incomingCallControls")
+        val children = (0 until controls.childNodes.length).mapNotNull { controls.childNodes.item(it) as? Element }
+        // Row first (both circles together, on one baseline), then "Decline and block" below it.
+        val row = children.first()
+        val rowIds = row.descendants().map(::idOf).toSet()
+        assertTrue("declineCallButton" in rowIds && "acceptCallButton" in rowIds)
+        assertEquals("top", row.getAttributeNS(androidNs, "gravity"))
+        assertEquals("declineAndBlockButton", idOf(children.last()))
+        assertEquals("@style/Widget.App.RoundControl.Large", byId(root, "declineCallButton").getAttribute("style"))
+        assertEquals("@style/Widget.App.RoundControl.Large", byId(root, "acceptCallButton").getAttribute("style"))
+    }
+
+    @Test
+    fun streamScreensHaveNoDecorativeLock() {
+        val root = layout()
+        // The lock under the LIVE badge is gone: the pill only appears for a hard identity mismatch.
+        val pill = byId(root, "streamSecurityText")
+        assertEquals("", pill.getAttribute("app:drawableStartCompat"))
+        assertEquals("gone", pill.getAttributeNS(androidNs, "visibility"))
+        // The call screen's lock shows only on a mismatch (hidden by default).
+        assertEquals("gone", byId(root, "callLockButton").getAttributeNS(androidNs, "visibility"))
+    }
+
+    @Test
+    fun settingsNeverNestTwoLevels() {
+        // Every page opens from the top page, except Advanced privacy, which opens from Privacy (2026-10-17 redesign).
+        SettingsPage.entries.forEach { page ->
+            val allowed = page.parent == null || page.parent == SettingsPage.MAIN ||
+                (page == SettingsPage.PRIVACY_ADVANCED && page.parent == SettingsPage.PRIVACY)
+            assertTrue("${page.name} nests", allowed)
+        }
+        // "Advanced" is a section label with exactly these five rows, each opening one page of that group's options.
+        val root = layout()
+        val main = byId(root, "settingsPageMain")
+        val ids = order(main)
+        val rows = listOf(
+            "advancedRowConnection" to SettingsPage.CONNECTION,
+            "advancedRowManual" to SettingsPage.MANUAL,
+            "advancedRowPlayback" to SettingsPage.PLAYBACK,
+            "advancedRowExperiments" to SettingsPage.EXPERIMENTS,
+            "advancedRowHelp" to SettingsPage.HELP,
+        )
+        assertEquals(rows.map { it.first }, ids.filter { it.startsWith("advancedRow") })
+        rows.forEach { (_, page) -> assertEquals(SettingsPage.MAIN, page.parent) }
+        // The groups' options live on those pages, not on the top page.
+        val groupOptions = listOf(
+            SettingsPage.CONNECTION to "transportSpinner",
+            SettingsPage.MANUAL to "advancedSettingsSwitch",
+            SettingsPage.MANUAL to "receiverPlaybackDelaySlider", // Playback merged into Manual video (2026-10-17)
+            SettingsPage.HELP to "exportDiagnosticsButton",
+        )
+        groupOptions.forEach { (page, option) ->
+            assertTrue("$option not on the top page", option !in ids)
+            val pageId = "settingsPage" + page.name.lowercase().replaceFirstChar { it.uppercase() }
+            assertTrue("$option on its page", option in order(byId(root, pageId)))
+        }
+        assertNull(root.descendants().firstOrNull { idOf(it) == "advancedToggleRow" })
+    }
+
+    @Test
+    fun everySettingsPageExists() {
+        val root = layout()
+        SettingsPage.entries.forEach { page ->
+            val name = "settingsPage" + when (page) {
+                SettingsPage.MAIN -> "Main"
+                SettingsPage.VIDEO -> "Video"
+                SettingsPage.PRIVACY -> "Privacy"
+                SettingsPage.PRIVACY_ADVANCED -> "PrivacyAdvanced"
+                SettingsPage.CALLS -> "Calls"
+                SettingsPage.SHARE -> "Share"
+                SettingsPage.CONNECTION -> "Connection"
+                SettingsPage.MANUAL -> "Manual"
+                SettingsPage.PLAYBACK -> "Playback"
+                SettingsPage.EXPERIMENTS -> "Experiments"
+                SettingsPage.HELP -> "Help"
+            }
+            byId(root, name)
+        }
+    }
+
+    /** The direct children of [container] that hold one control each (the equal columns of a control row). */
+    private fun columns(container: Element): List<Element> {
+        val result = mutableListOf<Element>()
+        val nodes = container.childNodes
+        for (i in 0 until nodes.length) (nodes.item(i) as? Element)?.let(result::add)
+        return result
+    }
+
+    private fun assertEqualColumnsWithEndInTheMiddle(container: Element, expectedOrder: List<String>, endId: String) {
+        val cols = columns(container)
+        assertEquals("one column per control", expectedOrder.size, cols.size)
+        assertTrue("an odd number of columns", cols.size % 2 == 1)
+        cols.forEach { col ->
+            assertEquals("equal columns: weight", "1", col.getAttributeNS(androidNs, "layout_weight"))
+            assertEquals("equal columns: width", "0dp", col.getAttributeNS(androidNs, "layout_width"))
+        }
+        // The control that sits in each column, in order: the first listed id inside the column.
+        val ownerOfEnd = cols.indexOfFirst { col -> col.descendants().any { idOf(it) == endId } || idOf(col) == endId }
+        assertEquals("End is exactly in the middle column", cols.size / 2, ownerOfEnd)
+        expectedOrder.forEachIndexed { index, id ->
+            assertTrue(
+                "$id is in column $index",
+                idOf(cols[index]) == id || cols[index].descendants().any { idOf(it) == id },
+            )
+        }
+    }
+
+    @Test
+    fun callControlsAreOneRowWithEndInTheMiddle() {
+        val root = layout()
+        val row = byId(root, "activeCallControls")
+        // Voice and video calls: the same five controls.
+        assertEqualColumnsWithEndInTheMiddle(
+            row,
+            listOf("callMuteButton", "callCameraButton", "endCallButton", "callSwitchCameraButton", "callSpeakerButton"),
+            "endCallButton",
+        )
+        // End is the red, slightly larger circle; the others are the standard round control.
+        assertEquals("@style/Widget.App.RoundControl.Large", byId(root, "endCallButton").getAttribute("style"))
+        listOf("callMuteButton", "callCameraButton", "callSwitchCameraButton", "callSpeakerButton").forEach {
+            assertEquals("@style/Widget.App.RoundControl", byId(root, it).getAttribute("style"))
+        }
+        // A control row, not a second row: nothing but the five columns, and no separate End row.
+        assertEquals("horizontal", row.getAttributeNS(androidNs, "orientation"))
+        assertEquals(1, order(root).count { it == "endCallButton" })
+    }
+
+    @Test
+    fun liveControlsAreOneRowWithEndInTheMiddle() {
+        val root = layout()
+        assertEqualColumnsWithEndInTheMiddle(
+            byId(root, "liveControls"),
+            listOf("broadcastMuteButton", "broadcastCameraButton", "streamToggleButton", "cameraSwitchButton", "broadcastPauseButton"),
+            "streamToggleButton",
+        )
+        // The slots the layout has are exactly the ones the rules list, End in the middle.
+        val slots = LiveControlSlots.slots(audioOnly = false)
+        assertEquals(listOf("MUTE", "CAMERA", "END", "FLIP", "PAUSE"), slots.map { it.name })
+        assertTrue(LiveControlSlots.endIsCentred(slots))
+    }
+
+    @Test
+    fun audioLiveControlsAreOneRowWithEndInTheMiddle() {
+        val root = parse("layout/screen_audio_broadcast.xml")
+        assertEqualColumnsWithEndInTheMiddle(
+            byId(root, "audioControls"),
+            listOf("audioMuteButton", "audioStopButton", "audioPauseButton"),
+            "audioStopButton",
+        )
+        assertEquals("@style/Widget.App.RoundControl.Large", byId(root, "audioStopButton").getAttribute("style"))
+        val slots = LiveControlSlots.slots(audioOnly = true)
+        assertEquals(listOf("MUTE", "END", "PAUSE"), slots.map { it.name })
+        assertTrue(LiveControlSlots.endIsCentred(slots))
+        // Switch to video is a plain action under the row, not a fourth control in it.
+        val ids = order(root)
+        assertTrue(ids.indexOf("audioSwitchToVideoButton") > ids.indexOf("audioControls"))
+    }
+
+    @Test
+    fun everyFlipControlUsesTheCameraSwitchIcon() {
+        val files = listOf("layout/activity_main.xml", "layout/screen_audio_broadcast.xml")
+        files.forEach { name ->
+            val text = listOf("src/main/res/$name", "app/src/main/res/$name").map(::File).first { it.isFile }.readText()
+            assertFalse("$name still uses the old flip icon", text.contains("ic_flip_camera"))
+        }
+        val main = listOf("src/main/res/layout/activity_main.xml", "app/src/main/res/layout/activity_main.xml")
+            .map(::File).first { it.isFile }.readText()
+        assertEquals("one Flip in calls, one in broadcast", 2, Regex("ic_camera_switch").findAll(main).count())
     }
 }

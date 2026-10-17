@@ -8,6 +8,12 @@
         is a local server standing in for GitHub. Release builds keep the default: HTTPS only.
     -->
     <application android:usesCleartextTraffic="true">
+        <!-- DEBUG radio-free encoder bench (test_encoder_bench); started only by MainActivity. -->
+        <activity
+            android:name=".EncoderBenchActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:screenOrientation="portrait" />
         <receiver
             android:name=".DebugTestAlertReceiver"
             android:exported="true" />

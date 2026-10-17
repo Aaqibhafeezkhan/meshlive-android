@@ -37,6 +37,13 @@ data class StoreForwardLimits(
     val stalledPartialMs: Long = 24L * 3_600_000,
     val progressTimeoutMs: Long = 10_000,
     val sessionTimeoutMs: Long = 120_000,
+    /**
+     * Messaging v2 non-chat exchange: the total limit above is extended while chunks keep flowing, up to this cap. 8 MB per
+     * exchange ([sessionBytes]) at the slowest measured path (about 89 kbps) is about 12 minutes; 15 minutes covers it.
+     */
+    val sessionHardCapMs: Long = 900_000,
+    /** "Flowing" means this many chunks moved within the last [progressTimeoutMs]; fewer is a trickle and gets no extension. */
+    val flowingChunks: Int = 4,
     /** Poisoned chunks from one neighbour in one session before the session is abandoned. */
     val maxPoisonedChunks: Int = 4,
     val maxPendingCards: Int = 20,
@@ -214,8 +221,14 @@ class BundleStore(private val root: File, private val clock: () -> Long, private
             .sumOf { it.header.storedBytes }
 
     @Synchronized
-    fun putOwn(sealed: SealedBundle, recipient: NodeId, limits: StoreForwardLimits): StoredBundle {
-        require(usage(BundleRole.OWN) + sealed.header.storedBytes <= limits.ownQuotaBytes) {
+    fun putOwn(
+        sealed: SealedBundle,
+        recipient: NodeId,
+        limits: StoreForwardLimits,
+        /** Messaging v2 raises the own-queue cap to 1 GiB; v1 keeps [StoreForwardLimits.ownQuotaBytes]. */
+        quotaBytes: Long = limits.ownQuotaBytes,
+    ): StoredBundle {
+        require(usage(BundleRole.OWN) + sealed.header.storedBytes <= quotaBytes) {
             "Outgoing message storage is full"
         }
         val now = clock()
@@ -226,7 +239,7 @@ class BundleStore(private val root: File, private val clock: () -> Long, private
         val dir = dirOf(bundle.idHex).apply { mkdirs() }
         // Header and chunks are durable before the meta (the commit point) marks it complete (N5).
         atomicWrite(File(dir, HEADER), sealed.header.encoded)
-        RandomAccessFile(File(dir, CHUNKS), "rw").use { file ->
+        openRandomAccess(File(dir, CHUNKS), "rw").use { file ->
             sealed.chunks.forEachIndexed { index, chunk ->
                 file.seek(index.toLong() * StoreForwardFormat.CHUNK_CIPHERTEXT_BYTES)
                 file.write(chunk)
@@ -257,7 +270,7 @@ class BundleStore(private val root: File, private val clock: () -> Long, private
         val bundle = bundles[idHex] ?: return ChunkWriteResult.UNKNOWN_BUNDLE
         if (!bundle.header.verifyChunk(index, ciphertext)) return ChunkWriteResult.POISONED
         if (bundle.present.get(index)) return ChunkWriteResult.DUPLICATE
-        RandomAccessFile(File(dirOf(idHex), CHUNKS), "rw").use { file ->
+        openRandomAccess(File(dirOf(idHex), CHUNKS), "rw").use { file ->
             file.seek(index.toLong() * StoreForwardFormat.CHUNK_CIPHERTEXT_BYTES)
             file.write(ciphertext)
         }
@@ -297,7 +310,7 @@ class BundleStore(private val root: File, private val clock: () -> Long, private
     fun readChunk(idHex: String, index: Int): ByteArray? {
         val bundle = bundles[idHex] ?: return null
         if (!bundle.present.get(index)) return null
-        return RandomAccessFile(File(dirOf(idHex), CHUNKS), "r").use { file ->
+        return openRandomAccess(File(dirOf(idHex), CHUNKS), "r").use { file ->
             file.seek(index.toLong() * StoreForwardFormat.CHUNK_CIPHERTEXT_BYTES)
             ByteArray(bundle.header.chunkCiphertextBytes(index)).also(file::readFully)
         }
@@ -387,7 +400,7 @@ class BundleStore(private val root: File, private val clock: () -> Long, private
 
     private fun saveMeta(bundle: StoredBundle) {
         if ((unsynced.remove(bundle.idHex) ?: 0) > 0) {
-            RandomAccessFile(File(dirOf(bundle.idHex), CHUNKS), "rw").use { it.fd.sync() }
+            openRandomAccess(File(dirOf(bundle.idHex), CHUNKS), "rw").use { it.fd.sync() }
         }
         val properties = Properties().apply {
             setProperty("role", bundle.role.name)
@@ -402,7 +415,7 @@ class BundleStore(private val root: File, private val clock: () -> Long, private
     }
 
     private fun load(dir: File): StoredBundle {
-        val header = BundleHeader.decode(File(dir, HEADER).readBytes())
+        val header = BundleHeader.decode(File(dir, HEADER).readBytes(), allowV3 = true)
         require(header.bundleId.sfHex() == dir.name) { "Bundle directory does not match its header" }
         val meta = readSealedProperties(File(dir, META), cipher)
         return StoredBundle(
@@ -458,11 +471,27 @@ class NeighborLedger(
             properties.getProperty("$key.exchangeCount")?.toIntOrNull() ?: 0
         } else 0
         if (count >= maxPerHour) return false
+        // Remembered so an admitted exchange that moved nothing can give back the spacing ([refundCooldown]).
+        properties.setProperty("$key.prevExchangeMs", last?.toString() ?: "")
         properties.setProperty("$key.lastExchangeMs", now.toString())
         properties.setProperty("$key.exchangeHour", hour.toString())
         properties.setProperty("$key.exchangeCount", (count + 1).toString())
         writeSealedProperties(file, cipher, properties)
         return true
+    }
+
+    /**
+     * Gives back the spacing of the exchange just admitted for [key] ([admitExchange] remembered the previous start): an
+     * exchange that was admitted, then lost its link before anything moved, must not make the neighbour's retry wait out the
+     * cooldown (lane3-asus-a15s-m31-20261013: each failed A15s dial made the next one RATE_LIMITED 46 s later). The hourly count
+     * is NOT refunded, so a neighbour that connects and vanishes is still bounded by the hourly cap. Idempotent.
+     */
+    @Synchronized
+    fun refundCooldown(key: String) {
+        val previous = properties.getProperty("$key.prevExchangeMs") ?: return
+        if (previous.isEmpty()) properties.remove("$key.lastExchangeMs") else properties.setProperty("$key.lastExchangeMs", previous)
+        properties.remove("$key.prevExchangeMs")
+        writeSealedProperties(file, cipher, properties)
     }
 
     /**
@@ -478,6 +507,8 @@ class NeighborLedger(
             properties.getProperty("$record.day")?.toLongOrNull()?.times(86_400_000L),
             properties.getProperty("$record.lastSyncMs")?.toLongOrNull(),
             properties.getProperty("$record.lastExchangeMs")?.toLongOrNull(),
+            // The hour of the last admission: a record whose cooldown was refunded ([refundCooldown]) still has its hourly count.
+            properties.getProperty("$record.exchangeHour")?.toLongOrNull()?.times(3_600_000L),
         ).maxOrNull() ?: 0L
         val stale = byRecord.keys.filter { record ->
             val day = properties.getProperty("$record.day")?.toIntOrNull()
@@ -510,7 +541,7 @@ class NeighborLedger(
         val current = today(key)
         properties.setProperty("$key.day", currentDay().toString())
         properties.setProperty("$key.bytesIn", (current.bytesIn + bytesIn).toString())
-        properties.setProperty("$key.bundlesIn", (current.bundlesIn + bundlesIn).toString())
+        properties.setProperty("$key.bundlesIn", (current.bundlesIn + bundlesIn).coerceAtLeast(0).toString())
         properties.setProperty("$key.bytesOut", (current.bytesOut + bytesOut).toString())
         writeSealedProperties(file, cipher, properties)
     }
@@ -535,9 +566,29 @@ class NeighborLedger(
 
 enum class ContactState { ACCEPTED, PENDING }
 
-class StoreForwardContact(val card: ContactCard, val state: ContactState, val name: String, val addedMs: Long) {
+/** How an ACCEPTED contact got accepted. Only [VERIFIED] contacts follow the verified-contact store when it forgets them. */
+enum class ContactSource {
+    /** The user compared the safety number of a card (v1) or typed a card in. */
+    MANUAL,
+    /** Messaging v2: the card's identity was already verified in person, so no second comparison was needed (M1). */
+    VERIFIED,
+}
+
+class StoreForwardContact(
+    val card: ContactCard,
+    val state: ContactState,
+    val name: String,
+    val addedMs: Long,
+    val source: ContactSource = ContactSource.MANUAL,
+    /**
+     * Messaging v2 (M1): a newer signed card of this identity carries another mailbox key. Nothing is sent to the contact
+     * (and nothing new is read from the new key) until the user compares the new safety number and accepts it.
+     */
+    val pendingKeyChange: ContactCard? = null,
+) {
     val nodeId: NodeId get() = card.nodeId
     val label: String get() = name.ifBlank { card.nodeId.shortLabel() }
+    val keysChanged: Boolean get() = pendingKeyChange != null
 }
 
 enum class CardOffer {
@@ -547,6 +598,28 @@ enum class CardOffer {
     IDENTITY_MISMATCH,
     /** The card's mailbox key already belongs to another held card, pending or accepted (N2). */
     MAILBOX_IN_USE,
+    /** Messaging v2: the card's identity is verified in person, so it was accepted without a second comparison (M1). */
+    AUTO_ACCEPTED,
+    /** Messaging v2: an accepted contact's newer card carries another mailbox key; held back until the user compares again (M1). */
+    KEY_CHANGED,
+    /** Messaging v2: a card with another mailbox key that is not newer than the stored one (a replayed old card): ignored. */
+    KEY_CHANGED_STALE,
+}
+
+/**
+ * Messaging v2 (M1, one contact system): the verified-contact store is the source of truth for who the user has compared in
+ * person. The mailbox card only carries the key material a message needs. Implemented on Android over [VerifiedContactStore].
+ */
+interface VerifiedIdentityDirectory {
+    /** The label of the verified contact that owns [identityKey] (a DER SubjectPublicKeyInfo), "" if unnamed; null if not verified. */
+    fun verifiedLabel(identityKey: ByteArray): String?
+
+    /** Whether a verified contact has exactly this node ID. */
+    fun isVerifiedNode(node: NodeId): Boolean
+
+    /** False while the verified store cannot be read: nothing is demoted or removed because of it. */
+    val readable: Boolean
+        get() = true
 }
 
 /**
@@ -574,14 +647,26 @@ class ContactBook(
                     ContactState.valueOf(properties.getProperty("$node.state", ContactState.PENDING.name)),
                     properties.getProperty("$node.name", ""),
                     properties.getProperty("$node.addedMs", "0").toLong(),
+                    runCatching { ContactSource.valueOf(properties.getProperty("$node.source", ContactSource.MANUAL.name)) }
+                        .getOrDefault(ContactSource.MANUAL),
+                    properties.getProperty("$node.pendingCard")?.let { text ->
+                        runCatching { ContactCard.fromText(text) }.getOrNull()?.takeIf { it.nodeId == card.nodeId }
+                    },
                 )
             }
         }
     }
 
+    /** Changes whenever the set of accepted cards or any card changes; a running exchange rebuilds its tag table when it moves. */
+    @Volatile var generation: Int = 0
+        private set
+
     @Synchronized fun all(): List<StoreForwardContact> = contacts.values.toList()
     @Synchronized fun get(node: NodeId): StoreForwardContact? = contacts[node]
     @Synchronized fun accepted(): List<StoreForwardContact> = contacts.values.filter { it.state == ContactState.ACCEPTED }
+
+    /** Messaging v2: the newer card of [node] whose other mailbox key waits for the user's comparison, or null. */
+    @Synchronized fun pendingKeyChange(node: NodeId): ContactCard? = contacts[node]?.pendingKeyChange
 
     /**
      * Sender resolution by authenticated identity: true only if an ACCEPTED card held for [node]
@@ -630,7 +715,8 @@ class ContactBook(
         require(!mailboxHeldByOtherAccepted(card)) { "Another contact already uses this card's mailbox key" }
         dropPendingDuplicates(card)
         return StoreForwardContact(card, ContactState.ACCEPTED, name.ifBlank { existing?.name.orEmpty() },
-            existing?.addedMs ?: clock()).also { contacts[card.nodeId] = it; save() }
+            existing?.addedMs ?: clock(), existing?.source ?: ContactSource.MANUAL, existing?.pendingKeyChange)
+            .also { contacts[card.nodeId] = it; changed() }
     }
 
     /** A card received from the authenticated adjacent identity [linkPeer]. */
@@ -655,15 +741,126 @@ class ContactBook(
         val existing = contacts[node] ?: return
         require(!mailboxHeldByOtherAccepted(existing.card)) { "Another contact already uses this card's mailbox key" }
         dropPendingDuplicates(existing.card)
-        contacts[node] = StoreForwardContact(existing.card, ContactState.ACCEPTED, name.ifBlank { existing.name }, existing.addedMs)
-        save()
+        contacts[node] = StoreForwardContact(existing.card, ContactState.ACCEPTED, name.ifBlank { existing.name }, existing.addedMs,
+            ContactSource.MANUAL, existing.pendingKeyChange)
+        changed()
     }
 
     @Synchronized
     fun remove(node: NodeId): Boolean {
         val removed = contacts.remove(node) != null
-        if (removed) save()
+        if (removed) changed()
         return removed
+    }
+
+    /**
+     * Messaging v2 (M1): a card received over the authenticated link of [linkPeer]. The verified-contact store decides
+     * trust: a card whose identity [verified] lists is accepted at once (no second comparison); any other card stays pending
+     * behind the safety number. An accepted contact's card with another mailbox key is held as a pending key change when it
+     * is newer than the stored card (a replayed older signed card cannot roll a key back) and nothing is sent until the
+     * user accepts it ([acceptKeyChange]).
+     */
+    @Synchronized
+    fun offerFromLinkV2(card: ContactCard, linkPeer: NodeId, verified: VerifiedIdentityDirectory?): CardOffer {
+        if (card.nodeId != linkPeer) return CardOffer.IDENTITY_MISMATCH
+        val label = verified?.verifiedLabel(card.identityPublicKey)
+        val existing = contacts[card.nodeId]
+        if (existing != null) {
+            if (existing.card.mailboxPublic.contentEquals(card.mailboxPublic)) {
+                // Same keys: a newer card only refreshes the stored creation time (the freshness anchor).
+                val newer = card.createdMs > existing.card.createdMs
+                if (existing.state == ContactState.PENDING && label != null) {
+                    if (mailboxHeldByOtherAccepted(existing.card)) return CardOffer.MAILBOX_IN_USE
+                    dropPendingDuplicates(existing.card)
+                    contacts[card.nodeId] = StoreForwardContact(if (newer) card else existing.card, ContactState.ACCEPTED,
+                        label.ifBlank { existing.name }, existing.addedMs, ContactSource.VERIFIED, null)
+                    changed()
+                    return CardOffer.AUTO_ACCEPTED
+                }
+                if (newer) {
+                    contacts[card.nodeId] = StoreForwardContact(card, existing.state, existing.name, existing.addedMs, existing.source,
+                        existing.pendingKeyChange)
+                    save()
+                }
+                return CardOffer.ALREADY_KNOWN
+            }
+            if (existing.state != ContactState.ACCEPTED) return CardOffer.KEY_CHANGED_IGNORED
+            if (card.createdMs <= existing.card.createdMs) return CardOffer.KEY_CHANGED_STALE
+            if (mailboxHeldByOther(card)) return CardOffer.MAILBOX_IN_USE
+            val held = existing.pendingKeyChange
+            if (held != null && held.createdMs >= card.createdMs) return CardOffer.KEY_CHANGED
+            contacts[card.nodeId] = StoreForwardContact(existing.card, existing.state, existing.name, existing.addedMs, existing.source, card)
+            changed()
+            return CardOffer.KEY_CHANGED
+        }
+        if (mailboxHeldByOther(card)) return CardOffer.MAILBOX_IN_USE
+        if (label != null) {
+            contacts[card.nodeId] = StoreForwardContact(card, ContactState.ACCEPTED, label, clock(), ContactSource.VERIFIED, null)
+            changed()
+            return CardOffer.AUTO_ACCEPTED
+        }
+        contacts[card.nodeId] = StoreForwardContact(card, ContactState.PENDING, "", clock())
+        val pending = contacts.values.filter { it.state == ContactState.PENDING }.sortedBy { it.addedMs }
+        pending.take((pending.size - maxPending).coerceAtLeast(0)).forEach { contacts.remove(it.nodeId) }
+        changed()
+        return CardOffer.ADDED_PENDING
+    }
+
+    /**
+     * The user compared the safety number of [node]'s newer card and accepts the new mailbox key: it replaces the stored card
+     * (name and source stay). Returns the replaced card, or null when no key change was pending.
+     */
+    @Synchronized
+    fun acceptKeyChange(node: NodeId): ContactCard? {
+        val existing = contacts[node] ?: return null
+        val replacement = existing.pendingKeyChange ?: return null
+        if (mailboxHeldByOtherAccepted(replacement)) return null
+        contacts[node] = StoreForwardContact(replacement, existing.state, existing.name, existing.addedMs, existing.source, null)
+        changed()
+        return existing.card
+    }
+
+    /** The user keeps the old key: the held card is dropped (the next meeting offers it again). */
+    @Synchronized
+    fun dismissKeyChange(node: NodeId): Boolean {
+        val existing = contacts[node] ?: return false
+        if (existing.pendingKeyChange == null) return false
+        contacts[node] = StoreForwardContact(existing.card, existing.state, existing.name, existing.addedMs, existing.source, null)
+        changed()
+        return true
+    }
+
+    /** What [reconcileVerified] changed. */
+    class Reconciled(val promoted: List<NodeId>, val demoted: List<NodeId>)
+
+    /**
+     * Follows the verified-contact store (M1): a PENDING card whose identity became verified is accepted, and a contact that was
+     * auto-accepted because it was verified is removed when the user forgot the verification. Contacts the user accepted by
+     * hand are never touched. Nothing is removed while the store is unreadable.
+     */
+    @Synchronized
+    fun reconcileVerified(verified: VerifiedIdentityDirectory): Reconciled {
+        val promoted = ArrayList<NodeId>()
+        val demoted = ArrayList<NodeId>()
+        for (contact in contacts.values.toList()) {
+            val label = verified.verifiedLabel(contact.card.identityPublicKey)
+            if (contact.state == ContactState.PENDING && label != null && !mailboxHeldByOtherAccepted(contact.card)) {
+                dropPendingDuplicates(contact.card)
+                contacts[contact.nodeId] = StoreForwardContact(contact.card, ContactState.ACCEPTED, label.ifBlank { contact.name },
+                    contact.addedMs, ContactSource.VERIFIED, contact.pendingKeyChange)
+                promoted += contact.nodeId
+            } else if (contact.state == ContactState.ACCEPTED && contact.source == ContactSource.VERIFIED && label == null && verified.readable) {
+                contacts.remove(contact.nodeId)
+                demoted += contact.nodeId
+            }
+        }
+        if (promoted.isNotEmpty() || demoted.isNotEmpty()) changed()
+        return Reconciled(promoted, demoted)
+    }
+
+    private fun changed() {
+        generation++
+        save()
     }
 
     private fun save() = writeSealedProperties(file, cipher, Properties().apply {
@@ -673,6 +870,8 @@ class ContactBook(
             setProperty("$node.state", contact.state.name)
             setProperty("$node.name", contact.name)
             setProperty("$node.addedMs", contact.addedMs.toString())
+            if (contact.source != ContactSource.MANUAL) setProperty("$node.source", contact.source.name)
+            contact.pendingKeyChange?.let { setProperty("$node.pendingCard", it.toText()) }
         }
     })
 }
@@ -924,8 +1123,40 @@ internal fun atomicWrite(file: File, bytes: ByteArray) {
             Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
             return
         } catch (error: java.io.IOException) {
-            if (++attempt >= 20) throw error
-            Thread.sleep(10)
+            if (++attempt >= HOST_LOCK_RETRIES) throw error
+            try {
+                Thread.sleep(HOST_LOCK_RETRY_MS)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw error
+            }
+        }
+    }
+}
+
+private const val HOST_LOCK_RETRIES = 100
+private const val HOST_LOCK_RETRY_MS = 10L
+
+/**
+ * [RandomAccessFile] that waits out a lock another process holds on the file for a moment. On a Windows host a virus scanner or
+ * indexer that has just seen a closed file can keep it open for a few milliseconds, and the next open of a chunk file (one per
+ * chunk) then fails with "being used by another process"; that surfaced in JVM tests as a stored-message exchange ending
+ * INTERRUPTED with that text as its detail. A missing file, or any other failure, is thrown at once, and no phone reports this
+ * error, so nothing on Android changes. Waits at most about a second.
+ */
+internal fun openRandomAccess(file: File, mode: String): RandomAccessFile {
+    var attempt = 0
+    while (true) {
+        try {
+            return RandomAccessFile(file, mode)
+        } catch (error: java.io.FileNotFoundException) {
+            if (!file.exists() || error.message?.contains("another process") != true || ++attempt >= HOST_LOCK_RETRIES) throw error
+            try {
+                Thread.sleep(HOST_LOCK_RETRY_MS)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw error
+            }
         }
     }
 }

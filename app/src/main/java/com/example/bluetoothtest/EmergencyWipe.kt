@@ -448,6 +448,8 @@ object EmergencyWipe {
 
         override fun resetInMemoryState() {
             IdentityVerification.clearForWipe()
+            BlockedPeople.clearForWipe()
+            ContactClaims.clearForWipe()
             StoreForwardRuntime.clearForWipe()
             RotatingDiscovery.clearForWipe()
         }

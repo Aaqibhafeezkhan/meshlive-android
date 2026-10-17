@@ -203,6 +203,99 @@ class LinkSelfMeasurementTest {
         assertEquals(120_000L, pacer.bytesPerSecond)
     }
 
+    // lane12 s6-threshold-360p: 640x360 at 500 kbps never formed a train, the viewer stayed silent and
+    // the seed decayed to the 150 kbps floor (about 157 kbps delivered, 65 s queue).
+
+    @Test
+    fun onTimeReportsFromAnUnmeasuredChildHoldTheSeed() {
+        val pacer = LinkPacer({ nowNs })
+        pacer.seedKbps(1_488)
+        val seeded = pacer.bytesPerSecond
+        repeat(30) { // 60 s of on-time reports every 2 s
+            nowNs += ON_TIME_REPORT_INTERVAL_NS
+            assertEquals(true, pacer.holdSeed())
+            assertEquals(seeded, pacer.bytesPerSecond)
+        }
+        // Reports stop (the link backed up): the seed decays as before.
+        nowNs += 60_000_000_000L
+        assertEquals((LinkPacer.MIN_SEED_KBPS * 1_000L / 8 * LinkPacer.PACE_GAIN).toLong(), pacer.bytesPerSecond)
+        // A later on-time report restores it; a measurement then replaces it for good.
+        assertEquals(true, pacer.holdSeed())
+        assertEquals(seeded, pacer.bytesPerSecond)
+        pacer.setMeasuredLinkKbps(600)
+        assertEquals(false, pacer.holdSeed())
+        assertEquals(90_000L, pacer.bytesPerSecond)
+    }
+
+    // lane15 pairB2: a fresh-install A55 seeded at the 350 kbps GATT prior held a 400 kbps stream below
+    // its offered load; the ASUS reported on time while the sender queue grew to 14 s.
+
+    @Test
+    fun theExperimentalRaiseGrowsAHeldSeedOnlyWhileTheSenderBacksUp() {
+        val pacer = LinkPacer({ nowNs })
+        pacer.seedKbps(350)
+        // Off (negative) or a short queue: held unchanged.
+        assertEquals(true, pacer.holdSeed())
+        assertEquals(true, pacer.holdSeed(LinkPacer.SEED_RAISE_BACKLOG_MS - 1))
+        assertEquals(350, pacer.seedKbps)
+        // Backed up: +25% per on-time report.
+        assertEquals(true, pacer.holdSeed(LinkPacer.SEED_RAISE_BACKLOG_MS))
+        assertEquals(437, pacer.seedKbps)
+        assertEquals((437.5 * 1_000 / 8 * LinkPacer.PACE_GAIN).toLong(), pacer.bytesPerSecond)
+        repeat(20) { pacer.holdSeed(10_000L) }
+        assertEquals(LinkPacer.SEED_RAISE_CAP_KBPS, pacer.seedKbps)
+        // Without reports it still decays; a measurement still replaces it.
+        nowNs += 60_000_000_000L
+        assertEquals((LinkPacer.MIN_SEED_KBPS * 1_000L / 8 * LinkPacer.PACE_GAIN).toLong(), pacer.bytesPerSecond)
+        pacer.setMeasuredLinkKbps(600)
+        assertEquals(false, pacer.holdSeed(10_000L))
+        assertEquals(90_000L, pacer.bytesPerSecond)
+    }
+
+    @Test
+    fun aRaisedSeedDrainsWhatWasAlreadyChargedAtTheNewPace() {
+        val pacer = LinkPacer({ nowNs }, burstNs = 0L)
+        pacer.seedKbps(400) // 60 000 B/s paced
+        pacer.onSent(60_000, nowNs) // one second ahead
+        assertEquals(1_000_000_000L, pacer.waitNs())
+        pacer.holdSeed(LinkPacer.SEED_RAISE_BACKLOG_MS) // 500 kbps
+        assertEquals(800_000_000L, pacer.waitNs())
+    }
+
+    @Test
+    fun holdingAnUnseededPacerLeavesItUnpaced() {
+        val pacer = LinkPacer({ nowNs })
+        assertEquals(false, pacer.holdSeed())
+        assertEquals(0L, pacer.bytesPerSecond)
+    }
+
+    @Test
+    fun anOnTimeReportIsDueOnlyForAnUnmeasuredOnTimeLinkWithNewMedia() {
+        val due = ON_TIME_REPORT_INTERVAL_NS
+        assertEquals(true, onTimeReportDue(true, 0L, tight = false, mediaArrived = true, sinceLastReportNs = due))
+        assertEquals(false, onTimeReportDue(false, 0L, tight = false, mediaArrived = true, sinceLastReportNs = due))
+        assertEquals(false, onTimeReportDue(true, 1L, tight = false, mediaArrived = true, sinceLastReportNs = due))
+        assertEquals(false, onTimeReportDue(true, 0L, tight = true, mediaArrived = true, sinceLastReportNs = due))
+        assertEquals(false, onTimeReportDue(true, 0L, tight = false, mediaArrived = false, sinceLastReportNs = due))
+        assertEquals(false, onTimeReportDue(true, 0L, tight = false, mediaArrived = true, sinceLastReportNs = due - 1))
+        // Inside the parent's grace, so a single lost report does not start the decay.
+        assertEquals(true, ON_TIME_REPORT_INTERVAL_NS * 2 <= LinkPacer.SILENCE_GRACE_NS)
+    }
+
+    @Test
+    fun recordsJustUnderTheTrainMinimumAreNeverMeasured() {
+        // An 8.3 KB keyframe (640x360 at 500 kbps) minus the first read is under MIN_TRAIN_BYTES.
+        val meter = ArrivalTrainMeter({ nowNs })
+        meter.beginRecord()
+        meter.onRead(512, waited = true, availableAfter = 0)
+        repeat(30) {
+            nowNs += 5_000_000L
+            meter.onRead(260, waited = false, availableAfter = 0)
+        }
+        assertNull(meter.endRecord())
+        assertEquals(0L, meter.trains)
+    }
+
     @Test
     fun aSeedBelowTheFloorIsNotRaisedByDecay() {
         assertEquals(10_000L, LinkPacer.decayedSeed(10_000L, 100_000_000_000L))

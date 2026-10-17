@@ -44,12 +44,58 @@ void throwState(JNIEnv* env, const char* message, int code) {
 EncoderHandle* encoderFrom(jlong handle) { return reinterpret_cast<EncoderHandle*>(handle); }
 DecoderHandle* decoderFrom(jlong handle) { return reinterpret_cast<DecoderHandle*>(handle); }
 
+// Shared by both create entry points. [application] is OPUS_APPLICATION_VOIP (calls) or
+// OPUS_APPLICATION_AUDIO; [speechSignal] adds OPUS_SIGNAL_VOICE (audio-only live Voice presets).
+jlong createEncoder(
+    JNIEnv* env, jint sampleRate, jint channels, jint bitRate, jint complexity,
+    jint fecLossPercent, jboolean dtx, jboolean constrainedVbr, int application, bool speechSignal) {
+    if (channels < 1 || channels > kMaxChannels) {
+        throwState(env, "Unsupported Opus channel count", OPUS_BAD_ARG);
+        return 0;
+    }
+    int error = OPUS_OK;
+    OpusEncoder* encoder = opus_encoder_create(sampleRate, channels, application, &error);
+    if (encoder == nullptr || error != OPUS_OK) {
+        throwState(env, "opus_encoder_create failed", error);
+        return 0;
+    }
+    const bool fec = fecLossPercent >= 0;
+    int results[8] = {
+        opus_encoder_ctl(encoder, OPUS_SET_BITRATE(bitRate)),
+        opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(complexity)),
+        // Same rate-control family as c2.android.opus (constrained VBR) so the offered load matches.
+        opus_encoder_ctl(encoder, OPUS_SET_VBR(1)),
+        opus_encoder_ctl(encoder, OPUS_SET_VBR_CONSTRAINT(constrainedVbr ? 1 : 0)),
+        opus_encoder_ctl(encoder, OPUS_SET_INBAND_FEC(fec ? 1 : 0)),
+        opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(fec ? fecLossPercent : 0)),
+        opus_encoder_ctl(encoder, OPUS_SET_DTX(dtx ? 1 : 0)),
+        speechSignal ? opus_encoder_ctl(encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE)) : OPUS_OK,
+    };
+    for (int result : results) {
+        if (result != OPUS_OK) {
+            opus_encoder_destroy(encoder);
+            throwState(env, "opus_encoder_ctl failed", result);
+            return 0;
+        }
+    }
+    auto* handle = new (std::nothrow) EncoderHandle();
+    if (handle == nullptr) {
+        opus_encoder_destroy(encoder);
+        throwState(env, "Out of memory", OPUS_ALLOC_FAIL);
+        return 0;
+    }
+    handle->encoder = encoder;
+    handle->channels = channels;
+    return reinterpret_cast<jlong>(handle);
+}
+
 }  // namespace
 
 // Prototypes keep -Wmissing-prototypes (an error in release builds) quiet, as in native_aom_encoder.cpp.
 extern "C" {
 JNIEXPORT jstring JNICALL Java_com_example_bluetoothtest_NativeOpusBridge_nativeOpusVersion(JNIEnv* env, jobject);
 JNIEXPORT jlong JNICALL Java_com_example_bluetoothtest_NativeOpusBridge_nativeEncoderCreate(JNIEnv* env, jobject, jint sampleRate, jint channels, jint bitRate, jint complexity, jint fecLossPercent, jboolean dtx, jboolean constrainedVbr);
+JNIEXPORT jlong JNICALL Java_com_example_bluetoothtest_NativeOpusBridge_nativeEncoderCreateEx(JNIEnv* env, jobject, jint sampleRate, jint channels, jint bitRate, jint complexity, jint fecLossPercent, jboolean dtx, jboolean constrainedVbr, jint application, jboolean speechSignal);
 JNIEXPORT jint JNICALL Java_com_example_bluetoothtest_NativeOpusBridge_nativeEncoderLookahead(JNIEnv* env, jobject, jlong handle);
 JNIEXPORT jint JNICALL Java_com_example_bluetoothtest_NativeOpusBridge_nativeEncoderSetLossPercent(JNIEnv*, jobject, jlong handle, jint percent);
 JNIEXPORT jint JNICALL Java_com_example_bluetoothtest_NativeOpusBridge_nativeEncode(JNIEnv* env, jobject, jlong handle, jbyteArray pcm, jint frameSamples, jbyteArray output);
@@ -76,43 +122,25 @@ JNIEXPORT jlong JNICALL
 Java_com_example_bluetoothtest_NativeOpusBridge_nativeEncoderCreate(
     JNIEnv* env, jobject, jint sampleRate, jint channels, jint bitRate, jint complexity,
     jint fecLossPercent, jboolean dtx, jboolean constrainedVbr) {
-    if (channels < 1 || channels > kMaxChannels) {
-        throwState(env, "Unsupported Opus channel count", OPUS_BAD_ARG);
+    return createEncoder(env, sampleRate, channels, bitRate, complexity, fecLossPercent, dtx,
+                         constrainedVbr, OPUS_APPLICATION_VOIP, false);
+}
+
+/**
+ * Audio-only live entry point (Design AL): the same encoder with a caller-chosen application
+ * (2048 = OPUS_APPLICATION_VOIP, 2049 = OPUS_APPLICATION_AUDIO) and an optional speech signal hint.
+ * The call path never uses it.
+ */
+JNIEXPORT jlong JNICALL
+Java_com_example_bluetoothtest_NativeOpusBridge_nativeEncoderCreateEx(
+    JNIEnv* env, jobject, jint sampleRate, jint channels, jint bitRate, jint complexity,
+    jint fecLossPercent, jboolean dtx, jboolean constrainedVbr, jint application, jboolean speechSignal) {
+    if (application != OPUS_APPLICATION_VOIP && application != OPUS_APPLICATION_AUDIO) {
+        throwState(env, "Unsupported Opus application", OPUS_BAD_ARG);
         return 0;
     }
-    int error = OPUS_OK;
-    OpusEncoder* encoder = opus_encoder_create(sampleRate, channels, OPUS_APPLICATION_VOIP, &error);
-    if (encoder == nullptr || error != OPUS_OK) {
-        throwState(env, "opus_encoder_create failed", error);
-        return 0;
-    }
-    const bool fec = fecLossPercent >= 0;
-    int results[7] = {
-        opus_encoder_ctl(encoder, OPUS_SET_BITRATE(bitRate)),
-        opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(complexity)),
-        // Same rate-control family as c2.android.opus (constrained VBR) so the offered load matches.
-        opus_encoder_ctl(encoder, OPUS_SET_VBR(1)),
-        opus_encoder_ctl(encoder, OPUS_SET_VBR_CONSTRAINT(constrainedVbr ? 1 : 0)),
-        opus_encoder_ctl(encoder, OPUS_SET_INBAND_FEC(fec ? 1 : 0)),
-        opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(fec ? fecLossPercent : 0)),
-        opus_encoder_ctl(encoder, OPUS_SET_DTX(dtx ? 1 : 0)),
-    };
-    for (int result : results) {
-        if (result != OPUS_OK) {
-            opus_encoder_destroy(encoder);
-            throwState(env, "opus_encoder_ctl failed", result);
-            return 0;
-        }
-    }
-    auto* handle = new (std::nothrow) EncoderHandle();
-    if (handle == nullptr) {
-        opus_encoder_destroy(encoder);
-        throwState(env, "Out of memory", OPUS_ALLOC_FAIL);
-        return 0;
-    }
-    handle->encoder = encoder;
-    handle->channels = channels;
-    return reinterpret_cast<jlong>(handle);
+    return createEncoder(env, sampleRate, channels, bitRate, complexity, fecLossPercent, dtx,
+                         constrainedVbr, application, speechSignal == JNI_TRUE);
 }
 
 JNIEXPORT jint JNICALL

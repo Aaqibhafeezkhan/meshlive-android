@@ -25,7 +25,7 @@ DEFAULT_REGISTRY = ROOT / "tools" / "device_policy_registry.json"
 SOC_FAMILIES = {"QUALCOMM", "EXYNOS", "MEDIATEK", "TENSOR", "UNISOC", "UNKNOWN"}
 SOURCE_STATUSES = {"OFFICIAL", "PARTIAL", "EVIDENCE_ONLY"}
 CONFIDENCES = {"HIGH", "MEDIUM", "LOW"}
-AREAS = {"CODEC", "YUV", "BLUETOOTH_TRANSPORT", "GRAPHICS", "BACKGROUND", "MEMORY_THERMAL", "NATIVE"}
+AREAS = {"CODEC", "YUV", "BLUETOOTH_TRANSPORT", "GRAPHICS", "BACKGROUND", "MEMORY_THERMAL", "NATIVE", "CAMERA", "AUDIO"}
 VALIDATIONS = {"UPSTREAM_DOCUMENTED", "LOCALLY_REPRODUCED", "EXPERIMENTAL"}
 LINE_RE = re.compile(r"BENCHMARK device_policy: (?P<body>.*)$")
 
@@ -55,7 +55,31 @@ def derive_skin(manufacturer: str) -> str:
 
 
 def derive_stack_lineage(sdk: int) -> str:
+    """The umbrella lineage the export carries per device (traits.stackLineage)."""
     return "BLUETOOTH_MODULE" if sdk >= 33 else "PLATFORM_SYSTEM_BT"
+
+
+def derive_stack_era(sdk: int) -> str:
+    """The finer stack era (one of five), as deriveStackLineage in DeviceFamilyPolicy.kt; never an umbrella value."""
+    if sdk <= 30:
+        return "LEGACY_29_30"
+    if sdk <= 32:
+        return "LEGACY_GD_OPTIONAL_31_32"
+    if sdk == 33:
+        return "GD_CORE_33"
+    if sdk == 34:
+        return "GD_FLAGGED_34"
+    return "ACONFIG_35_PLUS"
+
+
+_UMBRELLA_OF = {"LEGACY_29_30": "PLATFORM_SYSTEM_BT", "LEGACY_GD_OPTIONAL_31_32": "PLATFORM_SYSTEM_BT",
+                "GD_CORE_33": "BLUETOOTH_MODULE", "GD_FLAGGED_34": "BLUETOOTH_MODULE", "ACONFIG_35_PLUS": "BLUETOOTH_MODULE"}
+
+
+def lineage_covers(matcher_value: str, phone_era: str) -> bool:
+    """BluetoothStackLineage.covers: an umbrella value matches every era under it, an era only itself."""
+    return matcher_value == phone_era or (matcher_value in ("PLATFORM_SYSTEM_BT", "BLUETOOTH_MODULE")
+                                          and _UMBRELLA_OF.get(phone_era) == matcher_value)
 
 
 def complete_traits(traits: dict) -> dict:
@@ -67,6 +91,7 @@ def complete_traits(traits: dict) -> dict:
     out["soc_family"] = derive_soc_family(out["soc_manufacturer"], out["hardware"])
     out["skin"] = derive_skin(out["manufacturer"])
     out["stack_lineage"] = derive_stack_lineage(out["sdk"])
+    out["stack_era"] = derive_stack_era(out["sdk"])
     return out
 
 
@@ -95,7 +120,10 @@ def matcher_matches(matcher: dict, traits: dict) -> bool:
         return False
     if matcher["skins"] and traits["skin"] not in matcher["skins"]:
         return False
-    if matcher["stack_lineages"] and traits["stack_lineage"] not in matcher["stack_lineages"]:
+    if matcher["stack_lineages"] and not any(lineage_covers(m, traits["stack_era"]) for m in matcher["stack_lineages"]):
+        return False
+    # Security-patch windows and runtime traits (DeviceTraitsProbe) cannot be read offline: an unread fact never satisfies a constraint.
+    if any(matcher.get(key) is not None for key in ("patch_min", "patch_max", "runtime")):
         return False
     controller = matcher.get("controller")
     if controller is not None:

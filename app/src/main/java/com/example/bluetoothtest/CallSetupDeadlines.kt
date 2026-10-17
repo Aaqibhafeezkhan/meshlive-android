@@ -28,6 +28,21 @@ internal object CallSetupDeadlines {
         return "incoming_handshake: result=failed | reason=$reason"
     }
 
+    /**
+     * The answering phone's silent-stranger bound (Q29, 2026-10-14): an accepted link that has not finished both the hop
+     * and the end-to-end handshake within [DualSetupBudget.INCOMING_HANDSHAKE_MS] is closed. It first covered dual
+     * endpoints only; now it covers every CoC and GATT call endpoint. [allEndpoints] false (DEBUG
+     * `test_call_handshake_deadline_all=false`) restores the dual-only rule. A relay helper keeps its own pre-setup
+     * watchdog ([RelayedCalls.PRE_SETUP_WAIT_MS]).
+     */
+    fun incomingDeadlineApplies(dualEndpoint: Boolean, relayedCallsOn: Boolean, allEndpoints: Boolean): Boolean =
+        !relayedCallsOn && (dualEndpoint || allEndpoints)
+
+    /** The one line when the incoming deadline closes a link; `scope` says which rule applied. */
+    fun incomingDeadlineLine(dualEndpoint: Boolean): String =
+        "incoming_handshake: event=deadline | closed=true | deadlineMs=${DualSetupBudget.INCOMING_HANDSHAKE_MS} | " +
+            "scope=${if (dualEndpoint) "dual" else "single"}"
+
     fun logLine(node: String, sinceOpenMs: Long): String =
         "call_setup: event=hop_auth_deadline | node=$node | sinceOpenMs=$sinceOpenMs | deadlineMs=$HOP_AUTH_MS | action=close"
 }

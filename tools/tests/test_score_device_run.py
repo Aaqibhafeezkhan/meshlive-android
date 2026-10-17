@@ -601,3 +601,13 @@ def test_recovered_le_setup_retry_notice_is_not_an_unexpected_event():
                     "BLE control stack returned status 62; retrying connection",
                     "GATT video MTU exchange stalled; retrying once"):
         assert not score_device_run.UNEXPECTED.search(message), message
+
+
+def test_launch_configuration_listing_is_not_an_unexpected_event():
+    import score_device_run
+    # 2026-10-17: the device_policy inventory names "link-lost-after-change-rollback" (71ef65b); the pattern
+    # "link.*lost" counted one false unexpected event per launch in every stream and call score.
+    listing = ("BENCHMARK device_policy: revision=2026-10-14.2 | matchingProposals=ll-procedure-collision-serialise,"
+               "link-lost-after-change-rollback,le-priority-interval-reassert")
+    assert score_device_run.UNEXPECTED.search(listing)  # the raw pattern still matches the names
+    assert listing.startswith(score_device_run.CONFIGURATION_LISTINGS)  # so the scan skips the line

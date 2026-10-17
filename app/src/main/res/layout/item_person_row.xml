@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One person in "People nearby": avatar, name, reachability, and call buttons (like a call list). -->
+<!-- One person: 44 dp avatar, name (+ verified check), state, round voice (grey) and video (white) buttons. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
@@ -10,22 +10,33 @@
     android:gravity="center_vertical"
     android:minHeight="72dp"
     android:orientation="horizontal"
-    android:paddingStart="4dp"
     android:paddingTop="8dp"
-    android:paddingEnd="0dp"
     android:paddingBottom="8dp">
 
-    <TextView
-        android:id="@+id/personAvatar"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:background="@drawable/icon_circle_background"
-        android:gravity="center"
-        android:importantForAccessibility="no"
-        android:textColor="@color/white"
-        android:textSize="16sp"
-        android:textStyle="bold"
-        tools:text="A" />
+    <FrameLayout
+        android:layout_width="44dp"
+        android:layout_height="44dp">
+
+        <TextView
+            android:id="@+id/personAvatar"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/icon_circle_background"
+            android:gravity="center"
+            android:importantForAccessibility="no"
+            android:textAppearance="@style/TextAppearance.App.Title"
+            tools:text="A" />
+
+        <ImageView
+            android:id="@+id/personAvatarIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_gravity="center"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_person"
+            android:visibility="gone"
+            app:tint="@color/text_secondary" />
+    </FrameLayout>
 
     <LinearLayout
         android:layout_width="0dp"
@@ -34,15 +45,31 @@
         android:layout_weight="1"
         android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/personName"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textAppearance="@style/TextAppearance.App.BodyLarge"
-            android:textStyle="bold"
-            tools:text="Asha" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/personName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textAppearance="@style/TextAppearance.App.Title"
+                tools:text="Asha" />
+
+            <ImageView
+                android:id="@+id/personVerified"
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:layout_marginStart="6dp"
+                android:contentDescription="@string/verification_verified"
+                android:src="@drawable/ic_check_circle"
+                android:visibility="gone"
+                app:tint="@color/success" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/personReach"
@@ -58,21 +85,15 @@
 
     <ImageButton
         android:id="@+id/personVoiceButton"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:background="?attr/selectableItemBackgroundBorderless"
-        android:focusable="false"
-        android:padding="12dp"
-        android:src="@drawable/ic_call"
-        app:tint="@color/text_primary" />
+        style="@style/Widget.App.IconCircle"
+        android:layout_marginStart="8dp"
+        android:contentDescription="@string/people_voice_call_generic"
+        android:src="@drawable/ic_call" />
 
     <ImageButton
         android:id="@+id/personVideoButton"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:background="?attr/selectableItemBackgroundBorderless"
-        android:focusable="false"
-        android:padding="12dp"
-        android:src="@drawable/ic_videocam"
-        app:tint="@color/text_primary" />
+        style="@style/Widget.App.IconCircle.Filled"
+        android:layout_marginStart="8dp"
+        android:contentDescription="@string/people_video_call_generic"
+        android:src="@drawable/ic_videocam" />
 </LinearLayout>

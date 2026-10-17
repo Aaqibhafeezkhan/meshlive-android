@@ -180,7 +180,13 @@ internal class CallLockScreen(private val activity: Activity) {
             }
             .build()
         runCatching { manager.notify(NOTIFICATION_ID, notification) }
-            .onSuccess { alertPosted = true }
+            .onSuccess {
+                alertPosted = true
+                // Is the call screen going to come up (full-screen intent)? Only meaningful when the app is not already in front.
+                val inFront = (activity as? androidx.lifecycle.LifecycleOwner)?.lifecycle?.currentState
+                    ?.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) == true
+                if (!inFront) IncomingUiWatch.shared.onFullScreenIntentPosted()
+            }
             .onFailure { Log.w("BluetoothVideo", "Incoming call alert could not be posted", it) }
         if (BuildConfig.DEBUG) Log.i(
             "BluetoothVideo",
@@ -192,6 +198,7 @@ internal class CallLockScreen(private val activity: Activity) {
     fun cancelIncomingAlert() {
         if (!alertPosted) return
         alertPosted = false
+        IncomingUiWatch.shared.cancel() // answered, declined or missed: no verdict about the screen
         activity.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
     }
 

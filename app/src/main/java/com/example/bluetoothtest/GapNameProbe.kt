@@ -134,10 +134,22 @@ internal object GapNameProbe {
 
     @Volatile private var lastSkipReason: String? = null
 
+    private const val SCAN_REGISTRY_NAME = "gap-name-probe"
+
     @SuppressLint("MissingPermission")
     fun start(context: Context, adapter: BluetoothAdapter?, option: String) {
         if (!BuildConfig.DEBUG || adapter == null || running) return
         val scanner = adapter.bluetoothLeScanner ?: return
+        if (!ScanSwitches.probeUngated) {
+            // The stack drops a 6th scan start in 30 s without any callback: this probe takes a gate slot like every scanner.
+            val waitMs = ScanStartGate.shared.reserve(runCatching { BluetoothTransportPolicy.scanBudget() }.getOrNull())
+            if (waitMs > 0L) {
+                running = true
+                Log.i(TAG, "BENCHMARK gap_name_probe: event=deferred | reason=scan_quota | waitMs=$waitMs")
+                handler.postDelayed({ running = false; start(context, adapter, option) }, waitMs)
+                return
+            }
+        }
         running = true
         val app = context.applicationContext
         val pair = option.equals("pair", ignoreCase = true)
@@ -153,13 +165,17 @@ internal object GapNameProbe {
                 Log.i(TAG, "BENCHMARK gap_name_probe: event=target | address=$address | $note")
             }
         }
+        EncoderBenchGuard.check("GapNameProbe.scan")
         scanner.startScan(
             listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(BleL2capControlProtocol.SERVICE_UUID)).build()),
             ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(),
             callback,
         )
+        // Batch S: a probe scan is an app scanner too (stopAll on teardown, Android 10 leak marker); timed, so never renewed.
+        ScanRegistry.register(SCAN_REGISTRY_NAME, stop = { runCatching { scanner.stopScan(callback) } }, start = {}, renewable = false, restartable = false)
         handler.postDelayed({
             runCatching { scanner.stopScan(callback) }
+            ScanRegistry.unregister(SCAN_REGISTRY_NAME)
             probeNext(app, targets.values.toMutableList(), pair)
         }, SCAN_MS)
     }
@@ -194,6 +210,7 @@ internal object GapNameProbe {
             runCatching { bondReceiver?.let(app::unregisterReceiver) }
             runCatching { gatt?.disconnect() }
             runCatching { gatt?.close() }
+            gatt?.let { GattResourceRegistry.shared.releaseObject(it) }
             Log.i(TAG, "BENCHMARK gap_name_probe: event=finished | address=$address | reason=$reason")
             handler.postDelayed(done, 1_500L)
         }
@@ -210,7 +227,12 @@ internal object GapNameProbe {
             }
             bondReceiver = receiver
             app.registerReceiver(receiver, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED))
-            val asked = runCatching { device.createBond() }.getOrDefault(false)
+            val asked = if (ClassicConnectProgress.mayCreateBond(address)) {
+                runCatching { device.createBond() }.getOrDefault(false)
+            } else {
+                Log.i(TAG, "BENCHMARK gap_name_probe: event=bond | address=$address | skipped=classic_connect_in_progress")
+                false
+            }
             Log.i(TAG, "BENCHMARK gap_name_probe: event=bond | address=$address | requested=$asked")
             handler.postAtTime({ finish("bond_wait_over") }, address, android.os.SystemClock.uptimeMillis() + BOND_WAIT_MS)
         }
@@ -276,6 +298,7 @@ internal object GapNameProbe {
             }
         }
         handler.postAtTime({ finish("timeout") }, address, android.os.SystemClock.uptimeMillis() + TARGET_TIMEOUT_MS)
-        gatt = device.connectGatt(app, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        EncoderBenchGuard.check("GapNameProbe.connectGatt")
+        gatt = GattConnectCompat.connect(device, app, gattCallback, BluetoothDevice.TRANSPORT_LE, owner = "gap-name-probe")
     }
 }

@@ -196,9 +196,12 @@ internal class RelayedCallsController(
     private fun ensureScanner(mode: HelperScan) {
         val now = SystemClock.elapsedRealtime()
         val running = scanner
-        // R19: AOSP downgrades a filtered scan after 30 minutes, so the scan is restarted before that
-        // (inside the start quota) and whenever the screen/charging state changes the mode.
-        if (running != null && scannerMode == mode && now - scannerStartedMs < SCAN_RESTART_MS) return
+        // R19 (corrected, batch S-02): AOSP downgrades a filtered scan after 10 minutes on Android 14+ and 30 minutes
+        // on Android 10-13, so the scan restarts at 8 / 25 minutes (ScanRenewalPolicy; `test_scan_renewal_legacy`
+        // restores the old 20) and whenever the screen/charging state changes the mode. The age restart needs a free
+        // scan-start slot: without one the running scan stays and the next tick asks again instead of queueing a gap.
+        // With the app-wide renewal on (`test_scan_renewal_all`) that coordinator owns the age.
+        if (running != null && scannerMode == mode && !ageRestartDue(now)) return
         if (running == null && now < scannerRetryAtMs) return
         stopScanner()
         val adapter = adapterProvider() ?: return
@@ -221,6 +224,16 @@ internal class RelayedCallsController(
             lowPower = mode == HelperScan.LOW_POWER,
             acceptRotating = RelayedCallsFeature.rotatingActive(RotatingDiscoveryFeature.enabled),
         ).also { it.start() }
+    }
+
+    private fun ageRestartDue(now: Long): Boolean {
+        val budget = runCatching { BluetoothTransportPolicy.scanBudget() }.getOrNull()
+        return ScanRenewalPolicy.ageRestartDue(
+            ageMs = now - scannerStartedMs,
+            intervalMs = ScanRenewalPolicy.intervalMs(android.os.Build.VERSION.SDK_INT),
+            gateHasSlot = ScanStartGate.shared.available(budget),
+            appWideRenewal = ScanSwitches.renewalAll,
+        )
     }
 
     private fun stopScanner() {
@@ -376,7 +389,6 @@ internal class RelayedCallsController(
     private companion object {
         const val TICK_MS = 5_000L
         const val TABLE_LOG_TICKS = 6
-        const val SCAN_RESTART_MS = 20 * 60_000L
         const val SCAN_RETRY_MS = 30_000L
     }
 }

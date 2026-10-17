@@ -4,6 +4,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -42,11 +43,32 @@ internal fun decoderCodecSpecificData(
     }
 }
 
+/**
+ * The size a decoder is configured at: the one the first keyframe carries when [firstPacket] is a keyframe
+ * whose bitstream says (the header is the stream's maximum, and a ladder stream starts below it), else the
+ * header's.
+ */
+internal fun initialCodedSize(
+    header: StreamProtocol.Header,
+    firstPacket: StreamProtocol.Packet?,
+    codecSpecificData: List<ByteArray>,
+): Pair<Int, Int> {
+    val isKeyFrame = firstPacket != null && !firstPacket.isAudio &&
+        firstPacket.flags and StreamProtocol.FLAG_KEY_FRAME != 0 &&
+        firstPacket.flags and StreamProtocol.FLAG_CODEC_CONFIG == 0
+    val parsed = if (isKeyFrame) {
+        CodedVideoSize.ofKeyFrame(header.codecId, firstPacket!!.payload, codecSpecificData)
+    } else {
+        null
+    }
+    return parsed ?: (header.width to header.height)
+}
+
 class VideoStreamDecoder(
     private val header: StreamProtocol.Header,
     private val surface: Surface,
     codecSpecificData: List<ByteArray>,
-    preferLowLatency: Boolean = true,
+    private val preferLowLatency: Boolean = true,
     private val playbackDelayProfile: PlaybackDelayProfile = PlaybackDelayProfile.BALANCED,
     private val playoutClock: MediaPlayoutClock = playbackDelayProfile.newPlayoutClock(),
     preferredDecoderName: String? = null,
@@ -67,6 +89,26 @@ class VideoStreamDecoder(
      * rendered to the surface. Called on the codec worker thread; it must only record.
      */
     private val onFrameRendered: ((Long) -> Unit)? = null,
+    /**
+     * The first packet the receiver is about to offer. When it is a keyframe, the decoder is configured at
+     * the picture size the bitstream carries (the header names the stream's maximum, and under the Auto
+     * ladder the encoder starts at a lower rung), with the header as the adaptive-playback maximum.
+     */
+    firstPacket: StreamProtocol.Packet? = null,
+    /**
+     * Size-change handling (DebugTunables.decoderSizeChangeRebuild, default on): a keyframe whose size or
+     * codec configuration differs from the decoder's re-creates the decoder. False restores the earlier
+     * behaviour: one decoder configured at the header size, a size change only logged.
+     */
+    private val sizeChangeRebuild: Boolean = DebugTunables.decoderSizeChangeRebuild,
+    /** Told (on the offering thread) the new coded size when a keyframe changes it, for the display aspect. */
+    private val onCodedSizeChanged: ((width: Int, height: Int) -> Unit)? = null,
+    /** Experimental `test_decoder_stall_recovery` ([DecoderSwitches.stallRecovery]); false: a stall is only logged. */
+    private val stallRecovery: Boolean = DecoderSwitches.stallRecovery,
+    /** Experimental `test_decoder_low_latency_ladder` ([DecoderSwitches.lowLatencyLadder]). */
+    private val lowLatencyLadder: Boolean = DecoderSwitches.lowLatencyLadder,
+    /** Experimental `test_decoder_priority` ([DecoderSwitches.realtimePriority]). */
+    private val realtimePriority: Boolean = DecoderSwitches.realtimePriority,
 ) : Closeable {
     private val running = AtomicBoolean(true)
     private val debugStageTrace = DebugStageTrace.startIfRequested(debugTraceSession, "video_decoder")
@@ -79,8 +121,58 @@ class VideoStreamDecoder(
      * number, so a late callback (onError) from a released attempt cannot touch the working codec.
      */
     @Volatile private var activeAttempt = 0
+    private var attemptSequence = 0
+    private val mime = when (header.codecId) {
+        StreamProtocol.CODEC_VP9 -> MediaFormat.MIMETYPE_VIDEO_VP9
+        StreamProtocol.CODEC_AV1 -> MediaFormat.MIMETYPE_VIDEO_AV1
+        else -> error("Unsupported codec ID ${header.codecId}")
+    }
     private val selectedCodecSpecificData =
         decoderCodecSpecificData(header.codecId, codecSpecificData).map(ByteArray::copyOf)
+    private val initialSize: Pair<Int, Int> =
+        if (sizeChangeRebuild) {
+            initialCodedSize(header, firstPacket, selectedCodecSpecificData)
+        } else {
+            header.width to header.height
+        }
+    /** What the running decoder was configured with; recovery re-queues its current csd, never the stream-start one. */
+    private val formatTracker = DecoderFormatTracker(
+        header.codecId, selectedCodecSpecificData, initialSize.first, initialSize.second,
+    )
+    /** Largest picture size configured so far: the adaptive-playback maximum of the next decoder. */
+    @Volatile private var maximumWidth = maxOf(header.width, initialSize.first)
+    @Volatile private var maximumHeight = maxOf(header.height, initialSize.second)
+    private val pendingRebuild = AtomicReference<DecoderFormatTracker.Rebuild?>()
+    private var candidateNames: List<String> = emptyList()
+    // Batch D (family backlog): policy decided once per decoder; worker-thread state for the watchdog.
+    private val policyTraits = DeviceTraits.current()
+    private val stallWatchdogOn = CodecPolicy.stallWatchdogEnabled(policyTraits)
+    private val boundedReleaseMs: Long? = CodecPolicy.boundedReleaseTimeoutMs(policyTraits)
+    private val stallDetector = DecoderStallDetector(header.fps)
+    private val stallEscalation = DecoderStallEscalation()
+    /** Components a stall excluded for this session (worker thread; also read by the rebuild order). */
+    private val excludedDecoders = LinkedHashSet<String>()
+    /** The next recovery keyframe re-creates the decoder (a stall) even where flush() would be allowed. */
+    private val forceRebuildOnRecovery = AtomicBoolean(false)
+    private var stallLogLines = 0
+    private var inputsQueuedTotal = 0L
+    private var outputsTotal = 0L
+    private var behaviourLogNs = 0L
+    private var lastOutputSize: Pair<Int, Int>? = null
+    /** The configure-format rung of the running decoder (`legacy` unless an Experimental key arm is on). */
+    @Volatile private var formatRung = "legacy"
+    private val stallCheck = object : Runnable {
+        override fun run() {
+            if (!running.get() || failure.get() != null) return
+            try {
+                checkForStall()
+            } catch (error: Exception) {
+                Log.w("BluetoothVideo", "decoder watchdog tick failed: ${error.javaClass.simpleName}: ${error.message}")
+            }
+            worker.postDelayed(this, DecoderWatchdogLimits.CHECK_INTERVAL_MS)
+        }
+    }
+    private val codecInfos = MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos
     private val pendingCodecSpecificData = ArrayDeque<ByteArray>()
     private val encodedFrames = EncodedFrameQueue(
         queueCapacity,
@@ -120,25 +212,27 @@ class VideoStreamDecoder(
     private var presentationLastReportNs = 0L
     private var presentationReport = 0L
     private var presentationFinalReported = false
-    private val codec: MediaCodec
+    // Replaced on the worker thread when a keyframe needs a different decoder (see rebuildDecoder).
+    @Volatile private lateinit var codec: MediaCodec
 
-    val decoderName: String
-    val lowLatencyEnabled: Boolean
+    @Volatile lateinit var decoderName: String
+        private set
+    @Volatile var lowLatencyEnabled: Boolean = false
+        private set
     val renderedFrames: Int
         get() = actuallyRenderedFrames.get()
 
+    /** The picture size the running decoder was configured for (follows keyframe size changes). */
+    val codedWidth: Int
+        get() = formatTracker.codedSize().first
+    val codedHeight: Int
+        get() = formatTracker.codedSize().second
+
+    /** The codec configuration of the encoder now sending: what recovery and a replacement decoder start from. */
+    fun currentCodecSpecificData(): List<ByteArray> = formatTracker.currentCodecSpecificData()
+
     init {
-        val mime = when (header.codecId) {
-            StreamProtocol.CODEC_VP9 -> MediaFormat.MIMETYPE_VIDEO_VP9
-            StreamProtocol.CODEC_AV1 -> MediaFormat.MIMETYPE_VIDEO_AV1
-            else -> error("Unsupported codec ID ${header.codecId}")
-        }
-        val format = MediaFormat.createVideoFormat(mime, header.width, header.height).apply {
-            setInteger(MediaFormat.KEY_FRAME_RATE, header.fps)
-            setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, StreamProtocol.MAX_PAYLOAD_BYTES)
-            selectedCodecSpecificData.forEachIndexed { index, bytes ->
-                setByteBuffer("csd-$index", ByteBuffer.wrap(bytes))
-            }
+        val format = videoFormat(initialSize.first, initialSize.second, selectedCodecSpecificData).also {
             if (header.codecId == StreamProtocol.CODEC_AV1 && codecSpecificData.isNotEmpty()) {
                 Log.i(
                     "BluetoothVideo",
@@ -147,14 +241,20 @@ class VideoStreamDecoder(
                 )
             }
         }
-        val codecInfos = MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos
         // Every non-secure decoder that supports the format, in MediaCodecList order (aliases included,
         // as the former requested-decoder lookup); the planner drops aliases only when it falls back.
         val supporting = codecInfos.filter { info ->
             !info.isEncoder && !info.name.endsWith(".secure") &&
                 info.supportedTypes.any { it.equals(mime, ignoreCase = true) } &&
                 runCatching { info.getCapabilitiesForType(mime).isFormatSupported(format) }.getOrDefault(false)
-        }.map { DecoderOption(it.name, it.isAlias, it.isSoftwareOnly, it.isHardwareAccelerated) }
+        }.map { info ->
+            DecoderOption(
+                info.name, info.isAlias, info.isSoftwareOnly, info.isHardwareAccelerated,
+                lowLatency = lowLatencyLadder && runCatching {
+                    info.getCapabilitiesForType(mime).isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
+                }.getOrDefault(false),
+            )
+        }
         val frameworkChoice = MediaCodecList(MediaCodecList.ALL_CODECS).findDecoderForFormat(format)
         val fallbackEnabled = CodecPolicy.decoderInitFallbackEnabled(DeviceTraits.current())
         // Bounded (CodecPolicy.MAX_DECODER_INIT_ATTEMPTS): callers build this decoder inside their packet
@@ -162,14 +262,18 @@ class VideoStreamDecoder(
         // most three create/configure/start attempts, and only after the first one already failed.
         val candidates = CodecPolicy.decoderInitCandidates(
             preferredDecoderName, decoderRequest, frameworkChoice, supporting, fallbackEnabled,
+            lowLatencyFirst = lowLatencyLadder,
         )
+        val lowLatencyReordered = lowLatencyLadder && decoderRequest == DecoderRequest.NONE &&
+            candidates.firstOrNull()?.equals(frameworkChoice, ignoreCase = true) == false
         val requestedLabel = preferredDecoderName ?: "none"
         fun logSelection(effective: String?, attempt: Int) = Log.i(
             "BluetoothVideo",
             "BENCHMARK decoder requested=$requestedLabel effective=${effective ?: "none"} " +
-                "reason=${CodecPolicy.decoderSelectionReason(preferredDecoderName, decoderRequest, effective, attempt)} " +
+                "reason=${CodecPolicy.decoderSelectionReason(preferredDecoderName, decoderRequest, effective, attempt, lowLatencyReordered)} " +
                 "kind=${decoderRequest.label} fallback=${if (fallbackEnabled) "on" else "off"} " +
-                "tried=${if (effective == null) candidates.size else attempt + 1} mime=$mime",
+                "tried=${if (effective == null) candidates.size else attempt + 1} mime=$mime" +
+                if (lowLatencyLadder || realtimePriority || stallRecovery) " switches=${DecoderSwitches.describe()}" else "",
         )
         fun giveUp(error: Throwable): Nothing {
             activeAttempt = -1
@@ -189,58 +293,203 @@ class VideoStreamDecoder(
                 ),
             )
         }
-        var firstFailure: Exception? = null
-        var created: MediaCodec? = null
-        var createdIndex = 0
-        var createdLowLatency = false
-        for ((index, candidate) in candidates.withIndex()) {
-            val candidateFormat = MediaFormat(format)
-            val candidateLowLatency = preferLowLatency && runCatching {
-                codecInfos.first { it.name == candidate }.getCapabilitiesForType(mime)
-                    .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
-            }.getOrDefault(false)
-            if (candidateLowLatency) candidateFormat.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-            val attemptId = index + 1
-            activeAttempt = attemptId
-            var attempt: MediaCodec? = null
-            try {
-                attempt = MediaCodec.createByCodecName(candidate)
-                attempt.setCallback(createCodecCallback(attemptId), worker)
-                traceDecoderOperation("video.decode.configure") { attempt.configure(candidateFormat, surface, null, 0) }
-                attempt.setOnFrameRenderedListener(createFrameRenderedListener(presentationGeneration), worker)
-                traceDecoderOperation("video.decode.start") { attempt.start() }
-                created = attempt
-                createdIndex = index
-                createdLowLatency = candidateLowLatency
-                break
-            } catch (error: Exception) {
-                activeAttempt = -1
-                runCatching { attempt?.release() }
-                if (firstFailure == null) firstFailure = error else firstFailure.addSuppressed(error)
-                Log.w(
-                    "BluetoothVideo",
-                    "BENCHMARK decoder_init_fallback: failed=$candidate | next=${candidates.getOrNull(index + 1) ?: "none"} | " +
-                        "mime=$mime | error=${error.javaClass.simpleName}: ${error.message}",
-                )
+        candidateNames = candidates
+        val opened = try {
+            openFirstWorkingDecoder(candidates, format)
+        } catch (error: Exception) {
+            logSelection(null, candidates.size)
+            giveUp(error)
+        }
+        codec = opened.codec
+        decoderName = opened.name
+        lowLatencyEnabled = opened.lowLatency
+        formatRung = opened.rung
+        logSelection(decoderName, opened.index)
+        if (stallWatchdogOn) worker.postDelayed(stallCheck, DecoderWatchdogLimits.CHECK_INTERVAL_MS)
+    }
+
+    private class OpenedDecoder(
+        val codec: MediaCodec,
+        val name: String,
+        val index: Int,
+        val lowLatency: Boolean,
+        /** The format rung that configured (`plain`, `low-latency`, `low-latency+vendor(..)`, ...). */
+        val rung: String = "legacy",
+    )
+
+    private fun videoFormat(width: Int, height: Int, codecSpecificData: List<ByteArray>): MediaFormat =
+        MediaFormat.createVideoFormat(mime, width, height).apply {
+            setInteger(MediaFormat.KEY_FRAME_RATE, header.fps)
+            setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, StreamProtocol.MAX_PAYLOAD_BYTES)
+            codecSpecificData.forEachIndexed { index, bytes ->
+                setByteBuffer("csd-$index", ByteBuffer.wrap(bytes))
             }
         }
-        if (created == null) {
-            logSelection(null, candidates.size)
-            giveUp(checkNotNull(firstFailure))
+
+    /**
+     * Creates, configures and starts the first of [candidates] that works (bounded by the planner's
+     * candidate list), or throws the first failure. Used for the first decoder and for every rebuild.
+     */
+    private fun openFirstWorkingDecoder(candidates: List<String>, format: MediaFormat): OpenedDecoder {
+        var firstFailure: Exception? = null
+        for ((index, candidate) in candidates.withIndex()) {
+            val baseFormat = MediaFormat(format)
+            val capabilities = runCatching {
+                codecInfos.first { it.name == candidate }.getCapabilitiesForType(mime)
+            }.getOrNull()
+            val featureLowLatency = runCatching {
+                capabilities!!.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
+            }.getOrDefault(false)
+            val adaptive = runCatching {
+                capabilities!!.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_AdaptivePlayback)
+            }.getOrDefault(false)
+            if (sizeChangeRebuild && adaptive && runCatching {
+                    capabilities!!.videoCapabilities.isSizeSupported(maximumWidth, maximumHeight)
+                }.getOrDefault(false)
+            ) {
+                // The largest picture this stream has had (the header names the top rung): vendors size
+                // their output buffers from it, as media3's MediaCodecVideoRenderer does for a ladder.
+                baseFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, maximumWidth)
+                baseFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, maximumHeight)
+            }
+            // One rung (the former single attempt) unless an Experimental key arm is on; then the first
+            // format that configures wins, dropping the newest key first (DecoderLowLatencyLadder).
+            var rungs: List<DecoderLowLatencyLadder.Rung>? = null
+            var rungIndex = 0
+            while (true) {
+                val attemptId = ++attemptSequence
+                activeAttempt = attemptId
+                var attempt: MediaCodec? = null
+                try {
+                    attempt = MediaCodec.createByCodecName(candidate)
+                    val planned = rungs ?: planRungs(candidate, attempt, featureLowLatency).also { rungs = it }
+                    val rung = planned[rungIndex]
+                    val candidateFormat = MediaFormat(baseFormat)
+                    rung.keys.forEach { (key, value) -> candidateFormat.setInteger(key, value) }
+                    attempt.setCallback(createCodecCallback(attemptId), worker)
+                    val startedNs = System.nanoTime()
+                    val hangWatch = DecoderConfigureWatch.watch(DecoderWatchdogLimits.CONFIGURE_HANG_MS) {
+                        Log.w(
+                            "BluetoothVideo",
+                            "BENCHMARK decoder_configure_hang: decoder=$candidate | rung=${rung.label} | " +
+                                "stillRunningAfterMs=${DecoderWatchdogLimits.CONFIGURE_HANG_MS} | mime=$mime",
+                        )
+                    }
+                    try {
+                        traceDecoderOperation("video.decode.configure") { attempt.configure(candidateFormat, surface, null, 0) }
+                        attempt.setOnFrameRenderedListener(createFrameRenderedListener(presentationGeneration), worker)
+                        traceDecoderOperation("video.decode.start") { attempt.start() }
+                    } finally {
+                        hangWatch.cancel(false)
+                    }
+                    val configureMs = (System.nanoTime() - startedNs) / 1_000_000L
+                    if (DecoderConfigureWatch.isSlow(configureMs)) {
+                        Log.w(
+                            "BluetoothVideo",
+                            "BENCHMARK decoder_configure_slow: decoder=$candidate | configureStartMs=$configureMs | " +
+                                "limitMs=${DecoderWatchdogLimits.CONFIGURE_SLOW_MS} | rung=${rung.label} | mime=$mime",
+                        )
+                    }
+                    if (sizeChangeRebuild) {
+                        Log.i(
+                            "BluetoothVideo",
+                            (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                                "decoder_format: decoder=$candidate | configured=" +
+                                "${candidateFormat.getInteger(MediaFormat.KEY_WIDTH)}x${candidateFormat.getInteger(MediaFormat.KEY_HEIGHT)} | " +
+                                "header=${header.width}x${header.height} | adaptive=$adaptive | " +
+                                "max=${if (adaptive) "${maximumWidth}x$maximumHeight" else "none"} | " +
+                                "csd=${format.containsKey("csd-0")} | configureStartMs=$configureMs | formatKeys=${rung.label}",
+                        )
+                    }
+                    stallDetector.reset(System.nanoTime())
+                    return OpenedDecoder(attempt, candidate, index, DecoderLowLatencyLadder.KEY_LOW_LATENCY in rung.keys, rung.label)
+                } catch (error: Exception) {
+                    activeAttempt = -1
+                    attempt?.let { releaseCodec("failed-attempt", it, stopFirst = false) }
+                    if (firstFailure == null) firstFailure = error else firstFailure.addSuppressed(error)
+                    val planned = rungs
+                    val moreRungs = planned != null && rungIndex + 1 < planned.size
+                    Log.w(
+                        "BluetoothVideo",
+                        "BENCHMARK decoder_init_fallback: failed=$candidate | next=" +
+                            (if (moreRungs) "$candidate(${planned!![rungIndex + 1].label})" else candidates.getOrNull(index + 1) ?: "none") +
+                            " | mime=$mime | error=${error.javaClass.simpleName}: ${error.message}",
+                    )
+                    if (!moreRungs) break
+                    rungIndex++
+                }
+            }
         }
-        codec = created
-        decoderName = candidates[createdIndex]
-        lowLatencyEnabled = createdLowLatency
-        logSelection(decoderName, createdIndex)
+        throw checkNotNull(firstFailure)
+    }
+
+    /** The configure formats to try for [candidate], read from the codec instance just created (vendor parameters). */
+    private fun planRungs(candidate: String, created: MediaCodec, featureLowLatency: Boolean): List<DecoderLowLatencyLadder.Rung> {
+        val vendorParameters = if (lowLatencyLadder && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            runCatching { created.supportedVendorParameters }.getOrNull()
+        } else {
+            null
+        }
+        val rungs = DecoderLowLatencyLadder.plan(
+            candidate, featureLowLatency, preferLowLatency, lowLatencyLadder, realtimePriority, vendorParameters,
+        )
+        if (lowLatencyLadder || realtimePriority) {
+            Log.i(
+                "BluetoothVideo",
+                "BENCHMARK decoder_format_ladder: decoder=$candidate | rungs=${rungs.joinToString(">") { it.label }} | " +
+                    "featureLowLatency=$featureLowLatency | vendorParams=${vendorParameters?.size ?: "unread"} | " +
+                    "vendorLatencyParams=${DecoderLowLatencyLadder.interestingVendorParameters(vendorParameters).joinToString("+").ifEmpty { "none" }}",
+            )
+        }
+        return rungs
+    }
+
+    /**
+     * stop()+release() (or release() only) of a decoder. With `decoder-bounded-release` on (default) it runs on a
+     * short-lived thread and this worker waits at most 5 s; a hung codec is abandoned and logged.
+     */
+    private fun releaseCodec(label: String, target: MediaCodec, stopFirst: Boolean) {
+        val release: () -> Unit = {
+            if (stopFirst) runCatching { target.stop() }
+            runCatching { target.release() }
+            Unit
+        }
+        val limitMs = boundedReleaseMs
+        if (limitMs == null) {
+            release()
+            return
+        }
+        val startedNs = System.nanoTime()
+        if (!BoundedCodecRelease.run(label, limitMs, release)) {
+            Log.w(
+                "BluetoothVideo",
+                "BENCHMARK decoder_release_hang: label=$label | waitedMs=${(System.nanoTime() - startedNs) / 1_000_000L} | " +
+                    "limitMs=$limitMs | abandoned=true | mime=$mime",
+            )
+        }
     }
 
     fun offer(packet: StreamProtocol.Packet): Boolean {
         checkFailure()
         if (!running.get()) return false
+        // New configuration is never queued as a codec-config buffer of its own: MediaCodec takes a
+        // changed configuration only together with a keyframe, so it waits for the keyframe and
+        // becomes the csd of the decoder that keyframe needs. Configuration the decoder already has
+        // is queued as before.
+        val plan = if (sizeChangeRebuild) formatTracker.plan(packet) else null
+        if (plan != null && !plan.queue) return true
         val isDiscontinuityKeyFrame =
             packet.flags and StreamProtocol.FLAG_DISCONTINUITY != 0 &&
                 packet.flags and StreamProtocol.FLAG_KEY_FRAME != 0
-        if (isDiscontinuityKeyFrame) encodedFrames.resetForDiscontinuity()
+        val rebuild = plan?.rebuild
+        // Frames queued before a keyframe that changes the picture belong to the old decoder.
+        if (isDiscontinuityKeyFrame || plan?.resetQueue == true) encodedFrames.resetForDiscontinuity()
+        if (rebuild != null) {
+            maximumWidth = maxOf(maximumWidth, rebuild.width)
+            maximumHeight = maxOf(maximumHeight, rebuild.height)
+            decoderInputBlocked.set(true)
+            pendingRebuild.set(rebuild)
+        }
         val accepted = encodedFrames.offer(packet)
         if (!accepted) {
             if (encodedFrames.stats().needsKeyFrame) {
@@ -250,14 +499,24 @@ class VideoStreamDecoder(
             }
             return false
         }
-        val isRecoveryKeyFrame = isDiscontinuityKeyFrame ||
+        val isRecoveryKeyFrame = isDiscontinuityKeyFrame || rebuild != null ||
             packet.flags and StreamProtocol.FLAG_KEY_FRAME != 0 &&
             resetAtRecoveryKeyFrame.getAndSet(false)
         if (isRecoveryKeyFrame) {
             decoderInputBlocked.set(true)
-            beginRecovery()
-            recoveryPresentationTimeUs.set(packet.presentationTimeUs)
+            if (isPlannedSizeChange(isDiscontinuityKeyFrame, recovering.get())) {
+                // Planned: the decoder is rebuilt behind the last frame, with no recovery cover.
+                Log.i(
+                    "BluetoothVideo",
+                    (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                        "planned_size_change: keepLastFrame=true | coverShown=false | pts=${packet.presentationTimeUs}",
+                )
+            } else {
+                beginRecovery()
+                recoveryPresentationTimeUs.set(packet.presentationTimeUs)
+            }
         }
+        if (rebuild != null && rebuild.sizeChanged) onCodedSizeChanged?.invoke(rebuild.width, rebuild.height)
         if (isRecoveryKeyFrame) {
             if (decoderRestartScheduled.compareAndSet(false, true)) {
                 worker.post(::restartAtRecoveryKeyFrame)
@@ -322,6 +581,7 @@ class VideoStreamDecoder(
             }
             lastRenderedAtNs = renderedAtNs
             actuallyRenderedFrames.incrementAndGet()
+            stallEscalation.onFrameRendered()
             onFrameRendered?.invoke(presentationTimeUs)
             val recoveryPtsUs = recoveryPresentationTimeUs.get()
             if (recoveryPtsUs != Long.MAX_VALUE && presentationTimeUs >= recoveryPtsUs &&
@@ -369,12 +629,15 @@ class VideoStreamDecoder(
     private fun createCodecCallback(attempt: Int): MediaCodec.Callback = object : MediaCodec.Callback() {
         override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {
             if (attempt != activeAttempt || !running.get() || decoderInputBlocked.get()) return
+            stallDetector.onInputBufferOffered(System.nanoTime())
             availableInputBuffers.addLast(index)
             drainInput()
         }
 
         override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
             if (attempt != activeAttempt || !running.get() || decoderInputBlocked.get()) return
+            stallDetector.onOutput(System.nanoTime())
+            outputsTotal++
             try {
                 val render = info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0
                 if (render) {
@@ -431,12 +694,16 @@ class VideoStreamDecoder(
         override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
             // Evidence for in-band size changes (call resolution ladder): the header gives the maximum.
             if (attempt != activeAttempt) return
+            // A transient 0x0 (or otherwise empty) size is ignored and the previous size kept (Chromium crbug 1207682).
             val (width, height) = decodedOutputSize(format) ?: return
-            if (width == header.width && height == header.height) return
+            lastOutputSize = width to height
+            val configured = formatTracker.codedSize()
+            if (width == configured.first && height == configured.second) return
             Log.i(
                 "BluetoothVideo",
                 (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
-                    "decoder_output_size: decoded=${width}x$height | header=${header.width}x${header.height} | decoder=$decoderName",
+                    "decoder_output_size: decoded=${width}x$height | configured=${configured.first}x${configured.second} | " +
+                    "header=${header.width}x${header.height} | decoder=$decoderName",
             )
         }
 
@@ -542,6 +809,8 @@ class VideoStreamDecoder(
                     if (decoderInputNs.size > MAX_TRACKED_DECODER_INPUTS) {
                         decoderInputNs.remove(decoderInputNs.keys.first())
                     }
+                    stallDetector.onInputQueued(System.nanoTime())
+                    inputsQueuedTotal++
                 }
                 decoderWait.recordNanos(waitedNs)
                 if (codecFlags == 0) queuedToDecoderFrames.incrementAndGet()
@@ -563,12 +832,26 @@ class VideoStreamDecoder(
 
     private fun restartAtRecoveryKeyFrame() {
         if (!running.get() || failure.get() != null) return
+        pendingRebuild.getAndSet(null)?.let { plan ->
+            rebuildDecoder(plan)
+            return
+        }
+        // c2.mtk. decoders lose their SurfaceTexture after flush() (Media3 b/362904942), and a decoder that stalled
+        // is not trusted with flush(): release and re-create it instead (the rebuild path used for size changes).
+        val stallRebuild = forceRebuildOnRecovery.get()
+        if (stallRebuild || CodecPolicy.releaseInsteadOfFlush(decoderName, policyTraits)) {
+            val mode = if (stallRebuild) "stall_rebuild" else "release_not_flush"
+            Log.i("BluetoothVideo", "BENCHMARK decoder_recovery: recovery=$mode | decoder=$decoderName | mime=$mime")
+            rebuildDecoder(formatTracker.recoveryRebuild(mode))
+            return
+        }
         try {
             availableInputBuffers.clear()
             decoderInputNs.clear()
             delayedDrainPending = false
             pendingCodecSpecificData.clear()
-            pendingCodecSpecificData.addAll(selectedCodecSpecificData)
+            // The newest encoder's configuration: the stream-start one is stale after a rung change.
+            pendingCodecSpecificData.addAll(formatTracker.currentCodecSpecificData())
             if (releaseAtPlayout) {
                 deferredOutputGeneration++
                 deferredOutputDiscarded += deferredOutputCount
@@ -595,6 +878,11 @@ class VideoStreamDecoder(
                 codec.setOnFrameRenderedListener(createFrameRenderedListener(presentationGeneration), worker)
             }
             traceDecoderOperation("video.decode.start") { codec.start() }
+            // A keyframe that needs another decoder arrived while this one was restarting.
+            pendingRebuild.getAndSet(null)?.let { plan ->
+                rebuildDecoder(plan)
+                return
+            }
             decoderRestartScheduled.set(false)
             decoderInputBlocked.set(false)
             Log.i(
@@ -602,9 +890,148 @@ class VideoStreamDecoder(
                 "Decoder recovery restored ${pendingCodecSpecificData.size} codec-config buffer(s) before the keyframe.",
             )
             drainInput()
+            rescheduleIfRebuildPending()
         } catch (error: Exception) {
             fail(error)
         }
+    }
+
+    /** A rebuild decided while the worker was between its last check and unblocking input must not be lost. */
+    private fun rescheduleIfRebuildPending() {
+        if (pendingRebuild.get() != null && decoderRestartScheduled.compareAndSet(false, true)) {
+            decoderInputBlocked.set(true)
+            worker.post(::restartAtRecoveryKeyFrame)
+        }
+    }
+
+    /**
+     * Worker thread: the keyframe at the head of the queue needs a decoder of another picture size or
+     * configuration. Releases the running decoder and creates one for it (libwebrtc AndroidVideoDecoder
+     * reinitDecode; media3 re-creates a non-adaptive decoder the same way), so a new-size keyframe is
+     * never fed to a decoder configured for another size. If the new configuration cannot be opened it is
+     * retried without csd (the keyframe carries the format in-band). Input stays blocked until the new
+     * decoder runs; the queue holds the keyframe.
+     */
+    private fun rebuildDecoder(plan: DecoderFormatTracker.Rebuild) {
+        if (!running.get() || failure.get() != null) return
+        val startedNs = System.nanoTime()
+        try {
+            availableInputBuffers.clear()
+            decoderInputNs.clear()
+            delayedDrainPending = false
+            pendingCodecSpecificData.clear()
+            if (releaseAtPlayout) {
+                deferredOutputGeneration++
+                deferredOutputDiscarded += deferredOutputCount
+                deferredOutputCount = 0
+            }
+            if (presentationTiming != null) {
+                presentationGeneration++
+                presentationTiming.beginGeneration(presentationGeneration)
+            }
+            val previous = codec
+            val previousName = decoderName
+            activeAttempt = -1 // late callbacks of the decoder being released are ignored
+            forceRebuildOnRecovery.set(false)
+            releaseCodec("rebuild", previous, stopFirst = true)
+            // A component a stall excluded is skipped unless nothing else is left.
+            val fullOrder = (listOf(previousName) + candidateNames).distinct()
+            val order = fullOrder.filterNot { it in excludedDecoders }.ifEmpty { fullOrder }
+            val opened = try {
+                openFirstWorkingDecoder(order, videoFormat(plan.width, plan.height, plan.codecSpecificData))
+            } catch (error: Exception) {
+                Log.w(
+                    "BluetoothVideo",
+                    "Decoder rebuild for ${plan.width}x${plan.height} failed (${error.javaClass.simpleName}: ${error.message}); " +
+                        "retrying without codec configuration (the keyframe carries it in-band)",
+                )
+                openFirstWorkingDecoder(order, videoFormat(plan.width, plan.height, emptyList()))
+            }
+            codec = opened.codec
+            decoderName = opened.name
+            lowLatencyEnabled = opened.lowLatency
+            formatRung = opened.rung
+            Log.i(
+                "BluetoothVideo",
+                (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                    "decoder_rebuild: reason=${plan.reason} | to=${plan.width}x${plan.height} | " +
+                    "csd=${plan.codecSpecificData.size} | decoder=${opened.name} (was $previousName) | " +
+                    "ms=${(System.nanoTime() - startedNs) / 1_000_000L}",
+            )
+            pendingRebuild.getAndSet(null)?.let { again ->
+                rebuildDecoder(again)
+                return
+            }
+            decoderRestartScheduled.set(false)
+            decoderInputBlocked.set(false)
+            drainInput()
+            rescheduleIfRebuildPending()
+        } catch (error: Exception) {
+            fail(error)
+        }
+    }
+
+    /**
+     * Worker tick: a decoder that was queued input and produced no output callback (or offered no input buffer
+     * for 5 s) is logged as `decoder_stall`; the Experimental recovery arm then re-creates it. The signal is the
+     * decoder's own callbacks, so a hidden surface or a paused feed does not fire it. Decoder callback timing is
+     * a proxy for the decoder, never a screen or glass-to-glass measurement.
+     */
+    private fun checkForStall() {
+        val nowNs = System.nanoTime()
+        logBehaviourIfDue(nowNs)
+        val suspended = decoderInputBlocked.get() || pendingRebuild.get() != null || decoderRestartScheduled.get() ||
+            deferredOutputCount > 0
+        val stall = stallDetector.check(
+            nowNs,
+            suspended = suspended,
+            framesWaiting = encodedFrames.peek() != null,
+            inputBufferHeld = availableInputBuffers.isNotEmpty(),
+        ) ?: return
+        stallDetector.reset(nowNs)
+        val otherCandidate = candidateNames.any { !it.equals(decoderName, ignoreCase = true) && it !in excludedDecoders }
+        val action = stallEscalation.next(stallRecovery, otherCandidate)
+        if (stallLogLines < DecoderWatchdogLimits.MAX_STALL_LOG_LINES) {
+            stallLogLines++
+            Log.w(
+                "BluetoothVideo",
+                "BENCHMARK decoder_stall: kind=${stall.kind.label} | decoder=$decoderName | unanswered=${stall.unanswered} | " +
+                    "ageMs=${stall.ageMs} | inputs=$inputsQueuedTotal | outputs=$outputsTotal | " +
+                    "rendered=${actuallyRenderedFrames.get()} | stalls=${stallEscalation.stallCount} | " +
+                    "action=${action.name.lowercase()} | recovery=${if (stallRecovery) "on" else "off"} | mime=$mime",
+            )
+        }
+        when (action) {
+            DecoderStallEscalation.Action.LOG_ONLY, DecoderStallEscalation.Action.GIVE_UP -> Unit
+            DecoderStallEscalation.Action.REBUILD_SAME -> startStallRecovery(excludeComponent = false)
+            DecoderStallEscalation.Action.EXCLUDE_AND_REBUILD -> startStallRecovery(excludeComponent = true)
+        }
+    }
+
+    /**
+     * Drops the queue, waits for a keyframe (the receiver's needsKeyFrame poll asks the sender for one) and has the
+     * recovery keyframe re-create the decoder; [excludeComponent] also removes this component from the session.
+     */
+    private fun startStallRecovery(excludeComponent: Boolean) {
+        if (excludeComponent) excludedDecoders += decoderName
+        forceRebuildOnRecovery.set(true)
+        decoderInputBlocked.set(true)
+        resetAtRecoveryKeyFrame.set(true)
+        encodedFrames.resetForDiscontinuity()
+        beginRecovery()
+    }
+
+    /** Experimental key arms only: how the running format behaved (decoder callbacks, not physical latency). */
+    private fun logBehaviourIfDue(nowNs: Long) {
+        if (!lowLatencyLadder && !realtimePriority) return
+        if (behaviourLogNs != 0L && nowNs - behaviourLogNs < DECODER_BEHAVIOUR_LOG_NS) return
+        behaviourLogNs = nowNs
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK decoder_behaviour: decoder=$decoderName | formatKeys=$formatRung | inputs=$inputsQueuedTotal | " +
+                "outputs=$outputsTotal | submitted=${submittedForRenderFrames.get()} | rendered=${actuallyRenderedFrames.get()} | " +
+                "decodeP99Ms=${decodeLatency.p99Ms() ?: -1} | basis=decoder-callbacks",
+        )
     }
 
     private fun fail(error: Throwable) {
@@ -624,8 +1051,7 @@ class VideoStreamDecoder(
                 deferredOutputDiscarded += deferredOutputCount
                 deferredOutputCount = 0
             }
-            runCatching { codec.stop() }
-            runCatching { codec.release() }
+            releaseCodec("close", codec, stopFirst = true)
             if (presentationTiming != null) reportPresentationTiming(final = true)
         }
         if (Looper.myLooper() == workerThread.looper) {
@@ -726,15 +1152,29 @@ internal const val DECODER_FEED_AHEAD_MARGIN_MS = 20L
 internal const val DECODER_FEED_AHEAD_SAFETY_MS = 50L
 private const val MIN_DECODE_LATENCY_SAMPLES = 8
 private const val MAX_TRACKED_DECODER_INPUTS = 64
+private const val DECODER_BEHAVIOUR_LOG_NS = 10_000_000_000L
 
-/** The decoded picture size of a decoder output format (crop rectangle when present), or null. */
+/**
+ * The decoded picture size of a decoder output format (crop rectangle when present), or null. Reads the
+ * crop-left/right/top/bottom integers, never the `crop` Rect (MediaTek returns a default Rect), and ignores a
+ * transient empty size ([validOutputSize]).
+ */
 internal fun decodedOutputSize(format: MediaFormat): Pair<Int, Int>? = runCatching {
     if (format.containsKey("crop-right") && format.containsKey("crop-left") &&
         format.containsKey("crop-bottom") && format.containsKey("crop-top")
     ) {
-        (format.getInteger("crop-right") - format.getInteger("crop-left") + 1) to
-            (format.getInteger("crop-bottom") - format.getInteger("crop-top") + 1)
+        validOutputSize(
+            format.getInteger("crop-right") - format.getInteger("crop-left") + 1,
+            format.getInteger("crop-bottom") - format.getInteger("crop-top") + 1,
+        )
     } else {
-        format.getInteger(MediaFormat.KEY_WIDTH) to format.getInteger(MediaFormat.KEY_HEIGHT)
+        validOutputSize(format.getInteger(MediaFormat.KEY_WIDTH), format.getInteger(MediaFormat.KEY_HEIGHT))
     }
 }.getOrNull()
+
+/**
+ * Decoders sometimes announce a 0x0 output format, some output-available signals, and only then the real size
+ * (Chromium codec_wrapper.cc, crbug 1207682); such a size is not a picture size and the previous one stands.
+ */
+internal fun validOutputSize(width: Int, height: Int): Pair<Int, Int>? =
+    if (width > 0 && height > 0) width to height else null

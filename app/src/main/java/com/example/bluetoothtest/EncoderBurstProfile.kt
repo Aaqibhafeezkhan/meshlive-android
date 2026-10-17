@@ -78,6 +78,11 @@ internal object EncoderBurstRanking {
     /** A calmer session lowers a recorded burst only slowly; a larger one replaces it at once. */
     const val CALM_SESSION_WEIGHT = 0.2
 
+    /** Same smoothing for the measured encode time per megapixel: a slower session replaces at once. */
+    fun mergeMsPerMegapixel(previous: Double?, sessionMsPerMpx: Double): Double =
+        if (previous == null) sessionMsPerMpx
+        else maxOf(sessionMsPerMpx, previous * (1 - CALM_SESSION_WEIGHT) + sessionMsPerMpx * CALM_SESSION_WEIGHT)
+
     fun merge(previous: EncoderBurstRecord?, burstSeconds: Double, encodeLoad: Double?, nowMs: Long): EncoderBurstRecord {
         val burst = when {
             previous == null || burstSeconds >= previous.burstSeconds -> burstSeconds
@@ -121,6 +126,18 @@ internal class EncoderBurstProfileStore(context: Context) {
 
     fun save(encoderName: String, record: EncoderBurstRecord) {
         preferences.edit().putString(encoderName, record.encode()).apply()
+    }
+
+    /**
+     * The software encoder's p95 encode time per megapixel of frame (ms), geometry-independent, so the
+     * Auto ladder can predict the load of any size ([AutoQualityLadder.encodeLoad]). The record above keeps
+     * a load for whatever geometry the last session used; this one scales with the frame.
+     */
+    fun msPerMegapixel(encoderName: String): Double? =
+        preferences.getString("$encoderName.msPerMpx", null)?.toDoubleOrNull()?.takeIf { it > 0.0 }
+
+    fun saveMsPerMegapixel(encoderName: String, value: Double) {
+        preferences.edit().putString("$encoderName.msPerMpx", value.toString()).apply()
     }
 
     private companion object {

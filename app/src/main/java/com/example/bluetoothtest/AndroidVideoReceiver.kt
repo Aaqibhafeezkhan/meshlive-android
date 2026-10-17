@@ -40,6 +40,12 @@ class AndroidVideoReceiver(
     private val onMediaSourceAuthenticated: (NodeId) -> Unit = {},
     private val onForwardedChildrenChanged: (Int) -> Unit = {},
     private val onVideoRecovery: (Boolean) -> Unit = {},
+    /**
+     * Experimental relay child thinning (DebugTunables.relayChildThinning): true while audio keeps arriving
+     * but this parent sends no video (its relay put this link at the audio-only level), false when video
+     * returns. Never called while the switch is off.
+     */
+    private val onVideoPausedWeakLink: (Boolean) -> Unit = {},
     private val onRouteWithdrawn: (StreamRouteWithdrawal) -> Unit = {},
     private val debugForwarderGattPriority: BleConnectionPriority? = null,
     private val debugDirectGattHeartbeat: Boolean = true,
@@ -51,9 +57,22 @@ class AndroidVideoReceiver(
      * the `viewer_frame_age` log can be computed (ViewerFrameAge.kt).
      */
     private val viewerFrameAge: ViewerFrameAgeMonitor? = null,
+    /** Audio-only live (Design AL): true when this phone offers audio-only streams (the feature is on). */
+    private val allowAudioOnly: Boolean = false,
+    /** Audio-only live: the authenticated header of an audio-only stream (instead of onVideoFormat). */
+    private val onAudioLiveStream: (StreamProtocol.Header) -> Unit = {},
+    /** Audio-only live: the 0..1 level of the audio being played, for the listening meter. */
+    private val onAudioLiveLevel: (Float) -> Unit = {},
     private val onStopped: (String?) -> Unit,
 ) : Closeable {
     private val running = AtomicBoolean(false)
+    /** Audio-only live: the offer this receiver selected was marked audio only. */
+    @Volatile private var selectedAudioOnly = false
+    /** Audio-only live: set (true = the offer was marked) when the marker and the header disagreed. */
+    @Volatile internal var markerMismatchMarkedAudio: Boolean? = null
+        private set
+    @Volatile private var listenerMuted = false
+    @Volatile private var parentTrickle: RelayParentTrickle? = null
     @Volatile private var serverSocket: BluetoothServerSocket? = null
     /** The current parent said the stream is paused: silence is expected, not a dead link. */
     @Volatile private var parentStreamPaused = false
@@ -62,6 +81,9 @@ class AndroidVideoReceiver(
     /** LE CoC: a lease on the role's long-lived listener (CocListeners). */
     @Volatile private var cocListener: CocListenLease<BluetoothSocket>? = null
     @Volatile private var clientSocket: BluetoothSocket? = null
+    /** The accepted GATT parent link while one is being received (Bluetooth ON recovery closes it when the adapter goes off). */
+    @Volatile private var gattParentLink: GattVideoConnection? = null
+    private val epochName = "viewer-link-" + Integer.toHexString(System.identityHashCode(this))
     @Volatile private var decoder: VideoStreamDecoder? = null
     @Volatile private var audioDecoder: OpusAudioDecoder? = null
     @Volatile private var workerThread: Thread? = null
@@ -82,8 +104,21 @@ class AndroidVideoReceiver(
     private val debugStageTrace = DebugStageTrace.startIfRequested(debugTraceSessionName, "broadcast_receive")
 
     /** Why the last stream on this receiver ended; set before [onStopped] runs. */
+    /**
+     * Design SG stage 0/1: set when this receiver's LE CoC listen failed (the real stack refusing it or the DEBUG
+     * `test_coc_listen_inject=stream` injection); the activity decides from it whether to restart on GATT.
+     */
+    @Volatile internal var listenFailure: StreamListenFailure? = null
+        private set
+
     @Volatile internal var stopCause: ReceiverStopCause? = null
         private set
+
+    /** Audio-only live: silences or restores the output without touching the link (Mute, audio focus). */
+    fun setListenerMuted(muted: Boolean) {
+        listenerMuted = muted
+        audioDecoder?.setMuted(muted)
+    }
 
     fun recordSurfaceUpdate(timestampNs: Long, callbackNowNs: Long) {
         decoder?.recordSurfaceUpdate(timestampNs, callbackNowNs)
@@ -103,8 +138,14 @@ class AndroidVideoReceiver(
         ioConfig: VideoStreamIoConfig = VideoStreamIoConfig.DEFAULT,
         /** Rotating IDs: the selected stream offer is version 5 (its announced bytes are an RDI). */
         selectedOfferRotating: Boolean = false,
+        /** Audio-only live: the selected offer carried the audio-only marker (it must match the header). */
+        selectedOfferAudioOnly: Boolean = false,
     ) {
         check(running.compareAndSet(false, true)) { "Receiver is already running" }
+        BluetoothEpoch.register(epochName, onOff = ::onAdapterOff, onOn = {})
+        listenFailure = null
+        selectedAudioOnly = selectedOfferAudioOnly
+        markerMismatchMarkedAudio = null
         expectedSourceRotating = selectedOfferRotating && RotatingDiscoveryFeature.enabled &&
             transport != BluetoothTransportOption.CLASSIC_RFCOMM && streamToken != 0
         viewerRequestTransport = transport
@@ -153,7 +194,21 @@ class AndroidVideoReceiver(
                     BluetoothTransportOption.BLE_L2CAP -> {
                         // One long-lived listener per role (CocListeners): Android 10 never frees a
                         // closed LE CoC server, so a listener per stream exhausted the A15s stack.
-                        val activeServerSocket = CocListeners.listen(adapter, "receiver")
+                        val activeServerSocket = try {
+                            CocListenInject.failIfRequested(CocListenInject.STREAM)
+                            CocListeners.listen(adapter, "receiver")
+                        } catch (error: Exception) {
+                            val failure = StreamListenFailure(failureSignature(error), error is CocListenInject.InjectedListenFailure)
+                            listenFailure = failure
+                            Log.w(
+                                "BluetoothVideo",
+                                (if (BuildConfig.DEBUG) "BENCHMARK " else "") + StreamGattFallback.listenFailedLine(
+                                    transport, streamToken, failure.signature, CocRegistrations.ledger.count,
+                                    CocAutoGatt.current, StreamGattFallback.streamsSwitch, failure.injected,
+                                ),
+                            )
+                            throw error
+                        }
                         cocListener = activeServerSocket
                         val controlServer = BleL2capControlServer(
                             context,
@@ -207,6 +262,7 @@ class AndroidVideoReceiver(
                             activeServerSocket.accept(CONNECTION_WAIT_TIMEOUT_MS.toInt())
                         }
                     }
+                    if (activeCocListener == null) ClassicRfcommCap.note(socket) // an accepted Classic RFCOMM peer counts towards the cap log
                     if (transport == BluetoothTransportOption.BLE_L2CAP) {
                         bleControlServer?.stopAdvertising()
                         RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_VIEWER_REQUEST)
@@ -291,8 +347,17 @@ class AndroidVideoReceiver(
                 }
             } catch (error: Exception) {
                 stopCause = ReceiverStopCause.of(ReceiverStopKind.STARTUP, error)
+                if (running.get() && selectedAudioOnly) {
+                    // Audio-only live: every failure is logged with its stack and a BENCHMARK line.
+                    AudioLiveLog.failure("receiver:${Thread.currentThread().name}", error)
+                }
                 if (running.get()) {
-                    failureNotice = receiverStartupFailureNotice(
+                    failureNotice = listenFailure?.let {
+                        StreamGattFallback.listenFailedNotice(
+                            error.message ?: error.javaClass.simpleName,
+                            StreamGattFallback.active(),
+                        )
+                    } ?: receiverStartupFailureNotice(
                         transport,
                         streamToken,
                         error.message ?: error.javaClass.simpleName,
@@ -477,6 +542,7 @@ class AndroidVideoReceiver(
                 connections.poll(CONNECTION_WAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS) ?: return
             }
             RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_VIEWER_REQUEST)
+            gattParentLink = connection
             try {
                 receiveSecure(
                     context,
@@ -527,6 +593,7 @@ class AndroidVideoReceiver(
                     onStatus("Incoming GATT stream stopped: ${error.message ?: error.javaClass.simpleName}")
                 }
             } finally {
+                gattParentLink = null
                 onStreamActive(false)
                 closeDecoders()
                 connection.close()
@@ -565,6 +632,7 @@ class AndroidVideoReceiver(
         // (read gaps <= 510 ms) for 17 s; the relay's re-anchor closed its socket, but the L2CAP channel
         // stayed up while the stack drained and this child never reconnected.
         val trickle = if (DebugTunables.relayParentTrickle) RelayParentTrickle(streamBitrateKbps, startedNs) else null
+        parentTrickle = trickle
         val silenceWatch = if (routeCost > 0 && DebugTunables.relayChildReanchor) {
             thread(name = "ReceiverParentSilence") {
                 try {
@@ -746,6 +814,7 @@ class AndroidVideoReceiver(
                     ) { "Stream source identity changed between discovery and connection" }
                 }
             }
+            if (DebugTunables.joinProbeSeed) session.reader.enableJoinBurstMeasure()
             val forwardedGrant = if (endpointSession.peerCapabilities.maxChildren > 0) {
                 val wrapped = session.reader.read()
                 require(wrapped.type == SecureRecordType.END_TO_END_CONTENT) {
@@ -839,7 +908,14 @@ class AndroidVideoReceiver(
                     }
                 }
             }
-            var header = streamReader.readHeader()
+            var header = streamReader.readHeader(allowAudioOnly)
+            try {
+                // Audio-only live: the offer's marker and the authenticated header must describe the same kind.
+                if (allowAudioOnly) requireAudioLiveMarkerAgreement(selectedAudioOnly, header)
+            } catch (mismatch: AudioLiveMarkerMismatchException) {
+                markerMismatchMarkedAudio = mismatch.offerMarkedAudioOnly
+                throw mismatch
+            }
             parentMediaStarted = true
             forwardedGrant?.let { grant ->
                 require(streamReader.meshStreamId == grant.streamId) {
@@ -872,20 +948,43 @@ class AndroidVideoReceiver(
             if (BuildConfig.DEBUG) {
                 Log.i("BluetoothVideo", "Authenticated stream identity: original=${mediaSourceNodeId.shortLabel()} | parent=${session.peerNodeId.shortLabel()} | stream=${streamReader.meshStreamId ?: "direct"} | forwarded=${forwardedGrant != null}")
             }
-            require(
-                forwardedGrant != null ||
-                    endpointSession.peerCapabilities.encodeCodecMask and codecCapabilityMask(header.codecId) != 0,
-            ) {
-                "Sender did not authenticate support for stream codec ${header.codecId}"
+            if (header.isAudioOnly) {
+                // No video codec, decoder or picture: the audio-only listener needs only Opus (every Android 10+ phone has it).
+                onAudioLiveStream(header)
+                parentTrickle?.streamBitrateKbps = AudioLiveRelayAdmission.trickleRateKbps(header.audioLivePreset)
+                // A relay that had to drop its child because its own inbound fell away does not offer to relay on
+                // this transport again for a while (AudioLiveRelayMemory): the child would only cost it its parent.
+                val refusedForMs = AudioLiveRelayMemory.blockedForMs(transport.name, System.nanoTime() / 1_000_000L)
+                if (relayAllowed && refusedForMs > 0) {
+                    relayAllowed = false
+                    pendingForwardingEnvelopes.clear()
+                    Log.i(
+                        "BluetoothVideo",
+                        "BENCHMARK audio_live_relay_inbound: action=refuse_relay | transport=${transport.name} | remainingMs=$refusedForMs",
+                    )
+                    onStatus("This phone could not carry a listener and its own link at once; it is not relaying for now.")
+                }
+            } else {
+                require(
+                    forwardedGrant != null ||
+                        endpointSession.peerCapabilities.encodeCodecMask and codecCapabilityMask(header.codecId) != 0,
+                ) {
+                    "Sender did not authenticate support for stream codec ${header.codecId}"
+                }
+                require(capabilities.decodeCodecMask and codecCapabilityMask(header.codecId) != 0) {
+                    "This phone cannot decode stream codec ${header.codecId}"
+                }
+                onVideoFormat(header)
+                viewerFrameAge?.setFrameRate(header.fps)
             }
-            require(capabilities.decodeCodecMask and codecCapabilityMask(header.codecId) != 0) {
-                "This phone cannot decode stream codec ${header.codecId}"
-            }
-            onVideoFormat(header)
-            viewerFrameAge?.setFrameRate(header.fps)
-            val receiverNodeHealthPolicy = ReceiverNodeHealthPolicy(header.fps)
-            if (relayAllowed && streamBitrateKbps > 0) {
-                val relayLinkKbps = MeshBandwidthEstimator.perLinkKbps(streamBitrateKbps, header.fps)
+            val receiverNodeHealthPolicy = ReceiverNodeHealthPolicy(maxOf(1, header.fps))
+            // Audio only: admission uses the preset in the authenticated header; an advertised rate of 0 never skips it.
+            if (relayAllowed && (streamBitrateKbps > 0 || header.isAudioOnly)) {
+                val relayLinkKbps = if (header.isAudioOnly) {
+                    AudioLiveRelayAdmission.perLinkKbps(header.audioLivePreset)
+                } else {
+                    MeshBandwidthEstimator.perLinkKbps(streamBitrateKbps, header.fps)
+                }
                 val measuredRelayBudgetKbps = LinkCapacity.budgetKbps(transport, LinkLoadKind.RELAY, relayLinkKbps)
                 val coldStart = DebugTunables.relayColdStart && LinkCapacityPolicy.relayColdStart(
                     LinkCapacity.learned(transport, LinkLoadKind.RELAY),
@@ -950,7 +1049,7 @@ class AndroidVideoReceiver(
                         forwardingKey,
                         streamToken,
                         routeCost,
-                        streamBitrateKbps,
+                        if (header.isAudioOnly) AudioLive.presetKbps(header.audioLivePreset) else streamBitrateKbps,
                         header,
                         phyPreference,
                         ioConfig,
@@ -995,7 +1094,7 @@ class AndroidVideoReceiver(
             } else if (!relayAllowed) {
                 pendingForwardingEnvelopes.clear()
             }
-            debugMediaTrace = DebugMediaTrace.startIfRequested(
+            debugMediaTrace = if (header.isAudioOnly) null else DebugMediaTrace.startIfRequested(
                 context,
                 debugTraceSessionName,
                 "receiver",
@@ -1011,9 +1110,12 @@ class AndroidVideoReceiver(
             // A fresh clock for every link, at the base delay (ViewerLinkPlayout.kt). Latency over stalls
             // (user direction 2026-10-07): a viewer that may relay starts with room for the
             // parent-link stall when its child joins.
+            // Radio (audio-only live) has its own playout profile: start 600 ms, adaptive up to 3 s.
+            val streamProfile = if (header.isAudioOnly) PlaybackDelayProfile.RADIO else playbackDelayProfile
+            val streamDelayMs = if (header.isAudioOnly) streamProfile.delayMs else playbackDelayMs
             val playoutClock = newViewerLinkPlayoutClock(
-                playbackDelayProfile,
-                playbackDelayMs,
+                streamProfile,
+                streamDelayMs,
                 relaying = streamForwarder != null,
                 relayJoinReserveMs = RELAY_JOIN_RESERVE_MS,
             )
@@ -1058,7 +1160,9 @@ class AndroidVideoReceiver(
                     // Reports sent only for delivery carry the delivery-only flag, so the parent's
                     // lateness trend still sees full reports exactly when they were sent before.
                     val deliveryReports = DebugTunables.streamDeliveryReports
+                    val onTimeReports = DebugTunables.onTimeReports
                     var lastDeliveryReportNs = 0L
+                    var onTimeReportedBytes = 0L
                     while (controlRunning.get()) {
                         val keyFrameRequested = keyFrameRequests.poll(
                             minOf(heartbeatIntervalMs, CAPACITY_REPORT_INTERVAL_MS),
@@ -1083,11 +1187,20 @@ class AndroidVideoReceiver(
                         val delayChanged = kotlin.math.abs(addedDelayMs - reportedAddedDelayMs) >= DELAY_REPORT_STEP_MS
                         val changed = trains > reportedTrains || tight != reportedTight || delayChanged
                         val reportIntervalNs = CAPACITY_REPORT_INTERVAL_MS * 1_000_000L
-                        val fullDue = changed && nowNs - lastCapacityReportNs >= reportIntervalNs
+                        // Unmeasured link with media arriving on time: say so, or the parent decays its pace blind.
+                        val receivedBytes = streamReader.delivery.snapshot().receivedBytes
+                        val onTimeDue = onTimeReportDue(
+                            onTimeReports,
+                            session.reader.genuineTrains,
+                            tight,
+                            receivedBytes > onTimeReportedBytes,
+                            nowNs - lastCapacityReportNs,
+                        )
+                        val fullDue = (changed || onTimeDue) && nowNs - lastCapacityReportNs >= reportIntervalNs
                         val deliveryDue = deliveryReports && nowNs - lastDeliveryReportNs >= reportIntervalNs
                         if (fullDue || deliveryDue) {
                             val kbps = session.reader.arrivalCapacityKbps() ?: 0
-                            val full = fullDue && (kbps > 0 || tight != reportedTight || delayChanged)
+                            val full = fullDue && (kbps > 0 || tight != reportedTight || delayChanged || onTimeDue)
                             if (full || deliveryDue) {
                                 SecureLinkControlProtocol.writeCapacityReport(
                                     session.writer,
@@ -1107,10 +1220,13 @@ class AndroidVideoReceiver(
                                         "BluetoothVideo",
                                         "Link self-measurement: ${transport.shortLabel} from parent arrives at " +
                                             "$kbps kbps ($trains large-record trains)" +
-                                            if (tight) "; media on this link arrives late" else "",
+                                            (if (tight) "; media on this link arrives late" else "") +
+                                            if (onTimeDue && kbps == 0) "; media on time (unmeasured)" else "",
                                     )
                                     lastCapacityReportNs = nowNs
+                                    onTimeReportedBytes = receivedBytes
                                     reportedTrains = trains
+                                    if (kbps > 0) session.reader.joinBurstReported()
                                     reportedTight = tight
                                 }
                             }
@@ -1138,6 +1254,17 @@ class AndroidVideoReceiver(
             var streamEnded = false
             var streamPaused = false
             var resumePending = false
+            // Audio-only live: counts pause/resume/end records, so the relay's inbound guard restarts its grace.
+            var lifecycleRecords = 0
+            // Experimental relay child thinning: audio keeps coming, video does not (null while the switch is off).
+            val weakLinkWatch = if (DebugTunables.relayChildThinning && !header.isAudioOnly) WeakLinkPauseWatch() else null
+
+            fun weakLinkChanged(paused: Boolean?) {
+                if (paused == null) return
+                onVideoPausedWeakLink(paused)
+                onStatus(if (paused) "Video paused: weak link. Audio continues." else "Video resumed.")
+                Log.i("BluetoothVideo", "BENCHMARK weak_link_pause: role=stream_rx | paused=$paused")
+            }
 
             fun logTimestampAlignmentIfReady() {
                 if (timestampAlignmentLogged) return
@@ -1199,6 +1326,7 @@ class AndroidVideoReceiver(
                             return packet
                         }
                         is ReceivedStreamContent.State -> {
+                            lifecycleRecords++
                             if (BuildConfig.DEBUG && debugPresentationTiming) {
                                 Log.i(
                                     "BluetoothVideo",
@@ -1206,6 +1334,13 @@ class AndroidVideoReceiver(
                                 )
                             }
                             onStreamState(content.state)
+                            weakLinkWatch?.let { watch ->
+                                // A source that paused or turned its camera off sends no video on purpose.
+                                val videoOff = content.state == StreamLifecycleState.PAUSED ||
+                                    content.state == StreamLifecycleState.LIVE_CAMERA_OFF ||
+                                    content.state == StreamLifecycleState.LIVE_MUTED_CAMERA_OFF
+                                weakLinkChanged(watch.setSourceVideoOff(videoOff, System.nanoTime() / 1_000_000L))
+                            }
                             when (content.state) {
                                 StreamLifecycleState.LIVE -> {
                                     decoder?.resetRenderedCadence()
@@ -1213,6 +1348,20 @@ class AndroidVideoReceiver(
                                     streamPaused = false
                                     parentStreamPaused = false
                                     onStatus("Broadcaster resumed the stream.")
+                                }
+                                // Muted / camera off while live: not a resume unless the stream was paused; the
+                                // activity shows the notice from onStreamState.
+                                StreamLifecycleState.LIVE_MUTED,
+                                StreamLifecycleState.LIVE_CAMERA_OFF,
+                                StreamLifecycleState.LIVE_MUTED_CAMERA_OFF -> {
+                                    if (streamPaused) {
+                                        decoder?.resetRenderedCadence()
+                                        resumePending = decoder != null
+                                        streamPaused = false
+                                    }
+                                    // Nothing flows at all while the microphone is muted and the camera is off: the
+                                    // relay's parent-silence check must not call that a dead link.
+                                    parentStreamPaused = content.state == StreamLifecycleState.LIVE_MUTED_CAMERA_OFF
                                 }
                                 StreamLifecycleState.PAUSED -> {
                                     decoder?.resetRenderedCadence()
@@ -1255,16 +1404,21 @@ class AndroidVideoReceiver(
                     return
                 }
                 playoutClock.timing(packet.presentationTimeUs)
+                weakLinkWatch?.let { weakLinkChanged(it.onAudio(System.nanoTime() / 1_000_000L)) }
                 val activeAudioDecoder = audioDecoder ?: inLocalMediaStage(LocalMediaStage.AUDIO_DECODER_SETUP) {
                     OpusAudioDecoder(
                         header,
                         audioConfig,
-                        playbackDelayProfile,
+                        streamProfile,
                         playoutClock,
                         debugTraceContext = context,
                         debugTraceSession = debugTraceSessionName,
+                        onLevel = onAudioLiveLevel.takeIf { header.isAudioOnly },
                     )
-                }.also { audioDecoder = it }
+                }.also {
+                    audioDecoder = it
+                    it.setMuted(listenerMuted)
+                }
                 inLocalMediaStage(LocalMediaStage.AUDIO_PIPELINE) { activeAudioDecoder.offer(packet) }
                 if (firstAudioPresentationTimeUs == null) {
                     firstAudioPresentationTimeUs = packet.presentationTimeUs
@@ -1274,6 +1428,93 @@ class AndroidVideoReceiver(
                 bytes += packet.payload.size
             }
 
+            if (header.isAudioOnly) {
+                // Audio-only live (Design AL): no video decoder, surface or keyframe; the Opus decoder plays on the
+                // RADIO clock and the relay forwarder (if any) copies the same signed records.
+                onStatus(
+                    "Receiving an end-to-end encrypted audio-only stream from ${endpointSession.peerNodeId.shortLabel()} " +
+                        "over link ${session.peerNodeId.shortLabel()} | ${streamProfile.label} ${playoutClock.currentDelayMs} ms target" +
+                        linkDetails(),
+                )
+                var activeNow = false
+                var windowStartNs = System.nanoTime()
+                var windowStartBytes = 0L
+                // A relay must not pay for its child with its parent: see AudioLiveRelayInboundGuard.
+                val inboundGuard = AudioLiveRelayInboundGuard(AudioLive.presetKbps(header.audioLivePreset).toDouble())
+                var guardChildren = 0
+                var guardLifecycle = 0
+                var childHealthyReported = false
+                var audioPacket = readMediaPacket()
+                while (running.get() && audioPacket != null) {
+                    controlFailure.get()?.let { throw IOException("Could not send child control", it) }
+                    require(audioPacket.isAudio) { "A non-audio packet arrived on an audio-only stream" }
+                    handleAudioPacket(audioPacket)
+                    val guardNowMs = System.nanoTime() / 1_000_000L
+                    if (audioPacket.flags and StreamProtocol.FLAG_CODEC_CONFIG == 0) {
+                        inboundGuard.onBytes(audioPacket.payload.size, guardNowMs)
+                    }
+                    if (guardLifecycle != lifecycleRecords) {
+                        guardLifecycle = lifecycleRecords
+                        inboundGuard.onPausedChanged(false, guardNowMs)
+                    }
+                    val children = forwardedChildCount.get()
+                    if (children != guardChildren) {
+                        guardChildren = children
+                        inboundGuard.onChildCount(children, guardNowMs)
+                        childHealthyReported = false
+                    }
+                    if (children > 0) {
+                        if (inboundGuard.verdict(guardNowMs) == AudioLiveRelayInboundGuard.Verdict.DROP_CHILD) {
+                            val cooldownMs = AudioLiveRelayMemory.onDropped(transport.name, guardNowMs)
+                            Log.i(
+                                "BluetoothVideo",
+                                "BENCHMARK audio_live_relay_inbound: action=drop_child | transport=${transport.name} | " +
+                                    "baselineKbps=%.1f | recentKbps=%.1f | cooldownMs=$cooldownMs".format(
+                                        java.util.Locale.ROOT, inboundGuard.baselineKbps, inboundGuard.lastRecentKbps,
+                                    ),
+                            )
+                            onStatus(
+                                "Forwarding stopped on this node because carrying its listener made this phone's own " +
+                                    "stream arrive too slowly. Local listening continues; the listener will find another route.",
+                            )
+                            streamForwarder?.withdrawForLocalCapacity(congested = true)
+                            inboundGuard.onChildCount(0, guardNowMs)
+                        } else if (!childHealthyReported && inboundGuard.childCarriedHealthily(guardNowMs)) {
+                            childHealthyReported = true
+                            AudioLiveRelayMemory.onHealthy(transport.name)
+                        }
+                    }
+                    if (streamPaused) {
+                        activeNow = false
+                    } else if (!activeNow && audioPacket.flags and StreamProtocol.FLAG_CODEC_CONFIG == 0) {
+                        activeNow = true
+                        onStreamActive(true)
+                    }
+                    val nowNs = System.nanoTime()
+                    if (nowNs - windowStartNs >= METRICS_INTERVAL_NS) {
+                        val kbps = ((bytes - windowStartBytes) * 8 * 1_000_000_000L / (nowNs - windowStartNs) / 1_000)
+                            .toInt().coerceIn(0, 0xffff)
+                        onStatus(
+                            "End-to-end encrypted audio-only: $audioPackets audio packets, $kbps kbps, " +
+                                "playout ${playoutClock.currentDelayMs} ms" +
+                                (audioDecoder?.let { ", via ${it.decoderName}, drops ${it.droppedPackets}" } ?: "") +
+                                linkDetails(),
+                        )
+                        if (BuildConfig.DEBUG) {
+                            Log.i(
+                                "BluetoothVideo",
+                                "BENCHMARK media_age: role=audio_rx | playoutDelayMs=${playoutClock.currentDelayMs} | " +
+                                    "addedDelayMs=${playoutClock.addedDelayMs} | saturated=${playoutClock.saturated} | " +
+                                    "kbps=$kbps | drops=${audioDecoder?.droppedPackets ?: 0L}",
+                            )
+                        }
+                        windowStartNs = nowNs
+                        windowStartBytes = bytes
+                    }
+                    audioPacket = readMediaPacket() ?: break
+                }
+                return
+            }
             var firstPacket: StreamProtocol.Packet? = null
             while (firstPacket == null && running.get() && !streamEnded) {
                 val packet = readMediaPacket() ?: break
@@ -1307,10 +1548,21 @@ class AndroidVideoReceiver(
                     onRecoveryStateChanged = onVideoRecovery,
                     debugTraceSession = debugTraceSessionName,
                     onFrameRendered = viewerFrameAge?.let { monitor -> monitor::onFrameRendered },
+                    firstPacket = firstPacket,
+                    onCodedSizeChanged = { width, height ->
+                        // A rung change (Auto ladder) or encoder restart: the display follows the new picture.
+                        header = header.copy(width = width, height = height)
+                        onVideoFormat(header)
+                    },
                 )
             }
             decoder = activeDecoder
             decoderForForwardingHealth = activeDecoder
+            if (activeDecoder.codedWidth != header.width || activeDecoder.codedHeight != header.height) {
+                // The stream started below its header's (maximum) size.
+                header = header.copy(width = activeDecoder.codedWidth, height = activeDecoder.codedHeight)
+                onVideoFormat(header)
+            }
             onStreamActive(!streamPaused)
             onStatus(
                 "Receiving end-to-end encrypted stream" +
@@ -1361,6 +1613,7 @@ class AndroidVideoReceiver(
                     frames++
                     bytes += packet.payload.size
                     val nowNs = System.nanoTime()
+                    weakLinkWatch?.let { weakLinkChanged(it.onVideo(nowNs / 1_000_000L)) }
                     if (BuildConfig.DEBUG) {
                         if (previousVideoReceivedNs > 0) videoReceiveInterval.recordNanos(nowNs - previousVideoReceivedNs)
                         previousVideoReceivedNs = nowNs
@@ -1487,6 +1740,14 @@ class AndroidVideoReceiver(
                                     "lateMaxMs=$windowLateMaxMs | heldAgeMaxMs=${playoutClock.currentDelayMs + windowLateMaxMs} | " +
                                     "saturated=${playoutClock.saturated}",
                             )
+                            // Time-based playout target (Q31, experimental): only while the arm is on.
+                            playoutClock.timeTargetSummary()?.let { summary ->
+                                Log.i(
+                                    "BluetoothVideo",
+                                    "BENCHMARK playout_time_target: role=stream_rx | playoutDelayMs=${playoutClock.currentDelayMs} | " +
+                                        "addedDelayMs=${playoutClock.addedDelayMs} | lateMaxMs=$windowLateMaxMs | $summary",
+                                )
+                            }
                             windowLateMaxMs = 0L
                         }
                         viewerFrameAge?.onPlayoutDelay(playoutClock.currentDelayMs)
@@ -1527,10 +1788,39 @@ class AndroidVideoReceiver(
 
     override fun close() {
         debugStageTrace?.close()
+        BluetoothEpoch.unregister(epochName)
         if (!running.getAndSet(false)) return
         closeDecoders()
         closeSockets()
         workerThread?.interrupt()
+    }
+
+    /**
+     * Bluetooth ON recovery (viewer side). The adapter going off kills the parent link in the stack, but the Java sockets and the
+     * GATT pipe stay open and silent (lane15 btrec-fixon-r1 bt_rx_d2: epoch off 03:28:32, no "Connection lost", frames frozen
+     * for good). Close the active parent link now, so the read fails exactly as a link loss does (stop cause LINK) and the
+     * activity's route recovery runs; its scanners restart on ON through the scan registry. A forwarding viewer's downstream
+     * children follow the existing forwarder shutdown. With no active link nothing is closed.
+     */
+    private fun onAdapterOff() {
+        if (!running.get()) {
+            BluetoothEpoch.unregister(epochName)
+            return
+        }
+        if (!BluetoothOnRecovery.enabled) return
+        val gatt = gattParentLink
+        val socket = clientSocket
+        val decision = BluetoothOnRecoveryPolicy.viewerLink(running = true, activeLink = gatt != null || socket != null)
+        if (!decision.restart) {
+            BluetoothOnRecovery.log(BluetoothOnRecovery.COMPONENT_VIEWER_LINK, "skipped", decision.reason)
+            return
+        }
+        BluetoothOnRecovery.log(BluetoothOnRecovery.COMPONENT_VIEWER_LINK, "closed", decision.reason)
+        // Off the main thread: closing a link of a stack that is going down can block.
+        thread(name = "ReceiverBluetoothOff", isDaemon = true) {
+            runCatching { gatt?.close() }
+            runCatching { socket?.close() }
+        }
     }
 
     private fun closeDecoders() {
@@ -1640,7 +1930,7 @@ internal fun relayParentSilent(nowNs: Long, lastReadNs: Long, startedNs: Long, p
  * only the starved band. Windows that saw the parent's pause, or an unknown bitrate, never judge.
  * Pure (bytes and clock passed in). DEBUG `test_relay_parent_trickle=false` is the control arm.
  */
-internal class RelayParentTrickle(private val streamBitrateKbps: Int, startedNs: Long) {
+internal class RelayParentTrickle(@Volatile var streamBitrateKbps: Int, startedNs: Long) {
     private var windowStartNs = startedNs
     private var windowStartBytes = 0L
     private var pausedInWindow = false

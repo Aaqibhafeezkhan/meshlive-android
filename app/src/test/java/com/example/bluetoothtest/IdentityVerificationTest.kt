@@ -23,6 +23,10 @@ import org.junit.Before
 import org.junit.Test
 
 class IdentityVerificationTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private lateinit var directory: File
     private val cipher = AesGcmAtRestCipher { SecretKeySpec(ByteArray(32) { it.toByte() }, "AES") }
 
@@ -82,7 +86,10 @@ class IdentityVerificationTest {
 
     @Test
     fun qrPayloadRoundTripsAndRejectsMalformedText() {
-        val fingerprint = IdentityFingerprint.fromPublicKey(KeyPairSigningIdentity(generateEcKeyPair()).publicKeyEncoded)
+        // A fixed fingerprint, not a random key: the "mixed-case hex" negative below uppercases the first ten hex digits, which
+        // changes nothing (so the text is a valid payload) when all ten happen to be 0-9, about one random key in 110.
+        val fingerprint = IdentityFingerprint.fromBytes(ByteArray(32) { (0xa0 + it).toByte() })
+        assertNotEquals("the mixed-case negative needs letters in the first ten digits", fingerprint.hex.take(10), fingerprint.hex.take(10).uppercase())
         val text = IdentityQrCodec.encode(IdentityQrPayload(fingerprint, "Asha · फ़ोन"))
         assertTrue(text.startsWith("BVMID1.${fingerprint.hex.uppercase()}."))
         assertEquals(IdentityQrPayload(fingerprint, "Asha · फ़ोन"), IdentityQrCodec.parse(text))
@@ -291,30 +298,108 @@ class IdentityVerificationTest {
         assertEquals(StoreUnreadableCause.CORRUPT_FILE, garbled.unreadableCause())
     }
 
+    /** A cipher that fails [failures] times with a Keystore error, then works; counts every open. */
+    private inner class FlakyCipher(var failures: Int) : AtRestCipher {
+        var opens = 0
+        override fun seal(plaintext: ByteArray) = cipher.seal(plaintext)
+        override fun open(sealed: ByteArray): ByteArray {
+            opens++
+            if (failures-- > 0) throw java.security.ProviderException("keystore daemon restarting")
+            return cipher.open(sealed)
+        }
+    }
+
     @Test
-    fun aKeystoreFailureIsRetriedOnTheNextAccessAndReported() {
+    fun aKeystoreFailureIsRetriedWithBackoffAndReportedOnce() {
         val real = IdentityFingerprint.fromPublicKey(KeyPairSigningIdentity(generateEcKeyPair()).publicKeyEncoded)
         assertEquals(MarkVerifiedResult.VERIFIED, store().markVerified(real, real, "Real", VerificationMethod.QR_SCAN))
-        var failuresLeft = 2
-        val flaky = object : AtRestCipher {
-            override fun seal(plaintext: ByteArray) = cipher.seal(plaintext)
-            override fun open(sealed: ByteArray): ByteArray {
-                if (failuresLeft-- > 0) throw java.security.ProviderException("keystore daemon restarting")
-                return cipher.open(sealed)
-            }
-        }
-        val store = VerifiedContactStore(File(directory, "verified-contacts.bin"), flaky)
+        val flaky = FlakyCipher(failures = 2)
+        var now = 1_000_000L
+        val store = VerifiedContactStore(File(directory, "verified-contacts.bin"), flaky) { now }
         PeerIdentityGate.store = store
         val heard = mutableListOf<StoreUnreadableCause>()
         PeerIdentityGate.addStoreUnreadableListener { heard += it }
         // Fail-open while the Keystore is failing: the gate accepts, nothing is overwritten.
         assertEquals(VerificationState.STORE_UNREADABLE, PeerIdentityGate.admitForwardedSource(real.nodeId))
         assertEquals(StoreUnreadableCause.KEYSTORE_ERROR, store.unreadableCause())
+        assertEquals(StoreBanner.RETRYING, store.banner())
         assertEquals(listOf(StoreUnreadableCause.KEYSTORE_ERROR), heard) // reported once per episode
-        // The third attempt succeeds: no reset needed.
+        // Inside the backoff the Keystore is not asked again, however often the store is read.
+        assertEquals(1, flaky.opens)
+        repeat(5) { store.state(real.nodeId, real) }
+        assertEquals(1, flaky.opens)
+        assertEquals(VerifiedStoreRecovery.FIRST_RETRY_MS, store.retryDueInMs())
+        // The first retry is due after 2 s and fails again (the second failure waits 4 s).
+        now += VerifiedStoreRecovery.FIRST_RETRY_MS
+        assertEquals(VerificationState.STORE_UNREADABLE, store.state(real.nodeId, real))
+        assertEquals(2, flaky.opens)
+        assertEquals(2 * VerifiedStoreRecovery.FIRST_RETRY_MS, store.retryDueInMs())
+        assertEquals(listOf(StoreUnreadableCause.KEYSTORE_ERROR), heard) // same cause: not reported again
+        // The third attempt succeeds: the banner clears by itself, no reset needed.
+        now += 2 * VerifiedStoreRecovery.FIRST_RETRY_MS
         assertEquals(VerificationState.VERIFIED, store.state(real.nodeId, real))
-        assertEquals(null, store.unreadableCause())
+        assertNull(store.unreadableCause())
+        assertEquals(StoreBanner.NONE, store.banner())
+        assertNull(store.retryDueInMs())
         assertFalse(store.isUnreadable())
+    }
+
+    @Test
+    fun aTemporaryFailureNeverTouchesOrReplacesTheFile() {
+        val real = IdentityFingerprint.fromPublicKey(KeyPairSigningIdentity(generateEcKeyPair()).publicKeyEncoded)
+        val file = File(directory, "verified-contacts.bin")
+        assertEquals(MarkVerifiedResult.VERIFIED, store().markVerified(real, real, "Real", VerificationMethod.QR_SCAN))
+        val before = file.readBytes()
+        val store = VerifiedContactStore(file, FlakyCipher(failures = 100)) { 5L }
+        val other = IdentityFingerprint.fromPublicKey(KeyPairSigningIdentity(generateEcKeyPair()).publicKeyEncoded)
+        assertEquals(MarkVerifiedResult.STORE_UNREADABLE, store.markVerified(other, other, "Other", VerificationMethod.QR_SCAN))
+        assertFalse(store.forget(real))
+        assertTrue(file.readBytes().contentEquals(before))
+    }
+
+    @Test
+    fun aCorruptFileIsKeptAndNeverRetriedUntilTheUserResets() {
+        val file = File(directory, "verified-contacts.bin")
+        val real = IdentityFingerprint.fromPublicKey(KeyPairSigningIdentity(generateEcKeyPair()).publicKeyEncoded)
+        assertEquals(MarkVerifiedResult.VERIFIED, store().markVerified(real, real, "Real", VerificationMethod.QR_SCAN))
+        val sealed = file.readBytes()
+        sealed[sealed.size - 1] = (sealed[sealed.size - 1].toInt() xor 1).toByte()
+        file.writeBytes(sealed)
+        var now = 0L
+        val store = VerifiedContactStore(file, cipher) { now }
+        assertEquals(StoreBanner.RESET_REQUIRED, store.banner())
+        assertNull(store.retryDueInMs()) // nothing is scheduled: a corrupt file does not heal by itself
+        now += 24 * 60 * 60 * 1000L
+        assertEquals(StoreBanner.RESET_REQUIRED, store.banner())
+        assertTrue(file.readBytes().contentEquals(sealed))
+        assertTrue(store.reset())
+        assertEquals(StoreBanner.NONE, store.banner())
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun theRetryScheduleDoublesFromTwoSecondsAndCapsAtOneMinute() {
+        assertEquals(
+            listOf(2_000L, 4_000L, 8_000L, 16_000L, 32_000L, 60_000L, 60_000L),
+            (1..7).map { VerifiedStoreRecovery.retryDelayMs(it) },
+        )
+        assertEquals(2_000L, VerifiedStoreRecovery.retryDelayMs(0))
+        assertEquals(60_000L, VerifiedStoreRecovery.retryDelayMs(Int.MAX_VALUE))
+    }
+
+    @Test
+    fun theBannerFollowsTheCauseAndOnlyATemporaryOneSchedulesACheck() {
+        assertEquals(StoreBanner.NONE, VerifiedStoreRecovery.banner(null))
+        assertEquals(StoreBanner.RETRYING, VerifiedStoreRecovery.banner(StoreUnreadableCause.KEYSTORE_ERROR))
+        assertEquals(StoreBanner.RETRYING, VerifiedStoreRecovery.banner(StoreUnreadableCause.IO_ERROR))
+        assertEquals(StoreBanner.RESET_REQUIRED, VerifiedStoreRecovery.banner(StoreUnreadableCause.CORRUPT_FILE))
+        assertEquals(StoreBanner.NONE, VerifiedStoreBannerController.bannerFor(null))
+        assertEquals(StoreBanner.RETRYING, VerifiedStoreBannerController.bannerFor(StoreProblem.TEMPORARY))
+        assertEquals(StoreBanner.RESET_REQUIRED, VerifiedStoreBannerController.bannerFor(StoreProblem.CORRUPT))
+        assertEquals(5_250L, VerifiedStoreRecovery.nextCheckInMs(StoreBanner.RETRYING, 5_000L))
+        assertEquals(250L, VerifiedStoreRecovery.nextCheckInMs(StoreBanner.RETRYING, null))
+        assertNull(VerifiedStoreRecovery.nextCheckInMs(StoreBanner.RESET_REQUIRED, 5_000L))
+        assertNull(VerifiedStoreRecovery.nextCheckInMs(StoreBanner.NONE, null))
     }
 
     @Test
@@ -408,7 +493,7 @@ class IdentityVerificationTest {
             assertEquals(GroupRelayControlType.WRAPPED_KEY, key.type)
             key.payload to keys
         }
-        worker.join(10_000)
+        worker.join(120_000)
         val session = sourceResult.get().getOrThrow()
         assertEquals(0, wrapped[0].first.size) // the refused receiver gets nothing it can open
         assertEquals(EndToEndContentType.GROUP_KEY, EndToEndContentOpener(wrapped[1].second.receiveKey).open(wrapped[1].first).type)
@@ -447,7 +532,7 @@ class IdentityVerificationTest {
             val link = SecureBluetoothHandshake.initiate(bToA.input, aToB.output, caller, CAPS)
             EndToEndVideoHandshake.initiate(link, caller, CAPS)
         }
-        worker.join(10_000)
+        worker.join(120_000)
         return callerResult to calleeResult.get()
     }
 
@@ -469,7 +554,7 @@ class IdentityVerificationTest {
             override fun read(b: ByteArray, off: Int, len: Int): Int {
                 if (len == 0) return 0
                 while (offset == current.size) {
-                    current = chunks.poll(5, TimeUnit.SECONDS) ?: return -1
+                    current = chunks.poll(120, TimeUnit.SECONDS) ?: return -1
                     offset = 0
                 }
                 val count = minOf(len, current.size - offset)

@@ -21,6 +21,29 @@ object CallReachabilityFeature {
         if (benchmarkLaunch) extra(EXTRA) else stored()
 }
 
+/**
+ * Reachable while browsing (2026-10-12, design decision). The Live tab is now the landing screen and
+ * the stream browser: opening it used to close the call endpoint, so a phone sitting on it could
+ * not receive calls. On: browsing (scanning for streams only) keeps the call endpoint; it closes
+ * when the user joins a stream or goes live and is restored when they leave. Off: exactly the old
+ * behaviour (the Live tab owns the radio, the endpoint is closed).
+ *
+ * Normal launches: on. A DEBUG launch with any `test_*` extra keeps the old behaviour unless it
+ * carries `test_reachable_while_browsing=true` (and, as for every endpoint, `test_always_reachable`),
+ * so existing benchmark cases do not change. `test_reachable_while_browsing=false` is the control arm.
+ */
+object ReachableWhileBrowsingFeature {
+    const val EXTRA = "test_reachable_while_browsing"
+
+    @Volatile var enabled = true
+
+    fun resolve(benchmarkLaunch: Boolean, hasExtra: Boolean, extraValue: Boolean): Boolean = when {
+        hasExtra -> extraValue
+        benchmarkLaunch -> false
+        else -> true
+    }
+}
+
 /** Where the activity is, as far as call reachability cares. */
 internal enum class ReachabilityScreen {
     /** Home, or Settings opened from Home. */
@@ -31,7 +54,12 @@ internal enum class ReachabilityScreen {
     CALL,
     /** Camera / Go live screen (stream sender or relay): the stream advertiser owns the radio. */
     LIVE,
-    /** Watch list or playback: the viewer and its forwarder own the radio. */
+    /**
+     * The Live tab only browsing (the stream scan runs, nothing is on air for a stream): the call
+     * endpoint may keep running, as on Home. Becomes [WATCH] once a stream is joined or being rejoined.
+     */
+    LIVE_BROWSING,
+    /** A stream is joined (or being rejoined) or playing: the viewer and its forwarder own the radio. */
     WATCH,
 }
 
@@ -51,6 +79,8 @@ internal data class ReachabilityInputs(
     val batteryLow: Boolean = false,
     /** Battery Saver on. Informational: never turns reachability off. */
     val batterySaver: Boolean = false,
+    /** [ReachableWhileBrowsingFeature]: off plans [ReachabilityScreen.LIVE_BROWSING] exactly like [ReachabilityScreen.WATCH]. */
+    val reachableWhileBrowsing: Boolean = true,
 )
 
 internal data class ReachabilityPlan(
@@ -72,8 +102,11 @@ internal data class ReachabilityPlan(
  * - Advertising sets: Home adds one call-availability set (legacy, as on the Call screen) and
  *   nothing on Live/Watch, where the stream offer and the peer-labels title set (which keeps one
  *   free set of headroom, TitleAdvertiser.MIN_FREE_SETS) need the controller's sets; the endpoint
- *   is closed before those start (showStreamScreen/showReceiverBrowser).
- * - Scan quota (ScanStartGate, 5 starts / 30 s): reachability never scans, so Home costs no start.
+ *   is closed before those start (showStreamScreen when going live, connectToStream when joining).
+ *   Browsing the Live tab (LIVE_BROWSING) only scans: no stream offer, viewer request or title set
+ *   is on air yet, so the endpoint stays like on Home (design decision 2026-10-12).
+ * - Scan quota (ScanStartGate, 5 starts / 30 s): reachability never scans, so Home and the browsing
+ *   Live tab cost no start; the browser's own stream scan is unchanged.
  * - iPhone compact discovery changes only scanning; Android still advertises the ordinary
  *   announcement, which iPhones read.
  * - Battery (design decision 2026-10-10): relay helping pauses below 20 % or in Battery Saver, but
@@ -104,23 +137,41 @@ internal object CallReachability {
                 reason = "call_screen$batteryNote",
             )
             ReachabilityScreen.LIVE -> ReachabilityPlan(AdvertisingRole.LIVE_STREAM, false, false, false, "stream_owns_advertising")
-            ReachabilityScreen.WATCH -> ReachabilityPlan(AdvertisingRole.WATCHING, false, false, false, "viewer_owns_advertising")
-            ReachabilityScreen.HOME -> when {
-                !inputs.featureEnabled -> ReachabilityPlan(AdvertisingRole.NONE, false, false, false, "flag_off")
-                !inputs.bluetoothReady -> ReachabilityPlan(AdvertisingRole.NONE, false, false, false, "bluetooth_or_permissions")
-                !inputs.foreground && !inputs.foregroundServiceHeld ->
-                    ReachabilityPlan(AdvertisingRole.NONE, false, false, false, "background_without_foreground_service")
-                else -> ReachabilityPlan(
-                    AdvertisingRole.CALL_AVAILABLE,
-                    endpoint = true,
-                    discoveryScan = false,
-                    reachable = true,
-                    reason = (if (inputs.foreground) "home" else "home_background_service") + batteryNote,
-                )
-            }
+            ReachabilityScreen.WATCH -> watching()
+            ReachabilityScreen.LIVE_BROWSING ->
+                if (inputs.reachableWhileBrowsing) idleEndpoint(inputs, "live_browsing", batteryNote) else watching()
+            ReachabilityScreen.HOME -> idleEndpoint(inputs, "home", batteryNote)
         }
     }
+
+    private fun watching() = ReachabilityPlan(AdvertisingRole.WATCHING, false, false, false, "viewer_owns_advertising")
+
+    /**
+     * An idle endpoint with nothing else on air: Home, and the Live tab while only browsing. The
+     * stream scan of the browser is not this plan's scan ([ReachabilityPlan.discoveryScan] is the
+     * people scan), and scanning needs no advertising set.
+     */
+    private fun idleEndpoint(inputs: ReachabilityInputs, name: String, batteryNote: String): ReachabilityPlan = when {
+        !inputs.featureEnabled -> ReachabilityPlan(AdvertisingRole.NONE, false, false, false, "flag_off")
+        !inputs.bluetoothReady -> ReachabilityPlan(AdvertisingRole.NONE, false, false, false, "bluetooth_or_permissions")
+        !inputs.foreground && !inputs.foregroundServiceHeld ->
+            ReachabilityPlan(AdvertisingRole.NONE, false, false, false, "background_without_foreground_service")
+        else -> ReachabilityPlan(
+            AdvertisingRole.CALL_AVAILABLE,
+            endpoint = true,
+            discoveryScan = false,
+            reachable = true,
+            reason = (if (inputs.foreground) name else "${name}_background_service") + batteryNote,
+        )
+    }
 }
+
+/**
+ * The Live tab screen as reachability sees it: browsing (the scan only) until a stream is joined,
+ * being rejoined after a loss, relayed or played, then Watch. Feature off: always Watch (old behaviour).
+ */
+internal fun liveTabReachabilityScreen(reachableWhileBrowsing: Boolean, streamJoinedOrRejoining: Boolean): ReachabilityScreen =
+    if (reachableWhileBrowsing && !streamJoinedOrRejoining) ReachabilityScreen.LIVE_BROWSING else ReachabilityScreen.WATCH
 
 /** The home status line's reachability part. */
 internal enum class HomeReachability { REACHABLE, STARTING, NOT_REACHABLE }

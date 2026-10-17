@@ -101,6 +101,20 @@ class BleL2capDiscovery(
     private var firstFailureMs = 0L
     private val retryScan = Runnable { restartAfterFailure() }
 
+    /** Batch S: this scanner's name in [ScanRegistry], and whether renewal/Bluetooth-off has it paused. */
+    private val registryName = "discovery-" + stats.scanner
+    @Volatile private var scanPaused = false
+
+    /** The one place [running] goes false: also drops the registry entry (batch S-03). */
+    private fun halt(): Boolean {
+        val was = running.getAndSet(false)
+        if (was) {
+            scanPaused = false
+            ScanRegistry.unregister(registryName)
+        }
+        return was
+    }
+
     private val callback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) = addResult(result)
 
@@ -109,9 +123,13 @@ class BleL2capDiscovery(
         override fun onScanFailed(errorCode: Int) {
             stats.logIfDebug("failed code=$errorCode")
             if (!running.get()) return
+            if (errorCode == ScanFailurePolicy.APPLICATION_REGISTRATION_FAILED) {
+                // The stack has no free app registration (pool of 32): visible as gatt_pool_exhausted source=scanner.
+                GattPoolBackoff.recordFailure(PoolSource.SCANNER, errorCode, "scanner-" + stats.scanner)
+            }
             if (!DebugTunables.scanRecovery) {
                 // Control arm (test_scan_recovery=false): the pre-2026-10-10 behaviour exactly.
-                running.set(false)
+                halt()
                 handler.removeCallbacksAndMessages(null)
                 onError("BLE scan failed (code $errorCode).")
                 return
@@ -124,7 +142,13 @@ class BleL2capDiscovery(
         if (!running.compareAndSet(false, true)) return
         seenAddresses.clear()
         deviceNames.clear()
-        // AOSP refuses a 6th scan start inside 30 s (registry entry le-scan-start-quota): wait instead.
+        // S-01: say whether Android 10-11 will deliver results at all (Location switch / permission).
+        if (ScanEnvironment.guidanceActive(Build.VERSION.SDK_INT, DebugTunables.devicePolicyOff)) {
+            scanLog(ScanEnvironment.line(ScanEnvironment.last) + " | scanner=${stats.scanner}")
+        }
+        // AOSP drops a 6th scan start inside 30 s WITHOUT any callback (no onScanFailed; BluetoothLeScanner returns
+        // quietly when the stack answers SCANNING_TOO_FREQUENTLY, aosp-bt-versions SCAN-01), so this gate is the only
+        // protection: every start of every app scanner waits for a slot (registry entry le-scan-start-quota).
         val waitMs = ScanStartGate.shared.reserve(scanBudget)
         if (waitMs > 0L) {
             android.util.Log.i("BluetoothVideo", "BLE scan start deferred ${waitMs} ms: scan quota (5 starts per 30 s)")
@@ -148,7 +172,7 @@ class BleL2capDiscovery(
         }
         val scanner = adapter.bluetoothLeScanner
         if (scanner == null) {
-            running.set(false)
+            halt()
             onError("BLE scanning is unavailable while Bluetooth is off.")
             return
         }
@@ -160,15 +184,20 @@ class BleL2capDiscovery(
             ScanSettings.SCAN_MODE_BALANCED
         }
         try {
+            EncoderBenchGuard.check("BleL2capControl.scan")
             scanner.startScan(scanFilters(), scanSettings(activeScanMode), callback)
         } catch (_: SecurityException) {
-            running.set(false)
+            halt()
             onError("Nearby devices permission is unavailable. Allow it in Android Settings and try again.")
             return
         }
         backoff.reset()
         failureCode = null
         stats.reset()
+        scanPaused = false
+        ScanRuntime.onScanStart()
+        ScanRegistry.register(registryName, stop = ::pauseForRenewal, start = ::resumeAfterRenewal, renewable = scanDurationMs <= 0L)
+        logDuty()
         if (compactDiscovery) {
             android.util.Log.i(
                 "BluetoothVideo",
@@ -185,7 +214,7 @@ class BleL2capDiscovery(
 
     @SuppressLint("MissingPermission")
     private fun switchToBalancedScan() {
-        if (!running.get() || activeScanMode == ScanSettings.SCAN_MODE_BALANCED) return
+        if (!running.get() || scanPaused || activeScanMode == ScanSettings.SCAN_MODE_BALANCED) return
         val scanner = adapter.bluetoothLeScanner ?: return
         // Restarting in balanced mode is a new scan start. Without a free quota slot keep the running
         // low-latency scan and do not queue the switch: the slots stay free for new discovery (calls).
@@ -196,9 +225,66 @@ class BleL2capDiscovery(
         }
         runCatching { scanner.stopScan(callback) }
         activeScanMode = ScanSettings.SCAN_MODE_BALANCED
+        EncoderBenchGuard.check("BleL2capControl.scanRestart")
         runCatching { scanner.startScan(scanFilters(), scanSettings(activeScanMode), callback) }
+            .onSuccess {
+                ScanRuntime.onScanStart()
+                ScanRegistry.shared.markStarted(registryName)
+                logDuty()
+            }
             .onFailure {
-                if (running.getAndSet(false)) onError("BLE balanced scan could not start.")
+                if (halt()) onError("BLE balanced scan could not start.")
+            }
+    }
+
+    /** DEBUG: the duty cycle the stack is expected to apply for this SDK and mode (SCAN-06), per (re)start. */
+    private fun logDuty() {
+        if (BuildConfig.DEBUG) scanLog(ScanDutyCycle.line(Build.VERSION.SDK_INT, activeScanMode, ScanRuntime.screenOnHint, stats.scanner))
+    }
+
+    /**
+     * Batch S-03/S-08: the registry's `stop`. Stops the system scan but keeps this scanner logically running
+     * (timers, results already seen, owner callbacks); [resumeAfterRenewal] starts it again through the gate.
+     */
+    @SuppressLint("MissingPermission")
+    private fun pauseForRenewal() {
+        if (!running.get()) return
+        scanPaused = true
+        handler.removeCallbacks(retryScan)
+        runCatching { adapter.bluetoothLeScanner?.stopScan(callback) }
+    }
+
+    /** The registry's `start`: back on the main thread, through ScanStartGate. */
+    private fun resumeAfterRenewal() {
+        handler.post { resumeScan() }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun resumeScan() {
+        if (!running.get() || !scanPaused) return
+        val waitMs = ScanStartGate.shared.reserve(scanBudget)
+        if (waitMs > 0L) {
+            handler.postDelayed({ resumeScan() }, waitMs)
+            return
+        }
+        val scanner = adapter.bluetoothLeScanner
+        if (scanner == null) {
+            // Bluetooth is off: the adapter-state restart (BluetoothEpoch) calls the registry's start again.
+            ScanRegistry.shared.markPausedAgain(registryName)
+            return
+        }
+        scanPaused = false
+        EncoderBenchGuard.check("BleL2capControl.scanRenew")
+        runCatching { scanner.startScan(scanFilters(), scanSettings(activeScanMode), callback) }
+            .onSuccess {
+                ScanRuntime.onScanStart()
+                ScanRegistry.shared.markStarted(registryName)
+            }
+            .onFailure {
+                if (halt()) {
+                    handler.removeCallbacksAndMessages(null)
+                    onError("BLE scan could not restart.")
+                }
             }
     }
 
@@ -211,6 +297,14 @@ class BleL2capDiscovery(
      * scan-start gate (le-scan-start-quota); with that entry off nothing limits them but the back-off.
      */
     private fun onScanFailure(errorCode: Int) {
+        if (ScanPolicy.enabled("android10-scanner-leak-on-process-death")) {
+            ScanLeakClassifier.classify(Build.VERSION.SDK_INT, errorCode, null, ScanRuntime.uncleanExits)?.let {
+                scanLog(
+                    "scan_leak: event=scan_failed | classification=$it | code=$errorCode | " +
+                        "uncleanExits=${ScanRuntime.uncleanExits} | scanner=${stats.scanner}",
+                )
+            }
+        }
         if (compactDiscovery && CompactFilterGuard.refusesFilter(errorCode)) {
             // The masked iPhone filter is the likely cause: keep the app's own filter and restart at once.
             compactDiscovery = false
@@ -235,7 +329,7 @@ class BleL2capDiscovery(
             // FEATURE_UNSUPPORTED, or a continuous scan whose back-off reached its cap: the caller's
             // visible status/error path takes over (it shows the message and restarts discovery itself).
             logRecovery(if (step.action == ScanFailureAction.REPORT) "reported" else "handed_back", errorCode, step)
-            running.set(false)
+            halt()
             handler.removeCallbacksAndMessages(null)
             runCatching { adapter.bluetoothLeScanner?.stopScan(callback) }
             onError(ScanFailurePolicy.userMessage(errorCode))
@@ -256,12 +350,12 @@ class BleL2capDiscovery(
 
     @SuppressLint("MissingPermission")
     private fun restartAfterFailure() {
-        if (!running.get()) return
+        if (!running.get() || scanPaused) return
         val code = failureCode ?: return
         val step = ScanRecoveryStep(ScanFailurePolicy.action(code), 0L, handBack = false)
         val scanner = adapter.bluetoothLeScanner
         if (scanner == null) {
-            running.set(false)
+            halt()
             handler.removeCallbacksAndMessages(null)
             onError("BLE scanning is unavailable while Bluetooth is off.")
             return
@@ -274,11 +368,16 @@ class BleL2capDiscovery(
             return
         }
         runCatching { scanner.stopScan(callback) }
+        EncoderBenchGuard.check("BleL2capControl.scanRecover")
         runCatching { scanner.startScan(scanFilters(), scanSettings(activeScanMode), callback) }
-            .onSuccess { logRecovery("restarted", code, step) }
+            .onSuccess {
+                ScanRuntime.onScanStart()
+                ScanRegistry.shared.markStarted(registryName)
+                logRecovery("restarted", code, step)
+            }
             .onFailure {
                 logRecovery("restart_failed", code, step.copy(delayMs = -1L))
-                if (running.getAndSet(false)) {
+                if (halt()) {
                     handler.removeCallbacksAndMessages(null)
                     onError(ScanFailurePolicy.userMessage(code))
                 }
@@ -301,7 +400,10 @@ class BleL2capDiscovery(
      * The app's service UUID, plus (experimental compact discovery) the masked iPhone UUID. Filters
      * are ORed and one scan start covers both, so the scan quota is unchanged.
      */
-    private fun scanFilters(): List<ScanFilter> = buildList {
+    private fun scanFilters(): List<ScanFilter> = if (ScanFilterFallback.softwareFiltering()) {
+        // S-06 (Experimental, screen on only): no hardware filter; addResult matches the service UUID in software.
+        emptyList()
+    } else buildList {
         add(ScanFilter.Builder().setServiceUuid(ParcelUuid(BleL2capControlProtocol.SERVICE_UUID)).build())
         if (compactDiscovery) {
             add(
@@ -323,6 +425,14 @@ class BleL2capDiscovery(
     private fun addResult(result: ScanResult) {
         if (!running.get()) return
         stats.raw++
+        if (ScanFilterFallback.softwareFiltering()) {
+            val uuids = result.scanRecord?.serviceUuids?.map(ParcelUuid::getUuid)
+            val wanted = ScanFilterFallback.matchesService(uuids, BleL2capControlProtocol.SERVICE_UUID) ||
+                (compactDiscovery && CompactDiscoveryAnnouncement.firstCandidate(uuids) != null)
+            if (!wanted) return
+        }
+        ScanRuntime.onScanResult()
+        if (GattPoolBackoff.scannerFailing) GattPoolBackoff.recordSuccess(PoolSource.SCANNER)
         failureCode?.let { code ->
             // Any result proves the scanner is alive again: the next failure starts from 3 s.
             logRecovery("recovered", code, ScanRecoveryStep(ScanFailurePolicy.action(code), 0L, handBack = false))
@@ -341,15 +451,26 @@ class BleL2capDiscovery(
         // Experimental peer labels: version-3 title pages take their own path here, before the
         // per-address dedup, so every rotated page is seen (R15). Off: they fall through and are
         // rejected exactly as before.
-        if (PeerLabelFeature.enabled && TitlePageCodec.isTitlePage(announcementBytes)) {
+        if (PeerLabelFeature.titlePagesEnabled && TitlePageCodec.isTitlePage(announcementBytes)) {
             runCatching { TitlePageCodec.decode(requireNotNull(announcementBytes)) }.getOrNull()?.let { page ->
                 StreamTitles.pagesReceived++
-                StreamTitles.board.add(page)
+                val complete = StreamTitles.board.add(page)
+                if (complete != null && StreamTitles.isNew(page.routeToken, complete)) StreamTitles.onNewTitle?.invoke()
+                if (BuildConfig.DEBUG && complete != null) {
+                    android.util.Log.i("BluetoothVideo", "BENCHMARK title_page_rx: token=%08x | chars=%d | pages=%d".format(page.routeToken, complete.length, StreamTitles.pagesReceived))
+                }
             }
             return
         }
+        // Visible by name (default off): version 7 name pages feed the bounded board before the per-address dedup. They are
+        // only ever attached to a window offer that is currently heard, and only as an unconfirmed claim (NamePageAssembler).
+        val windowOn = NamingFeatures.visibleByNameOn()
+        if (windowOn && NamePageCodec.isNamePage(announcementBytes)) {
+            NamePageCodec.decode(requireNotNull(announcementBytes))?.let(NameWindowBoard::onPage)
+            return
+        }
         val announcement = if (announcementBytes != null) {
-            runCatching { DiscoveryAnnouncementCodec.decode(announcementBytes, acceptRotating) }
+            runCatching { DiscoveryAnnouncementCodec.decode(announcementBytes, acceptRotating, acceptWindow = windowOn) }
                 .getOrNull()
                 ?: return
         } else {
@@ -377,6 +498,7 @@ class BleL2capDiscovery(
             return
         }
         stats.accepted++
+        if (announcement.isWindowOffer) NameWindowBoard.onOffer(announcement)
         val device = result.device
         logAddressChurn(announcement, device.address)
         // Experimental relayed calls: every sighting of a cost-0 call offer refreshes the reach table
@@ -459,7 +581,7 @@ class BleL2capDiscovery(
 
     @SuppressLint("MissingPermission")
     private fun stop(notify: Boolean) {
-        if (!running.getAndSet(false)) return
+        if (!halt()) return
         stats.logIfDebug("stopped")
         handler.removeCallbacksAndMessages(null)
         runCatching { adapter.bluetoothLeScanner?.stopScan(callback) }
@@ -495,6 +617,7 @@ internal class ScanStats(val scanner: String, private val compactDiscovery: Bool
     @Volatile var compact = 0
     @Volatile var compactInvalid = 0
     private var startedMs = System.currentTimeMillis()
+    private var startedElapsedMs = elapsedOrMinusOne()
 
     fun reset() {
         raw = 0
@@ -504,14 +627,27 @@ internal class ScanStats(val scanner: String, private val compactDiscovery: Bool
         compact = 0
         compactInvalid = 0
         startedMs = System.currentTimeMillis()
+        startedElapsedMs = elapsedOrMinusOne()
     }
+
+    /** SystemClock is not available in plain JVM tests; -1 then means "no connect-overlap tagging". */
+    private fun elapsedOrMinusOne(): Long = runCatching { android.os.SystemClock.elapsedRealtime() }.getOrDefault(-1L)
 
     /** Unchanged with compact discovery off; on, it appends the two compact counters. */
     fun line(state: String): String =
         "scan_stats: scanner=$scanner | state=$state | " +
             "elapsedMs=${System.currentTimeMillis() - startedMs} | raw=$raw | " +
             "withoutAnnouncement=$withoutAnnouncement | rejected=$rejected | accepted=$accepted" +
-            if (compactDiscovery) " | compact=$compact | compactInvalid=$compactInvalid" else ""
+            (if (compactDiscovery) " | compact=$compact | compactInvalid=$compactInvalid" else "") +
+            connectOverlapTag()
+
+    /** S-07 diagnostic: the part of this window that overlapped an own connect attempt; empty when none. */
+    private fun connectOverlapTag(): String {
+        val overlap = runCatching {
+            if (startedElapsedMs < 0L) 0L else ScanGate.overlapMs(startedElapsedMs, android.os.SystemClock.elapsedRealtime())
+        }.getOrDefault(0L)
+        return if (overlap > 0L) " | connectOverlapMs=$overlap" else ""
+    }
 
     fun logIfDebug(state: String) {
         if (BuildConfig.DEBUG) android.util.Log.i("BluetoothVideo", "BENCHMARK " + line(state))
@@ -536,8 +672,10 @@ internal data class ScanRecoveryStep(val action: ScanFailureAction, val delayMs:
 /**
  * Failure codes of android.bluetooth.le.ScanCallback (AOSP framework constants 1-6; 5 and 6 are public
  * from API 33, so they are literals here). Every code but FEATURE_UNSUPPORTED can be transient;
- * SCANNING_TOO_FREQUENTLY is the start quota that the registry's ScanStartGate (le-scan-start-quota)
- * already paces.
+ * SCANNING_TOO_FREQUENTLY is listed for completeness: AOSP (Android 8-16) never delivers it through onScanFailed,
+ * it drops the start silently, so no back-off here can react to the quota. The registry's ScanStartGate
+ * (le-scan-start-quota) is the only protection, and ScanHealth names a silent scan with a full budget
+ * `scan_quota_silent`.
  */
 internal object ScanFailurePolicy {
     const val ALREADY_STARTED = 1
@@ -766,9 +904,26 @@ class BleL2capControlServer(
     fun start() {
         check(!closed.get()) { "BLE control server is closed" }
         check(gattServer == null) { "BLE control server is already running" }
+        EncoderBenchGuard.check("BleL2capControl.gattServer")
         val server = bluetoothManager.openGattServer(appContext, gattCallback)
-            ?: throw IOException("Could not open the BLE control server")
+        if (server == null) {
+            if (adapter.isEnabled) GattPoolBackoff.recordFailure(PoolSource.SERVER, null, "ble-control-server")
+            throw IOException("Could not open the BLE control server")
+        }
+        GattPoolBackoff.recordSuccess(PoolSource.SERVER)
         gattServer = server
+        try {
+            startOpened(server)
+        } catch (error: Throwable) {
+            // `cocControlServer = BleL2capControlServer(..).also(start)` never receives this instance when start()
+            // throws, so the opened server would keep its registration until process death. close() is idempotent.
+            close()
+            throw error
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startOpened(server: BluetoothGattServer) {
         val characteristic = BluetoothGattCharacteristic(
             BleL2capControlProtocol.PSM_CHARACTERISTIC_UUID,
             BluetoothGattCharacteristic.PROPERTY_READ,
@@ -873,6 +1028,8 @@ class BleL2capControlConnection internal constructor(
     private val phyDeferred: Boolean = false,
     /** The setup's priority keeper, so a later request keeps the failed-update retry (test_relay_upstream_dck). */
     private val priorityRequest: ((BleConnectionPriority) -> Boolean)? = null,
+    /** The setup's LL procedure gate (Experimental test_ll_gate); a pass-through when off. */
+    private val gate: LlProcedureGate? = null,
 ) : Closeable {
     val phySummary: String
         get() = phyStatus.summary
@@ -904,6 +1061,8 @@ class BleL2capControlConnection internal constructor(
             },
             nowMs = android.os.SystemClock::elapsedRealtime,
             log = { line -> android.util.Log.i("BluetoothVideo", line) },
+            expectedTx = LePhy.valueForMask(phyPreference.mask),
+            gate = gate,
         )
         phyStatus.listener = { tx, status, fromRead -> waiter.onPhy(tx, status, fromRead) }
         return try {
@@ -972,8 +1131,10 @@ object BleL2capPsmReader {
         phyPreference: BlePhyPreference = BlePhyPreference.TWO_M,
         connectionPriority: BleConnectionPriority = BleConnectionPriority.HIGH,
         primeGattMtuForCoc: Boolean = true,
+        /** Relay child connect only: Experimental RelayEstablishBudget (test_relay_establish_budget). */
+        establishBudget: Boolean = false,
     ): BleL2capControlConnection =
-        openWithRetries(context, device, onLinkStatus, phyPreference, connectionPriority, primeGattMtuForCoc, null)
+        openWithRetries(context, device, onLinkStatus, phyPreference, connectionPriority, primeGattMtuForCoc, null, establishBudget)
 
     /**
      * Attaches a GATT client to an LE link whose CoC channel is already open (BleCocClient fresh ACL):
@@ -997,12 +1158,17 @@ object BleL2capPsmReader {
         connectionPriority: BleConnectionPriority,
         primeGattMtuForCoc: Boolean,
         knownPsm: Int?,
+        establishBudget: Boolean = false,
     ): BleL2capControlConnection {
         var attempt = 1
         var extendedRetries = 0
+        var linkReached = false
+        val startedMs = SystemClock.elapsedRealtime()
+        val budget = if (establishBudget) RelayEstablishBudget(startedMs) else null
         while (true) {
+            val attemptStartedMs = SystemClock.elapsedRealtime()
             try {
-                return openOnce(
+                val connection = openOnce(
                     context,
                     device,
                     onLinkStatus,
@@ -1011,7 +1177,35 @@ object BleL2capPsmReader {
                     primeGattMtuForCoc,
                     knownPsm,
                 )
+                if (budget != null) {
+                    val nowMs = SystemClock.elapsedRealtime()
+                    android.util.Log.i(
+                        "BluetoothVideo",
+                        RelayEstablishBudget.logLine("coc-control", attempt, nowMs - attemptStartedMs, null, null, nowMs - startedMs),
+                    )
+                }
+                GattPoolBackoff.recordSuccess(PoolSource.CLIENT)
+                return connection
             } catch (error: IOException) {
+                if (error is LinkReachedSetupFailure) linkReached = true
+                GattPoolBackoff.noteConnectFailure(error.message, "ble-control-client")
+                if (budget != null) {
+                    val nowMs = SystemClock.elapsedRealtime()
+                    val durationMs = nowMs - attemptStartedMs
+                    val decision = budget.onFailure(error.message, durationMs, nowMs)
+                    android.util.Log.i(
+                        "BluetoothVideo",
+                        RelayEstablishBudget.logLine("coc-control", attempt, durationMs, error.message, decision, nowMs - startedMs),
+                    )
+                    if (decision.kind != RelayEstablishBudget.Kind.OTHER) {
+                        val delayMs = decision.retryAfterMs
+                            ?: throw EstablishmentBudgetExhausted(error.message, decision.attempt, decision.elapsedMs, error)
+                        attempt += 1
+                        onLinkStatus(leSetupRetryNotice("BLE control", error.message, "retrying in place"))
+                        Thread.sleep(delayMs)
+                        continue
+                    }
+                }
                 val retryable = runCatching { BluetoothTransportPolicy.retryableConnectStatuses() }
                     .getOrDefault(setOf(BluetoothTransportPolicy.GATT_ERROR_133))
                 val allowed = leSetupRetryAllowed(
@@ -1023,7 +1217,7 @@ object BleL2capPsmReader {
                     nextAttemptMs = CONTROL_RETRY_DELAY_MS + TimeUnit.SECONDS.toMillis(CONTROL_TIMEOUT_SECONDS),
                     remainingBudgetMs = LeSetupBudget.remainingMs(),
                 )
-                if (!allowed) throw error
+                if (!allowed) throw carryLinkReached(error, linkReached)
                 if (leSetupStatus(error.message)?.let { it != BluetoothTransportPolicy.GATT_ERROR_133 } == true) extendedRetries++
                 attempt += 1
                 onLinkStatus(
@@ -1058,13 +1252,18 @@ object BleL2capPsmReader {
         val pendingPsm = AtomicReference<Int?>()
         val attempt = GattAttempt()
         val phyRequested = AtomicBoolean(false)
+        // Experimental relay_establish_keep_2m: set once the control connection reports connected.
+        val linkConnected = AtomicBoolean(false)
         // test_coc_phy_after_connect: no PHY request during setup; the caller requests it after hop auth.
         val phyDeferred = CocPhyAfterConnect.enabled()
         val activeGattRef = AtomicReference<BluetoothGatt?>()
         val adaptivePhyRef = AtomicReference<AdaptivePhyLink?>()
+        // Experimental test_ll_gate (P-01): one MTU, discovery, PHY or connection-update request in flight on this link.
+        // A pass-through (requests start at once, as before) unless the switch is on.
+        val gate = newLinkGate("ble-control", LeLinkRole.CENTRAL, device.address)
         fun adaptivePhy(gatt: BluetoothGatt): AdaptivePhyLink {
             adaptivePhyRef.get()?.let { return it }
-            adaptivePhyRef.compareAndSet(null, AdaptivePhyLink("coc", gatt.device?.address, gatt, restorePriority = connectionPriority))
+            adaptivePhyRef.compareAndSet(null, AdaptivePhyLink("coc", gatt.device?.address, gatt, restorePriority = connectionPriority, gate = gate))
             return adaptivePhyRef.get()!!
         }
         val linkDiag = LeLinkDiagnostics.create("ble-control", device.address).also { it.requestedPhy = phyPreference.label }
@@ -1075,6 +1274,7 @@ object BleL2capPsmReader {
             // A closed or expired attempt is cancelled before its teardown (GattAttempt).
             active = { attempt.active && !attempt.teardown.disconnected },
             log = { line -> android.util.Log.i("BluetoothVideo", line) },
+            gate = gate,
         )
 
         fun finish(psm: Int? = null, message: String? = null) {
@@ -1093,8 +1293,16 @@ object BleL2capPsmReader {
         fun finishWithPsm(gatt: BluetoothGatt, psm: Int) {
             if (complete.get()) return
             if (!phyDeferred && DebugTunables.cocSequencedPhy && attempt.active && phyRequested.compareAndSet(false, true)) {
-                gatt.setPreferredPhy(phyPreference.mask, phyPreference.mask, phyPreference.option)
-                gatt.readPhy()
+                gate.submit(
+                    LlProcedure.PHY,
+                    "ble_control_phy",
+                    expectedTx = LePhy.valueForMask(phyPreference.mask),
+                    fallback = { gatt.setPreferredPhy(LePhy.MASK_1M, LePhy.MASK_1M, phyPreference.option); gatt.readPhy(); true },
+                ) {
+                    gatt.setPreferredPhy(phyPreference.mask, phyPreference.mask, phyPreference.option)
+                    gatt.readPhy()
+                    true
+                }
             }
             linkDiag.log("setup")
             finish(psm = psm)
@@ -1113,10 +1321,13 @@ object BleL2capPsmReader {
                         return@onSuccess
                     }
                     pendingPsm.set(psm)
-                    linkDiag.requestedMtu = MAX_ATT_MTU
-                    val mtuQueued = gatt.requestMtu(MAX_ATT_MTU)
+                    // A peer whose last MTU change was followed by a lost link is asked for the smaller MTU (test_link_change_rollback).
+                    val requestedMtu = LinkChangeRollbacks.mtuCap(AdaptivePhyMemory.peerKey(gatt.device?.address))
+                        ?.coerceAtMost(MAX_ATT_MTU) ?: MAX_ATT_MTU
+                    linkDiag.requestedMtu = requestedMtu
+                    val mtuQueued = gate.submit(LlProcedure.MTU, "ble_control_mtu") { gatt.requestMtu(requestedMtu) }.accepted
                     onLinkStatus(
-                        "BLE CoC setup requested GATT MTU $MAX_ATT_MTU " +
+                        "BLE CoC setup requested GATT MTU $requestedMtu " +
                             if (mtuQueued) "queued" else "failed",
                     )
                     if (!mtuQueued) {
@@ -1136,7 +1347,7 @@ object BleL2capPsmReader {
         fun discoverServices(gatt: BluetoothGatt) {
             if (!attempt.active) return
             if (!serviceDiscoveryStarted.compareAndSet(false, true)) return
-            if (!gatt.discoverServices()) {
+            if (!gate.submit(LlProcedure.SERVICE_DISCOVERY, "ble_control_discovery") { gatt.discoverServices() }.accepted) {
                 finish(message = "Could not discover the BLE control service")
             }
         }
@@ -1145,10 +1356,12 @@ object BleL2capPsmReader {
             @SuppressLint("MissingPermission")
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 if (!attempt.onConnectionState(newState == BluetoothProfile.STATE_DISCONNECTED)) return
+                if (newState == BluetoothProfile.STATE_DISCONNECTED) gate.onLinkClosed(status)
                 when {
                     status != BluetoothGatt.GATT_SUCCESS ->
                         finish(message = "BLE control connection failed (status $status)")
                     newState == BluetoothProfile.STATE_CONNECTED -> {
+                        linkConnected.set(true)
                         activeGattRef.set(gatt)
                         val highPriority = priorityKeeper.request(connectionPriority)
                         linkDiag.onPriority(connectionPriority, highPriority)
@@ -1159,12 +1372,15 @@ object BleL2capPsmReader {
                         )
                         if (!DebugTunables.cocSequencedPhy && !phyDeferred) {
                             // Control arm: the pre-2026-10-09 order (PHY beside the priority update).
-                            gatt.setPreferredPhy(
-                                phyPreference.mask,
-                                phyPreference.mask,
-                                phyPreference.option,
-                            )
-                            gatt.readPhy()
+                            gate.submit(LlProcedure.PHY, "ble_control_phy_at_connect", expectedTx = LePhy.valueForMask(phyPreference.mask)) {
+                                gatt.setPreferredPhy(
+                                    phyPreference.mask,
+                                    phyPreference.mask,
+                                    phyPreference.option,
+                                )
+                                gatt.readPhy()
+                                true
+                            }
                         }
                         if (knownPsm == null) {
                             discoverServices(gatt)
@@ -1190,7 +1406,7 @@ object BleL2capPsmReader {
             ) {
                 if (attempt.active) {
                     phyStatus.update(txPhy, rxPhy, status)
-                    adaptivePhy(gatt).onPhy(txPhy, status)
+                    adaptivePhy(gatt).onPhyUpdate(txPhy, status)
                     linkDiag.onPhy(txPhy, rxPhy, status)
                     if (complete.get()) linkDiag.log("phy")
                 }
@@ -1204,7 +1420,7 @@ object BleL2capPsmReader {
             ) {
                 if (attempt.active) {
                     phyStatus.update(txPhy, rxPhy, status, fromRead = true)
-                    adaptivePhy(gatt).onPhy(txPhy, status)
+                    adaptivePhy(gatt).onPhyRead(txPhy, status)
                     linkDiag.onPhy(txPhy, rxPhy, status)
                     if (complete.get()) linkDiag.log("phy")
                 }
@@ -1212,6 +1428,7 @@ object BleL2capPsmReader {
 
             override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
                 if (!attempt.active) return
+                gate.onMtuChanged(status)
                 linkDiag.onMtu(mtu, status)
                 onLinkStatus(
                     if (status == BluetoothGatt.GATT_SUCCESS) {
@@ -1232,11 +1449,12 @@ object BleL2capPsmReader {
                 )
                 linkDiag.onParams(interval, latency, timeout, status)
                 if (complete.get()) linkDiag.log("conn_params")
-                priorityKeeper.onConnectionUpdated(status)
+                priorityKeeper.onConnectionUpdated(status, interval)
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
                 if (!attempt.active) return
+                gate.onServicesDiscovered(status)
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     finish(message = "BLE service discovery failed (status $status)")
                     return
@@ -1282,12 +1500,17 @@ object BleL2capPsmReader {
             ) = handleRead(gatt, value, status)
         }
 
-        val gatt = device.connectGatt(
-            context.applicationContext,
-            false,
+        EncoderBenchGuard.check("BleL2capControl.connectGatt")
+        GattResourceRegistry.shared.dialWarnings(device.address).takeIf { it.isNotEmpty() }?.let { warnings ->
+            android.util.Log.i("BluetoothVideo", "BENCHMARK gatt_dial_warning: owner=ble-control | warnings=${warnings.joinToString(",")}")
+        }
+        val gatt = GattConnectCompat.connect(
+            device,
+            context,
             callback,
             BluetoothDevice.TRANSPORT_LE,
-            controlInitiatingPhys(phyPreference),
+            owner = "ble-control",
+            phyMask = controlInitiatingPhys(phyPreference),
         ) ?: throw IOException("Could not start BLE channel discovery")
         try {
             if (!latch.await(CONTROL_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
@@ -1295,14 +1518,17 @@ object BleL2capPsmReader {
             }
             error.get()?.let { throw IOException(it) }
             val psm = result.get() ?: throw IOException("Receiver returned no BLE video channel")
+            // The control link now backs a live call or stream: the registry must never treat it as an idle leak.
+            GattResourceRegistry.shared.setActive(gatt, true)
             return BleL2capControlConnection(
                 psm, gatt, phyStatus, attempt, adaptivePhy(gatt), phyPreference, phyDeferred,
                 priorityRequest = { priority -> priorityKeeper.request(priority) },
+                gate = gate,
             )
         } catch (error: Exception) {
             // Expired attempt: cancelled before teardown so a deferred close cannot overlap the retry.
             attempt.disconnectAndClose(gatt, "ble-control-setup")
-            throw error
+            throw if (error is IOException) carryLinkReached(error, linkConnected.get()) else error
         }
     }
 

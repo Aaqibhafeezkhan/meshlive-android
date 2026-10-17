@@ -95,7 +95,8 @@ class LeConnectionPriorityKeeperTest {
         h.keeper.request(BleConnectionPriority.HIGH)
         h.keeper.onConnectionUpdated(0x3B)
         assertTrue(h.pending.isEmpty())
-        assertTrue(h.lines.single().contains("control arm"))
+        // The request itself also logs the parameters it sets (batch P, CONN-01); the retry line is the one under test.
+        assertTrue(h.lines.single { "le_priority_retry" in it }.contains("control arm"))
         assertTrue(DebugTunables.lePriorityRetry)
     }
 }

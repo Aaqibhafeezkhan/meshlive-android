@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Messaging v2 phase 1c (experimental, test_messaging_v2): the Contacts rows and the thread screen. Sentence case, no IDs.
+     The JVM tests read this file, so a key used by MessagingV2ThreadModel.kt must exist here. -->
+<resources>
+    <!-- Contacts rows -->
+    <string name="mv2_ui_nearby_now">Nearby now</string>
+    <string name="mv2_ui_verified">Verified</string>
+    <string name="mv2_ui_today">Today</string>
+    <string name="mv2_ui_yesterday">Yesterday</string>
+    <string name="mv2_ui_unread_count">%1$d unread</string>
+    <string name="mv2_ui_preview_photo">Photo</string>
+    <string name="mv2_ui_preview_video">Video</string>
+    <string name="mv2_ui_preview_voice">Voice note</string>
+    <string name="mv2_ui_preview_file">File</string>
+    <string name="mv2_ui_preview_message">Message</string>
+    <string name="mv2_ui_row_keys_changed">Keys changed. Compare again.</string>
+    <string name="mv2_ui_open_thread">Open messages with %1$s</string>
+
+    <!-- Notifications: one per conversation; the lock screen shows only the generic line -->
+    <string name="mv2_ui_notify_channel_name">Messages</string>
+    <string name="mv2_ui_notify_channel_description">New messages from your contacts. Sound, vibration and pop-ups are set in the system settings for this channel.</string>
+    <string name="mv2_ui_notify_new_message">New message</string>
+    <string name="mv2_ui_notify_new_messages">%1$d new messages</string>
+    <string name="mv2_ui_notify_mark_read">Mark as read</string>
+
+    <!-- Message states -->
+    <string name="mv2_ui_state_waiting">Waiting</string>
+    <string name="mv2_ui_state_sending">Sending</string>
+    <string name="mv2_ui_state_delivered">Delivered</string>
+    <string name="mv2_ui_state_downloaded">Downloaded</string>
+    <string name="mv2_ui_state_read">Read</string>
+    <string name="mv2_ui_state_not_sent">Not sent</string>
+    <string name="mv2_ui_caption_waiting">Waiting for %1$s to be nearby</string>
+    <string name="mv2_ui_caption_sending">Sending to %1$s</string>
+    <string name="mv2_ui_caption_delivered">Delivered to %1$s, %2$s</string>
+    <string name="mv2_ui_caption_downloaded">Downloaded by %1$s, %2$s</string>
+    <string name="mv2_ui_caption_read">Read by %1$s, %2$s</string>
+    <string name="mv2_ui_caption_not_sent">Not sent. Tap Retry to send it again.</string>
+    <string name="mv2_ui_retry">Retry</string>
+
+    <!-- Thread top bar and list -->
+    <string name="mv2_ui_state_nearby">Nearby</string>
+    <string name="mv2_ui_state_not_nearby">Not nearby</string>
+    <string name="mv2_ui_state_not_verified">Not verified yet</string>
+    <string name="mv2_ui_unread_marker">Unread messages</string>
+    <string name="mv2_ui_empty_thread">No messages yet. Anything you write is sent when %1$s is nearby.</string>
+    <string name="mv2_ui_legacy_kind">Older message: %1$s, %2$s</string>
+    <string name="mv2_ui_disappears_minutes">Disappears in %1$d min</string>
+    <string name="mv2_ui_disappears_hours">Disappears in %1$d h</string>
+    <string name="mv2_ui_disappears_days">Disappears in %1$d days</string>
+    <string name="mv2_ui_voice_call">Voice call</string>
+    <string name="mv2_ui_video_call">Video call</string>
+    <string name="mv2_ui_more">More</string>
+    <string name="mv2_ui_back">Back</string>
+
+    <!-- Banners and composer -->
+    <string name="mv2_ui_banner_not_contact">%1$s is not a contact yet. Add them to send messages.</string>
+    <string name="mv2_ui_banner_card_pending">Compare safety numbers with %1$s to start messaging.</string>
+    <string name="mv2_ui_banner_keys_changed">%1$s\'s keys changed. Nothing is sent until you compare again.</string>
+    <string name="mv2_ui_banner_peer_older">%1$s\'s app is older. They need to update to receive.</string>
+    <string name="mv2_ui_action_add_contact">Add contact</string>
+    <string name="mv2_ui_action_compare">Compare</string>
+    <string name="mv2_ui_action_accept_keys">Accept new keys</string>
+    <string name="mv2_ui_action_dismiss">Dismiss</string>
+    <string name="mv2_ui_accept_keys_title">Accept new keys?</string>
+    <string name="mv2_ui_accept_keys_message">Accept only if you compared the new safety number with this person in person. Messages that were waiting are sent again with the new keys.</string>
+    <string name="mv2_ui_composer_hint">Message</string>
+    <string name="mv2_ui_composer_off_not_contact">Add this contact to send messages</string>
+    <string name="mv2_ui_composer_off_card_pending">Compare safety numbers first</string>
+    <string name="mv2_ui_composer_off_keys_changed">Compare keys to send messages</string>
+    <string name="mv2_ui_send">Send</string>
+    <string name="mv2_ui_attach">Attach</string>
+    <string name="mv2_ui_voice_hold">Hold to record a voice note</string>
+    <string name="mv2_ui_voice_recording">Recording %1$s. Release to send.</string>
+    <string name="mv2_ui_voice_cancelled">Voice note cancelled</string>
+    <string name="mv2_ui_voice_too_short">Hold longer to record</string>
+    <string name="mv2_ui_voice_permission">Allow the microphone to record voice notes</string>
+    <string name="mv2_ui_preparing">Preparing to send</string>
+    <string name="mv2_ui_send_failed">Could not send: %1$s</string>
+    <string name="mv2_ui_send_full">Message storage is full. Delete something and try again.</string>
+    <string name="mv2_ui_file_gone">The file is no longer on this phone. Choose it again.</string>
+
+    <!-- Attach sheet -->
+    <string name="mv2_ui_attach_title">Send</string>
+    <string name="mv2_ui_attach_original">Send original</string>
+    <string name="mv2_ui_attach_original_info">Keeps the full picture size.</string>
+
+    <!-- File cards -->
+    <string name="mv2_ui_file_download">Download %1$s</string>
+    <string name="mv2_ui_file_downloading">Downloading %1$d%%</string>
+    <string name="mv2_ui_file_waiting_for">Waiting for %1$s to be nearby</string>
+    <string name="mv2_ui_file_damaged">Damaged. Ask %1$s to send it again.</string>
+    <string name="mv2_ui_file_unavailable">No longer available</string>
+    <string name="mv2_ui_file_cancel">Cancel</string>
+    <string name="mv2_ui_file_cancel_title">Cancel sending?</string>
+    <string name="mv2_ui_file_cancel_message">The file is withdrawn if it has not arrived yet.</string>
+    <string name="mv2_ui_file_cancel_confirm">Cancel sending</string>
+    <string name="mv2_ui_file_cancel_keep">Keep</string>
+    <string name="mv2_ui_file_storage_full">Storage for messages is full</string>
+    <string name="mv2_ui_picture_title">Picture</string>
+    <string name="mv2_ui_saved">Saved</string>
+    <string name="mv2_ui_save_failed">Could not save the file</string>
+
+    <!-- Thread info and actions -->
+    <string name="mv2_ui_info_title">Conversation</string>
+    <string name="mv2_ui_info_disappearing">Disappearing messages</string>
+    <string name="mv2_ui_info_read_receipts">Read receipts</string>
+    <string name="mv2_ui_info_read_receipts_info">Both of you need them on. Off by default.</string>
+    <string name="mv2_ui_info_contact">Contact details</string>
+    <string name="mv2_ui_info_compare">Compare safety numbers</string>
+    <string name="mv2_ui_info_delete">Delete conversation</string>
+    <string name="mv2_ui_delete_title">Delete this conversation?</string>
+    <string name="mv2_ui_delete_message">Every message and file with %1$s is removed from this phone. They keep their own copy.</string>
+    <string name="mv2_ui_delete_confirm">Delete</string>
+    <string name="mv2_ui_timer_off">Off</string>
+    <string name="mv2_ui_timer_hour">1 hour</string>
+    <string name="mv2_ui_timer_day">1 day</string>
+    <string name="mv2_ui_timer_week">1 week</string>
+    <string name="mv2_ui_timer_month">30 days</string>
+    <string name="mv2_ui_delete_message_title">Delete this message?</string>
+
+    <!-- Settings > Privacy -->
+    <string name="mv2_ui_settings_read_receipts">Read receipts</string>
+    <string name="mv2_ui_settings_read_receipts_info">When this is on and the other person has it on too, they see when you read their messages. Each conversation can differ.</string>
+    <string name="mv2_ui_settings_autodl">Download files automatically</string>
+    <string name="mv2_ui_settings_autodl_info">Files up to this size are fetched without a tap when the person is nearby. Bigger files wait for you to tap Download. Nothing downloads during a call or a live stream.</string>
+    <string name="mv2_ui_autodl_never">Never</string>
+    <string name="mv2_ui_autodl_1">Up to 1 MB</string>
+    <string name="mv2_ui_autodl_8">Up to 8 MB</string>
+    <string name="mv2_ui_autodl_25">Up to 25 MB</string>
+    <string name="mv2_ui_autodl_any">Any size</string>
+</resources>

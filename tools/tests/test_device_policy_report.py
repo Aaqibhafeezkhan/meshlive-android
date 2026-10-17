@@ -64,6 +64,20 @@ class DevicePolicyReportTest(unittest.TestCase):
         self.assertEqual("BLUETOOTH_MODULE", report.derive_stack_lineage(33))
         self.assertEqual("PLATFORM_SYSTEM_BT", report.derive_stack_lineage(32))
 
+    def test_stack_eras_and_umbrellas_match_the_kotlin_covers_rule(self):
+        eras = {29: "LEGACY_29_30", 30: "LEGACY_29_30", 31: "LEGACY_GD_OPTIONAL_31_32", 32: "LEGACY_GD_OPTIONAL_31_32",
+                33: "GD_CORE_33", 34: "GD_FLAGGED_34", 35: "ACONFIG_35_PLUS", 36: "ACONFIG_35_PLUS"}
+        for sdk, era in eras.items():
+            self.assertEqual(era, report.derive_stack_era(sdk))
+        self.assertTrue(report.lineage_covers("PLATFORM_SYSTEM_BT", "LEGACY_GD_OPTIONAL_31_32"))
+        self.assertFalse(report.lineage_covers("PLATFORM_SYSTEM_BT", "GD_CORE_33"))
+        self.assertTrue(report.lineage_covers("BLUETOOTH_MODULE", "ACONFIG_35_PLUS"))
+        self.assertTrue(report.lineage_covers("GD_FLAGGED_34", "GD_FLAGGED_34"))
+        self.assertFalse(report.lineage_covers("GD_FLAGGED_34", "GD_CORE_33"))
+        matcher = dict(REGISTRY["entries"][0]["matcher"], patch_min="2024-05-01")
+        traits = report.complete_traits({"sdk": 34})
+        self.assertFalse(report.matcher_matches(matcher, traits), "an unread patch level never satisfies a constraint")
+
     def test_markdown_lists_every_entry_its_sources_and_gaps(self):
         code, out = run()
         self.assertEqual(0, code)

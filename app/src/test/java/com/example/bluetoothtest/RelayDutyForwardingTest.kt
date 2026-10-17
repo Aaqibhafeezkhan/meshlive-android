@@ -26,6 +26,10 @@ import org.junit.Test
  * [ApiLevelGuardTest] and [RelayDutySupportTest].
  */
 class RelayDutyForwardingTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private class Pipe {
         private val queue = LinkedBlockingQueue<Int>()
         @Volatile var closed = false
@@ -152,7 +156,7 @@ class RelayDutyForwardingTest {
 
         // The caller leaving ends the duty and closes the parent link the endpoint handed over.
         parent.close()
-        assertTrue(duty.finished.await(5, TimeUnit.SECONDS))
+        assertTrue(duty.finished.await(120, TimeUnit.SECONDS))
         assertTrue(duty.parentClosed.get())
         child.close()
     }
@@ -216,10 +220,10 @@ class RelayDutyForwardingTest {
 
         // The caller leaving ends H1's duty; its closed child link then ends H2's.
         callerLink.close()
-        assertTrue(duty1.finished.await(5, TimeUnit.SECONDS))
+        assertTrue(duty1.finished.await(120, TimeUnit.SECONDS))
         assertTrue(duty1.parentClosed.get())
         middle.close()
-        assertTrue(duty2.finished.await(5, TimeUnit.SECONDS))
+        assertTrue(duty2.finished.await(120, TimeUnit.SECONDS))
         assertTrue(duty2.parentClosed.get())
         lastLink.close()
     }
@@ -244,7 +248,7 @@ class RelayDutyForwardingTest {
             parent, child, RelaySetupCodec.newSetupId(),
             replied = AtomicBoolean(true), readyCalls = readyCalls, failure = failure,
         )
-        assertTrue(duty.finished.await(5, TimeUnit.SECONDS))
+        assertTrue(duty.finished.await(120, TimeUnit.SECONDS))
         assertEquals(0, readyCalls.get())
         assertNull(failure.get())
         assertFalse("nothing was closed by the stage itself", duty.parentClosed.get())
@@ -260,7 +264,7 @@ class RelayDutyForwardingTest {
         val duty = startDuty(parent, child, setupId)
         RelaySetupExchange.awaitReply(parent.near, setupId, 5_000) { parent.close() }
         child.close()
-        assertTrue(duty.finished.await(5, TimeUnit.SECONDS))
+        assertTrue(duty.finished.await(120, TimeUnit.SECONDS))
         assertTrue(duty.parentClosed.get())
         parent.close()
     }

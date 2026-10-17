@@ -186,6 +186,47 @@ class EffectiveCadenceTest(unittest.TestCase):
                 line(1, surface(1)) + line(11, surface(101)) + line(21, surface(201)))
         self.assertEqual("FAIL", score(text, V4)["gates"]["effective_profile_fps"]["status"])
 
+    @staticmethod
+    def _run(slow_intervals, intervals=25, slow_frames=100, fps=15):
+        """Cumulative reports every 10 s; the listed 1-based intervals deliver slow_frames instead of 10 * fps."""
+        text, frames = line(0, surface(1)), 1
+        for index in range(1, intervals + 1):
+            frames += slow_frames if index in slow_intervals else 10 * fps
+            text += line(index * 10, surface(frames))
+        return text
+
+    def test_cadence_judges_the_share_of_time_below_95_percent_and_keeps_the_old_rule_as_a_comparison(self):
+        # One slow 10 s window out of 25 (4% of the time): passes the share rule, fails the old slowest-window rule.
+        gate = score(self._run({5}), V4)["gates"]["effective_profile_fps"]
+        self.assertEqual("PASS", gate["status"])
+        self.assertEqual("time_share_below_fraction", gate["rule"])
+        self.assertEqual(5.0, gate["limit"])
+        self.assertAlmostEqual(4.0, gate["value"], places=6)
+        self.assertEqual(10.0, gate["below_seconds"])
+        self.assertEqual(250.0, gate["scored_seconds"])
+        legacy = gate["legacy_slowest_window"]
+        self.assertEqual("FAIL", legacy["status"])
+        self.assertAlmostEqual(100 / 150, legacy["value"], places=6)
+        self.assertEqual(0.95, legacy["limit"])
+        self.assertIn("comparison only", legacy["label"])
+        # Two slow windows (8% of the time) fail the share rule.
+        failing = score(self._run({5, 6}), V4)["gates"]["effective_profile_fps"]
+        self.assertEqual("FAIL", failing["status"])
+        self.assertAlmostEqual(8.0, failing["value"], places=6)
+        # The longest stall stays its own decisive gate and is echoed on the cadence row.
+        self.assertIn("longest_stall_ms", failing)
+        self.assertEqual("PASS", score(self._run({5}), V4)["gates"]["longest_stall_ms"]["status"])
+
+    def test_a_steady_run_passes_both_the_share_rule_and_the_legacy_comparison(self):
+        gate = score(self._run(set()), V4)["gates"]["effective_profile_fps"]
+        self.assertEqual("PASS", gate["status"])
+        self.assertEqual(0.0, gate["value"])
+        self.assertEqual("PASS", gate["legacy_slowest_window"]["status"])
+
+    def test_the_v3_profile_has_no_cadence_gate_and_is_unchanged(self):
+        self.assertNotIn("effective_profile_fps", score(self._run({5}))["gates"])
+        self.assertNotIn("effective_fps_below_share_percent", scorer.DEFAULT_THRESHOLDS)
+
     def test_without_a_declared_change_it_equals_the_requested_profile(self):
         gate = score(steady(), V4)["gates"]["effective_profile_fps"]
         self.assertEqual("PASS", gate["status"])

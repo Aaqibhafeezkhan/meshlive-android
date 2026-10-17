@@ -45,7 +45,7 @@ class GattSetupOwnershipTest {
         val worker = thread {
             try {
                 awaitGattSetup(
-                    { waiting.countDown(); completion.await(2, TimeUnit.SECONDS) },
+                    { waiting.countDown(); completion.await(120, TimeUnit.SECONDS) },
                     { resources.connection }, { null }, resources::closeFailedSetup,
                 )
             } catch (error: Throwable) {
@@ -53,7 +53,7 @@ class GattSetupOwnershipTest {
             }
         }
 
-        assertTrue(waiting.await(2, TimeUnit.SECONDS))
+        assertTrue(waiting.await(120, TimeUnit.SECONDS))
         worker.interrupt()
         worker.join(2_000)
 

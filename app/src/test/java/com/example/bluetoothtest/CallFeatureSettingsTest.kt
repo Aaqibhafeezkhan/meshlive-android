@@ -36,9 +36,9 @@ class CallFeatureSettingsTest {
     @Test
     fun theOldPreferenceKeysStillCarryTheirSwitches() {
         // Users who turned an Advanced switch on keep it on after promotion.
-        assertEquals("experimental_voice_calls", CallFeature.VOICE_CALLS.prefKey)
+        assertEquals("experimental_voice_calls_v2", CallFeature.VOICE_CALLS.prefKey)
         assertEquals("experimental_store_forward", CallFeature.MESSAGES.prefKey)
-        assertEquals("experimental_peer_labels", CallFeature.NAMES_AND_TITLES.prefKey)
+        assertEquals("experimental_peer_labels_v2", CallFeature.NAMES_AND_TITLES.prefKey)
     }
 
     @Test

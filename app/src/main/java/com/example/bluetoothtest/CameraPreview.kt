@@ -37,9 +37,9 @@ class CameraPreview(
         val cameraId = cameraManager.cameraIdFor(cameraLens)
             ?: error("${cameraLens.displayName} camera is unavailable")
         val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-        continuousAutoFocusAvailable = characteristics
-            .get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
-            ?.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) == true
+        continuousAutoFocusAvailable = safeCameraRead("CONTROL_AF_AVAILABLE_MODES") {
+            characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
+        }?.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) == true
         viewfinderSurface = CameraViewfinderSurface(
             context,
             viewfinder,

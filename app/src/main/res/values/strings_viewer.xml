@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Experimental viewer frame age (ViewerFeatures.kt, ViewerFrameAgeController.kt, phone test T11). -->
 <resources>
-    <string name="feat_viewer_frame_age">Show when the picture is out of date</string>
+    <string name="feat_viewer_frame_age">Warn when video freezes</string>
     <string name="feat_viewer_frame_age_description">While you watch a stream, dim a frozen picture and say so when it stops updating or the connection to the sender is lost, instead of leaving it on screen as if it were live. A small label shows how long ago the picture last updated. That time is counted on this phone from the last picture it received; it is not the delay from the camera.</string>
 
     <string name="viewer_signal_lost">Signal lost — reconnecting</string>
@@ -10,4 +10,11 @@
     <string name="viewer_last_update">Last update %1$s ago</string>
     <string name="watch_status_signal_lost">Signal lost</string>
     <string name="watch_status_stalled">Picture stalled</string>
+    <string name="watch_state_muted">Muted</string>
+    <string name="watch_state_camera_off">Camera off</string>
+    <string name="watch_state_muted_camera_off">Camera off, muted</string>
+    <string name="feat_live_media_state">Show Muted and Camera off to viewers</string>
+    <string name="feat_live_media_state_description">While you are live, tell viewers when you mute your microphone or turn your camera off, and show them the same when a broadcaster does. Every phone and relay in the chain needs this version, so keep it off until they have it. Off: viewers just hear silence or see a still picture.</string>
+    <string name="feat_call_bluetooth_output">Bluetooth headset for call audio</string>
+    <string name="feat_call_bluetooth_output_description">Offer a connected Bluetooth headset or speaker in the call audio output list (Android 12 and newer). Bluetooth audio shares the radio that carries the call, so the call can get less reliable. Off: call audio uses the phone speaker, earpiece or a plugged-in headset only.</string>
 </resources>

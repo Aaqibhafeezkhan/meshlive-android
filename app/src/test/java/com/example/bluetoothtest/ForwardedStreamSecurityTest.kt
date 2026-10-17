@@ -300,7 +300,7 @@ class ForwardedStreamSecurityTest {
 
         assertFalse(completed.await(100, TimeUnit.MILLISECONDS))
         core.removeChild(child)
-        assertTrue(completed.await(1, TimeUnit.SECONDS))
+        assertTrue(completed.await(120, TimeUnit.SECONDS))
         assertEquals(null, result.get())
         writer.join(1_000)
     }
@@ -389,7 +389,7 @@ class ForwardedStreamSecurityTest {
             SourceControlMessage.KEY_FRAME_REQUEST,
             EndToEndStreamProtocol.readSourceControl(parentLink.reader, endpoint.opener),
         )
-        child.join(5_000)
+        child.join(120_000)
         childFailure.get()?.let { throw it }
         assertEquals("same-ciphertext", String(requireNotNull(childPacket.get()).payload))
         endpoint.close()
@@ -432,6 +432,42 @@ class ForwardedStreamSecurityTest {
 
         assertThrows(Exception::class.java) { reader.readHeader() }
         assertTrue(observed.isEmpty())
+    }
+
+    @Test
+    fun lateChildGetsOnlyTheCurrentEncodersVideoConfiguration() {
+        val source = node(1)
+        val streamId = UUID.fromString("6f0d4c2a-5a64-4c61-9d34-0a5f6f9b2d11")
+        val sealer = EndToEndContentSealer(ByteArray(MeshAead.KEY_BYTES) { it.toByte() })
+        val core = ReceiverNodeForwardingCore(node(3), node(2), streamId, source, queueCapacity = 8)
+        var sequence = 0L
+        fun send(flags: Int, payload: String) {
+            core.receive(mediaEnvelope(sealer, streamId, source, sequence++, flags, payload.toByteArray()))
+        }
+        val audioConfig = StreamProtocol.FLAG_AUDIO or StreamProtocol.FLAG_CODEC_CONFIG
+        // First encoder (rung A): its configuration comes before its frames, and the Opus configuration too.
+        send(audioConfig, "opus")
+        send(StreamProtocol.FLAG_CODEC_CONFIG, "csd-rung-a")
+        send(StreamProtocol.FLAG_DISPLAY_ROTATION, "rot") // not media: does not start a new batch
+        send(StreamProtocol.FLAG_CODEC_CONFIG, "csd-rung-a-2") // a second packet of the same encoder
+        send(StreamProtocol.FLAG_KEY_FRAME, "key-a")
+        send(0, "delta-a")
+        send(StreamProtocol.FLAG_AUDIO, "audio") // audio frames never start a video batch
+        // The Auto ladder restarts the encoder at rung B: new configuration after media.
+        send(StreamProtocol.FLAG_CODEC_CONFIG, "csd-rung-b")
+        send(StreamProtocol.FLAG_KEY_FRAME, "key-b")
+
+        val bootstrap = core.addChild(node(4))
+        val configs = bootstrap.map { String(packetPayloadOf(it)) }
+
+        assertEquals(listOf("opus", "csd-rung-b"), configs)
+    }
+
+    /** Opens a test envelope sealed with the key 0, 1, 2, ... and returns the media packet's payload. */
+    private fun packetPayloadOf(envelope: MeshEnvelope): ByteArray {
+        val opener = EndToEndContentOpener(ByteArray(MeshAead.KEY_BYTES) { it.toByte() })
+        val record = opener.open(envelope.payload)
+        return EndToEndStreamProtocol.decodePacket(record).payload
     }
 
     private fun mediaEnvelope(

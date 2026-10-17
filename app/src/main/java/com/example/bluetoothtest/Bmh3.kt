@@ -290,12 +290,14 @@ class Bmh3Result(
     val sendKey: ByteArray,
     val receiveKey: ByteArray,
     val exporter: ByteArray,
-    /** Responder only: msg1's tag matched one of its lease keys. */
+    /** Responder only: msg1's tag matched one of its lease keys (or the live verification code). */
     val tagMatched: Boolean,
     /** True when this phone itself presented a pseudonym in this handshake. */
     val ownPseudonymous: Boolean = false,
     /** The SPKI this phone presented (what a later reveal names as its pseudonym). */
     val ownSpki: ByteArray = ByteArray(0),
+    /** Responder only: the matching tag was the live verification code's (BVMID2), so the session is verify-only. */
+    val qrTagMatched: Boolean = false,
 ) {
     fun wipe() {
         sendKey.fill(0)
@@ -323,10 +325,32 @@ class Bmh3ReplayCache(private val capacity: Int = 4_096) {
  * ([Bmh3Crypto.advertBinding]), so a recorded tag is useless against the responder's next advert. [expectedPeer]
  * (initiator side) is the contact the selected advert was recognised as: its full node ID must be the answerer's.
  */
-class Bmh3ContactTag(val key: ByteArray, val binding: ByteArray, val expectedPeer: NodeId? = null) {
+class Bmh3ContactTag(
+    val key: ByteArray,
+    val binding: ByteArray,
+    val expectedPeer: NodeId? = null,
+    /**
+     * Naming v2 / BVMID2: non-null when this tag key comes from the secret `K_qr` of a verification code on the responder's
+     * screen, not from a presence lease. A match presents the real key like any tag, but the gate reserves the code for ONE
+     * logical attempt (both handshake layers of the connection), and the session it opens is scoped to verifying.
+     */
+    val qrGate: QrTagGate? = null,
+) {
+    val isQr: Boolean get() = qrGate != null
+
     init {
         require(key.size == 32 && binding.size == Bmh3Wire.BINDING_BYTES)
     }
+}
+
+/**
+ * The responder-side hook of a verification code ([QrCodeDisplay]; PROTOCOL "Verification code BVMID2"). It runs at msg1,
+ * after the tag matched and before any key is drawn or signature made. [onTagMatch] atomically reserves the code for the
+ * connection's attempt (link layer first, then the end-to-end layer of the SAME connection), spends the global signing
+ * budget, enforces the per-code attempt cap and the replay pins. It throws [Bmh3Failure] to close silently.
+ */
+interface QrTagGate {
+    fun onTagMatch(purpose: Bmh3Purpose, msg1Ephemeral: ByteArray)
 }
 
 internal object Bmh3Crypto {
@@ -335,6 +359,7 @@ internal object Bmh3Crypto {
     private val B = BigInteger("5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b", 16)
     private val THREE = BigInteger.valueOf(3)
     private val TAG_INFO = "BluetoothVideoMesh/BMH3/ContactTag/1".toByteArray(Charsets.US_ASCII)
+    private val QR_TAG_INFO = "BluetoothVideoMesh/BMH3/QrTag/1".toByteArray(Charsets.US_ASCII)
 
     fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
 
@@ -360,6 +385,12 @@ internal object Bmh3Crypto {
     fun contactTagKey(leaseKey: ByteArray): ByteArray {
         require(leaseKey.size == 32) { "A lease key is 32 bytes" }
         return expand(leaseKey, TAG_INFO)
+    }
+
+    /** BVMID2: `K_tag = HKDF-Expand(K_qr, "BluetoothVideoMesh/BMH3/QrTag/1", 32)` (never `K_qr` itself). */
+    fun qrTagKey(kQr: ByteArray): ByteArray {
+        require(kQr.size == 32) { "K_qr is 32 bytes" }
+        return expand(kQr, QR_TAG_INFO)
     }
 
     fun contactTag(purpose: Bmh3Purpose, tagKey: ByteArray, msg1WithZeroTag: ByteArray, binding: ByteArray): ByteArray =
@@ -610,7 +641,13 @@ internal abstract class Bmh3Party(
         throw Bmh3Failure("aead")
     }
 
-    protected fun finishSession(peer: Bmh3Peer, order: Bmh3Order, initiator: Boolean, tagMatched: Boolean): Bmh3Result {
+    protected fun finishSession(
+        peer: Bmh3Peer,
+        order: Bmh3Order,
+        initiator: Boolean,
+        tagMatched: Boolean,
+        qrTagMatched: Boolean = false,
+    ): Bmh3Result {
         val thFinal = Bmh3Crypto.th(config.purpose, transcriptBytes())
         val ms = Bmh3Crypto.extract(thFinal, derived)
         val i2r = Bmh3Crypto.label(config.purpose, ms, "app i2r")
@@ -626,6 +663,7 @@ internal abstract class Bmh3Party(
         return Bmh3Result(
             order, peer, if (initiator) i2r else r2i, if (initiator) r2i else i2r, exporter, tagMatched,
             ownPseudonymous = presented.pseudonym, ownSpki = presented.identity.publicKeyEncoded.copyOf(),
+            qrTagMatched = qrTagMatched,
         )
     }
 
@@ -767,9 +805,13 @@ internal class Bmh3Responder(
 ) : Bmh3Party(config, "Responder") {
     private var started = false
     private var tagMatched = false
+    private var qrMatched = false
     private var msg2Clear: ByteArray = ByteArray(0)
 
     val chosenOrder: Bmh3Order? get() = order
+
+    /** True when the matching tag was a verification code's (BVMID2; valid after [onMessage1]). */
+    val qrTagMatched: Boolean get() = qrMatched
 
     /** True when msg1's tag matched one of the lease keys (valid after [onMessage1]). */
     val contactTagMatched: Boolean get() = tagMatched
@@ -789,11 +831,22 @@ internal class Bmh3Responder(
         val tag = message.copyOfRange(Bmh3Wire.MSG1_BYTES - Bmh3Wire.TAG_BYTES, Bmh3Wire.MSG1_BYTES)
         // Evaluate every candidate (no early exit): the cost does not depend on which key matched.
         var matched = false
+        var qrHit = false
+        var qrGateHit: QrTagGate? = null
         for (check in tagChecks) {
             val expected = Bmh3Crypto.contactTag(config.purpose, check.key, body + ByteArray(Bmh3Wire.TAG_BYTES), check.binding)
-            if (Bmh3Crypto.constantTimeEquals(expected, tag)) matched = true
+            if (Bmh3Crypto.constantTimeEquals(expected, tag)) {
+                matched = true
+                if (check.qrGate != null && qrGateHit == null) qrGateHit = check.qrGate
+            }
+        }
+        // A verification code: reserve it for this attempt (or fail silently) before anything else happens.
+        qrGateHit?.let { gate ->
+            gate.onTagMatch(config.purpose, peerEphemeral)
+            qrHit = true
         }
         tagMatched = matched
+        qrMatched = qrHit
         val chosen = if (mode == Bmh3ResponderMode.EVERYONE || tagMatched) Bmh3Order.R_FIRST else Bmh3Order.I_FIRST
         if (chosen == Bmh3Order.I_FIRST && flags and Bmh3Wire.FLAG_MAY_REVEAL_FIRST == 0) throw Bmh3Failure("order conflict")
         if (chosen == Bmh3Order.R_FIRST && !tagMatched) beforeReply(false)
@@ -830,7 +883,7 @@ internal class Bmh3Responder(
         peer = initiator
         if (!admitInitiator(initiator, tagMatched)) throw Bmh3Failure(if (chosen == Bmh3Order.R_FIRST) "initiator refused" else "stranger gets a silent close")
         if (chosen == Bmh3Order.R_FIRST) {
-            result = finishSession(initiator, chosen, initiator = false, tagMatched = tagMatched)
+            result = finishSession(initiator, chosen, initiator = false, tagMatched = tagMatched, qrTagMatched = qrMatched)
             return null
         }
         val h4 = header(4, 0)
@@ -838,7 +891,7 @@ internal class Bmh3Responder(
         val message4 = h4 + seal(keyHsR2i, h4, block4)
         append(h4)
         append(block4)
-        result = finishSession(initiator, chosen, initiator = false, tagMatched = tagMatched)
+        result = finishSession(initiator, chosen, initiator = false, tagMatched = tagMatched, qrTagMatched = qrMatched)
         return message4
     }
 

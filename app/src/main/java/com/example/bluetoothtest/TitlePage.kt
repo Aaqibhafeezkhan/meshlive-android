@@ -159,5 +159,18 @@ internal class TitleBoard(private val nowMs: () -> Long = System::currentTimeMil
 internal object StreamTitles {
     val board = TitleBoard()
 
+    /** Called (scanner thread) when a token's assembled title is new or changed: the Live list redraws its rows. */
+    @Volatile var onNewTitle: (() -> Unit)? = null
+    private val shown = HashMap<Int, String>()
+
+    /** True once per new or changed title of a token (bounded: cleared past the board's token limit). */
+    @Synchronized
+    fun isNew(token: Int, title: String): Boolean {
+        if (shown[token] == title) return false
+        if (shown.size >= 64) shown.clear()
+        shown[token] = title
+        return true
+    }
+
     @Volatile var pagesReceived = 0L
 }

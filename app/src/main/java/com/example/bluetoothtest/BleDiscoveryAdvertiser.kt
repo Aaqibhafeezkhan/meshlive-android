@@ -12,6 +12,12 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
+/**
+ * The stream's own (non-connectable) discovery advertisement: the session-critical [AdvertisingSetRole.STABLE] set.
+ * Starting it never throws a platform exception into the caller and a refused start releases a title or reach set
+ * first ([StableAdvertisingSet], device-family batch A). Advertising is never gated on
+ * `isMultipleAdvertisementSupported()`, which is false on phones where advertising works.
+ */
 class BleDiscoveryAdvertiser(
     adapter: BluetoothAdapter,
     private val announcement: DiscoveryAnnouncement,
@@ -64,7 +70,11 @@ class BleDiscoveryAdvertiser(
             advertisement.stop()
             throw IOException("Stream advertising was cancelled")
         }
-        if (status != AdvertisingSetCallback.ADVERTISE_SUCCESS) throw IOException("Stream advertising failed (code $status)")
+        if (status != AdvertisingSetCallback.ADVERTISE_SUCCESS) {
+            // The platform failure in words (and the stuck-slots remedy when MeshLive owns no set and still gets none).
+            val stuck = AdvertisingBudget.shared.stuck()?.takeIf { AdvertisingPolicy.stuckReportOn() }
+            throw IOException("Stream advertising failed (code $status: ${AdvertisingStart.describe(status)})" + (stuck?.let { ". ${it.message}" } ?: ""))
+        }
         running.set(true)
         if (startLowLatency) {
             handler.postDelayed(::switchToBalancedAdvertising, LOW_LATENCY_ADVERTISE_BURST_MS)

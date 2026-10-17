@@ -138,7 +138,7 @@ internal object CodecPolicy {
         DECODER_INIT_FALLBACK,
         RECOVERABLE_CODEC_EXCEPTION,
         EXYNOS_FRAMERATE_ADJUSTER_ARM,
-    )
+    ) + DecoderPolicyEntries.entries
 
     /** At most this many decoders are tried for one stream/call start (the first choice plus two fallbacks). */
     const val MAX_DECODER_INIT_ATTEMPTS = 3
@@ -156,6 +156,11 @@ internal object CodecPolicy {
      *   software-only decoders; never a hardware decoder.
      * - NONE: the framework's choice, then the other decoders, hardware first.
      * At most [MAX_DECODER_INIT_ATTEMPTS] names.
+     *
+     * [lowLatencyFirst] (Experimental `test_decoder_low_latency_ladder`, request NONE only): hardware decoders
+     * whose [DecoderOption.lowLatency] is set come before the framework's choice (Moonlight findKnownSafeDecoder:
+     * Exynos OMX before C2, Qualcomm `.low_latency` variants listed after the standard component). With
+     * [fallback] false it replaces the single choice by the first such decoder. Default false: unchanged.
      */
     fun decoderInitCandidates(
         requested: String?,
@@ -163,16 +168,22 @@ internal object CodecPolicy {
         frameworkChoice: String?,
         supporting: List<DecoderOption>,
         fallback: Boolean,
+        lowLatencyFirst: Boolean = false,
     ): List<String> {
         val requestedMatch = requested?.let { name -> supporting.firstOrNull { it.name.equals(name, ignoreCase = true) } }
-        if (!fallback) return listOfNotNull(requestedMatch?.name ?: frameworkChoice)
+        val lowLatencyHardware = if (lowLatencyFirst && request == DecoderRequest.NONE && requestedMatch == null) {
+            supporting.filter { !it.alias && it.hardware && it.lowLatency }.map { it.name }
+        } else {
+            emptyList()
+        }
+        if (!fallback) return listOfNotNull(requestedMatch?.name ?: lowLatencyHardware.firstOrNull() ?: frameworkChoice)
         val usable = supporting.filterNot { it.alias }
         val ordered = when (request) {
             DecoderRequest.EXPLICIT -> listOfNotNull(requestedMatch?.name)
             DecoderRequest.SOFTWARE_PROTECTION ->
                 listOfNotNull(requestedMatch?.name) + usable.filter { it.softwareOnly }.map { it.name }
             DecoderRequest.NONE ->
-                listOfNotNull(frameworkChoice) + usable.sortedBy { if (it.hardware) 0 else 1 }.map { it.name }
+                lowLatencyHardware + listOfNotNull(frameworkChoice) + usable.sortedBy { if (it.hardware) 0 else 1 }.map { it.name }
         }
         val distinct = ArrayList<String>()
         for (name in ordered) if (distinct.none { it.equals(name, ignoreCase = true) }) distinct += name
@@ -180,11 +191,19 @@ internal object CodecPolicy {
     }
 
     /** The `reason=` token of the BENCHMARK decoder line. */
-    fun decoderSelectionReason(requested: String?, request: DecoderRequest, effective: String?, attempt: Int): String = when {
+    fun decoderSelectionReason(
+        requested: String?,
+        request: DecoderRequest,
+        effective: String?,
+        attempt: Int,
+        /** The Experimental low-latency order put a decoder before the framework's choice and it was used. */
+        lowLatencyReordered: Boolean = false,
+    ): String = when {
         effective == null -> "all-failed"
         requested != null && effective.equals(requested, ignoreCase = true) -> "requested"
         requested != null && attempt == 0 -> "requested-unsupported"
         request == DecoderRequest.SOFTWARE_PROTECTION -> "software-fallback"
+        attempt == 0 && lowLatencyReordered -> "low-latency-first"
         attempt == 0 -> "framework"
         else -> "fallback"
     }
@@ -195,6 +214,21 @@ internal object CodecPolicy {
      */
     fun decoderInitFallbackEnabled(traits: DeviceTraits? = null, benchmarkLaunch: Boolean = DebugTunables.benchmarkLaunch): Boolean =
         !benchmarkLaunch && effectsFor<DecoderInitFallback>(traits).isNotEmpty()
+
+    /**
+     * True when recovery must release and re-create [decoderName] instead of flushing it
+     * (`c2-mtk-release-instead-of-flush`, Media3 b/362904942). Decoder components only: encoders never come here.
+     */
+    fun releaseInsteadOfFlush(decoderName: String, traits: DeviceTraits? = null): Boolean =
+        decoderName.contains(".decoder", ignoreCase = true) &&
+            DeviceFamilyPolicy.componentEffects<ReleaseCodecInsteadOfFlush>(decoderName, traits).isNotEmpty()
+
+    /** `decoder-no-output-watchdog` on (default): stalls are logged; recovery is [DecoderSwitches.stallRecovery]. */
+    fun stallWatchdogEnabled(traits: DeviceTraits? = null): Boolean = effectsFor<DecoderStallWatchdog>(traits).isNotEmpty()
+
+    /** `decoder-bounded-release` on (default): the bounded wait in ms, else null (inline release as before). */
+    fun boundedReleaseTimeoutMs(traits: DeviceTraits? = null): Long? =
+        effectsFor<BoundedDecoderRelease>(traits).minOfOrNull { it.timeoutMs }
 
     /** True when a call decoder failure with this CodecException may re-create the decoder. */
     fun recoverableReinitAllowed(recoverable: Boolean, attempts: Int, traits: DeviceTraits? = null): Boolean {
@@ -258,7 +292,14 @@ enum class DecoderRequest(val label: String) {
 }
 
 /** One decoder that supports the format (MediaCodecInfo flags, API 29+). */
-internal data class DecoderOption(val name: String, val alias: Boolean, val softwareOnly: Boolean, val hardware: Boolean)
+internal data class DecoderOption(
+    val name: String,
+    val alias: Boolean,
+    val softwareOnly: Boolean,
+    val hardware: Boolean,
+    /** FEATURE_LowLatency is declared; read only when the Experimental low-latency order is on. */
+    val lowLatency: Boolean = false,
+)
 
 /** Decoder creation tries the next decoder for the format when one fails ([CodecPolicy.decoderInitCandidates]). */
 internal data object DecoderInitFallback : DevicePolicyEffect {

@@ -57,6 +57,8 @@ internal object LabelText {
         }
         require(scriptsAllowed(normalized)) { "mixed scripts" }
         require(!looksLikeHandle(normalized)) { "looks like a handle" }
+        // Naming v2 (Design G, review F13): a person name may not imitate the marks or a generated name.
+        if (kind == LabelKind.PERSON_NAME) require(!NameTextRules.isReserved(normalized)) { NameTextRules.REASON }
         return normalized
     }
 

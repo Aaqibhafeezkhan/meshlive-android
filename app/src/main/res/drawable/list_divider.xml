@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Thin separator between content-list rows (Live, Calls, Contacts; 2026-10-17 redesign). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/outline" />
+    <size android:height="1dp" />
+</shape>

@@ -11,6 +11,11 @@ enum class CameraLens(
     FRONT(CameraCharacteristics.LENS_FACING_FRONT, "Front"),
 }
 
-fun CameraManager.cameraIdFor(lens: CameraLens): String? = cameraIdList.firstOrNull { id ->
-    getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == lens.lensFacing
+/**
+ * The first camera id facing [lens] (logical ids only: a physical camera id is never targeted, V-17, because
+ * OutputConfiguration.setPhysicalCameraId makes some Samsung/Xiaomi/Sony HALs fail with ERROR_CAMERA_DEVICE).
+ * An id whose characteristics cannot be read is skipped instead of crashing the lookup (V-04).
+ */
+fun CameraManager.cameraIdFor(lens: CameraLens): String? = pickCameraId(cameraIdList, lens.lensFacing) { id ->
+    getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING)
 }

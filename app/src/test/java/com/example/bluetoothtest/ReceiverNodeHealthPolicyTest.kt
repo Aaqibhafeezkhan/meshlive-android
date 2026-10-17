@@ -35,6 +35,29 @@ class ReceiverNodeHealthPolicyTest {
         }
     }
 
+    // lane15 chain5: the S22 relay received at p95 ~133 ms before its child joined (15 FPS limit 116.7 ms) and
+    // detached the child ~14 s later on its own normal cadence.
+    @Test
+    fun experimentalBaselineP95KeepsAChildWhenTheNodeWasAlreadyAtThatCadence() {
+        val off = ReceiverNodeHealthPolicy(fps = 15, baselineP95 = false)
+        off.childConnected(snapshot(samples = 60, p50Ms = 67.0, p95Ms = 133.0))
+        repeat(2) { assertFalse(off.shouldDetachChild(snapshot(samples = 60, p95Ms = 133.0))) }
+        assertTrue(off.shouldDetachChild(snapshot(samples = 60, p95Ms = 133.0)))
+
+        val on = ReceiverNodeHealthPolicy(fps = 15, baselineP95 = true)
+        on.childConnected(snapshot(samples = 60, p50Ms = 67.0, p95Ms = 133.0))
+        repeat(5) { assertFalse(on.shouldDetachChild(snapshot(samples = 60, p95Ms = 140.0))) }
+    }
+
+    @Test
+    fun experimentalBaselineP95StillDetachesARealRegression() {
+        val on = ReceiverNodeHealthPolicy(fps = 15, baselineP95 = true)
+        on.childConnected(snapshot(samples = 60, p50Ms = 67.0, p95Ms = 133.0))
+        assertFalse(on.shouldDetachChild(snapshot(samples = 60, p95Ms = 200.0)))
+        assertFalse(on.shouldDetachChild(snapshot(samples = 60, p95Ms = 200.0)))
+        assertTrue(on.shouldDetachChild(snapshot(samples = 60, p95Ms = 200.0)))
+    }
+
     @Test
     fun startupOutliersDoNotHideAForwardingRegression() {
         val policy = ReceiverNodeHealthPolicy(fps = 15)

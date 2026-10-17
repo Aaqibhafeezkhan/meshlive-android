@@ -65,6 +65,39 @@ internal object ClassicConnector {
          */
         exactDeviceOnly: Boolean = false,
     ): Connected {
+        // Pairing requests and bond changes are only logged, for the whole connect (classic-pairing-request-logging).
+        val watch = if (CocPolicy.current().has<ClassicPairingRequestLogging>()) {
+            ClassicPairingWatch.start(context, role.label)
+        } else {
+            null
+        }
+        try {
+            return connectPlanned(
+                context, adapter, discovered, announcedPrefix, role, verifyLinkPrefix, totalBudgetMs, allowInquiry,
+                isCancelled, onSocket, handshake, verify, onStatus, exactDeviceOnly,
+            )
+        } finally {
+            watch?.close()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectPlanned(
+        context: Context,
+        adapter: BluetoothAdapter,
+        discovered: BluetoothDevice,
+        announcedPrefix: ByteArray?,
+        role: ClassicRole,
+        verifyLinkPrefix: Boolean,
+        totalBudgetMs: Long,
+        allowInquiry: Boolean,
+        isCancelled: () -> Boolean,
+        onSocket: (BluetoothSocket) -> Unit,
+        handshake: (BluetoothSocket) -> SecureBluetoothSession,
+        verify: (SecureBluetoothSession) -> Unit,
+        onStatus: (String) -> Unit,
+        exactDeviceOnly: Boolean,
+    ): Connected {
         val bondFree = ClassicFeatures.current.bondFree
         val legacy = !ClassicFeatures.current.usesBoundedConnect
         val relayedRoute = announcedPrefix != null && !verifyLinkPrefix
@@ -110,6 +143,8 @@ internal object ClassicConnector {
                 "bondFree=$bondFree | legacy=$legacy | unresolved=$unresolved | candidates=" +
                 plan.joinToString(",") { "${it.kind.label}:...${it.device.address.takeLast(5)}" },
         )
+        // At most 6 distinct RFCOMM peers per phone (classic-rfcomm-peer-cap): refuse a new one as capacity.
+        ClassicRfcommCap.admitOrThrow(plan.map { it.device.address }) { Log.i("BluetoothVideo", it) }
         val startedNs = System.nanoTime()
         var failure: Exception? = null
         if (plan.isNotEmpty()) {
@@ -152,7 +187,7 @@ internal object ClassicConnector {
         Log.i(
             "BluetoothVideo",
             "Classic connect failed | role=${role.label} | unresolved=$unresolved | elapsedMs=$elapsedMs | " +
-                "error=${failure?.let { "${it.javaClass.simpleName}: ${it.message}" } ?: "no candidate"}",
+                "error=${failure?.let { "${it.javaClass.simpleName}: ${it.message} | ${CocSocketErrors.describe(it)}" } ?: "no candidate"}",
         )
         if (unresolved) throw ClassicPeerUnresolvedException(classicUnresolvedPeerMessage(bondFree), failure)
         if (legacy && role == ClassicRole.STREAM_SENDER && bonded.isEmpty()) {
@@ -183,46 +218,57 @@ internal object ClassicConnector {
         var openedKind = ClassicCandidateKind.DISCOVERED
         val bonded = runCatching { adapter.bondedDevices.orEmpty().map { it.address.uppercase() }.toSet() }
             .getOrDefault(emptySet())
-        val (socket, session) = connectAuthenticatedClassicCandidate(
-            candidates,
-            timeoutMs,
-            isCancelled,
-            { candidate ->
-                openedKind = candidate.kind
-                ClassicSockets.create(candidate.device, role)
-            },
-            onSocket,
-            { candidateSocket ->
-                candidateSocket.connect()
-                handshake(candidateSocket)
-            },
-            { candidateSession ->
-                if (checkLinkIdentity) {
-                    classicLinkIdentityProblem(
-                        candidateSession.peerNodeId.toByteArray(),
-                        announcedPrefix,
-                        verifyLinkPrefix,
-                    )?.let { problem -> throw IllegalArgumentException(problem) }
-                }
-                verify(candidateSession)
-            },
-            { candidate, error ->
-                Log.i(
-                    "BluetoothVideo",
-                    "Classic candidate failed | role=${role.label} | kind=${candidate.kind.label} | " +
-                        "address=...${candidate.device.address.takeLast(5)} | " +
-                        "bonded=${candidate.device.address.uppercase() in bonded} | " +
-                        "error=${error.javaClass.simpleName}: ${error.message}",
-                )
-                // An address that authenticated as someone else is wrong, not just out of reach.
-                if (candidate.kind == ClassicCandidateKind.LEARNED && error is IllegalArgumentException &&
-                    announcedPrefix != null
-                ) {
-                    ClassicAddressBook.forget(announcedPrefix, candidate.device.address)
-                }
-            },
-            totalBudgetMs,
-        )
+        // The socket security of this whole connect is fixed now: no bond-free connect turns secure midway.
+        val bondFree = ClassicFeatures.current.bondFree
+        val guardRuntime = CocPolicy.current().has<ClassicConnectRuntimeGuard>()
+        val (socket, session) = ClassicConnectProgress.track(candidates.map { it.device.address }) {
+            connectAuthenticatedClassicCandidate(
+                candidates,
+                timeoutMs,
+                isCancelled,
+                { candidate ->
+                    openedKind = candidate.kind
+                    ClassicSockets.create(candidate.device, role, bondFree)
+                },
+                onSocket,
+                { candidateSocket ->
+                    if (guardRuntime) {
+                        // A framework RuntimeException (Briar: NPE on Huawei Android 9) is a failed attempt.
+                        ClassicConnectGuard.connect(role.label, { Log.i("BluetoothVideo", it) }) { candidateSocket.connect() }
+                    } else {
+                        candidateSocket.connect()
+                    }
+                    handshake(candidateSocket)
+                },
+                { candidateSession ->
+                    if (checkLinkIdentity) {
+                        classicLinkIdentityProblem(
+                            candidateSession.peerNodeId.toByteArray(),
+                            announcedPrefix,
+                            verifyLinkPrefix,
+                        )?.let { problem -> throw IllegalArgumentException(problem) }
+                    }
+                    verify(candidateSession)
+                },
+                { candidate, error ->
+                    Log.i(
+                        "BluetoothVideo",
+                        "Classic candidate failed | role=${role.label} | kind=${candidate.kind.label} | " +
+                            "address=...${candidate.device.address.takeLast(5)} | " +
+                            "bonded=${candidate.device.address.uppercase() in bonded} | " +
+                            "error=${error.javaClass.simpleName}: ${error.message} | ${CocSocketErrors.describe(error)}",
+                    )
+                    // An address that authenticated as someone else is wrong, not just out of reach.
+                    if (candidate.kind == ClassicCandidateKind.LEARNED && error is IllegalArgumentException &&
+                        announcedPrefix != null
+                    ) {
+                        ClassicAddressBook.forget(announcedPrefix, candidate.device.address)
+                    }
+                },
+                totalBudgetMs,
+            )
+        }
+        ClassicRfcommCap.note(socket)
         learnClassicPeerAddress(socket, session.peerNodeId, "outgoing")
         Log.i(
             "BluetoothVideo",
@@ -278,6 +324,7 @@ internal object ClassicInquiry {
         // These actions are protected system broadcasts; no other app can send them.
         ContextCompat.registerReceiver(appContext, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
         try {
+            EncoderBenchGuard.check("ClassicConnector.discovery")
             val startedDiscovery = runCatching { adapter.startDiscovery() }.getOrDefault(false)
             if (!startedDiscovery) {
                 Log.i("BluetoothVideo", "Classic inquiry could not start (permission, location or radio state)")

@@ -30,7 +30,8 @@ class DeviceFamilyPolicyTest {
         // The per-area lists are part of the one registry.
         assertTrue(DeviceFamilyPolicy.entries.containsAll(CodecPolicy.entries + YuvPolicy.entries +
             BluetoothTransportPolicy.entries + BackgroundPolicy.entries + MemoryThermalPolicy.entries +
-            NativeCompat.policyEntries))
+            NativeCompat.policyEntries + ScanPolicy.entries + ServiceFamilyPolicy.entries + AudioPolicyEntries.entries +
+            CocPolicy.entries + CameraPolicy.entries + AdvertisingPolicy.entries + PhyLinkPolicy.entries))
     }
 
     @Test
@@ -67,7 +68,9 @@ class DeviceFamilyPolicyTest {
         for ((alias, ids) in expected) {
             val resolved = DeviceFamilyPolicy.resolve(known.getValue(alias).traits, emptySet())
             // Universal entries (memory, thermal, native build) and area-owned transport/background rules have their own tests.
-            val areaOwned = (BluetoothTransportPolicy.entries + BackgroundPolicy.entries).map { it.id }.toSet()
+            val areaOwned = (BluetoothTransportPolicy.entries + BackgroundPolicy.entries + ScanPolicy.entries +
+                ServiceFamilyPolicy.entries + AudioPolicyEntries.entries + CocPolicy.entries + CameraPolicy.entries +
+                AdvertisingPolicy.entries + PhyLinkPolicy.entries).map { it.id }.toSet()
             val familyRules = resolved.active.filter { it.component == null && !it.matcher.universal && it.id !in areaOwned }
             assertEquals(alias, ids, familyRules.map { it.id })
         }
@@ -217,8 +220,11 @@ class DeviceFamilyPolicyTest {
         assertEquals(OemSkin.COLOROS, deriveOemSkin("OPPO"))
         assertEquals(OemSkin.ASUS, deriveOemSkin("asus"))
         assertEquals(OemSkin.OTHER, deriveOemSkin(""))
-        assertEquals(BluetoothStackLineage.PLATFORM_SYSTEM_BT, deriveStackLineage(32))
-        assertEquals(BluetoothStackLineage.BLUETOOTH_MODULE, deriveStackLineage(33))
+        // Five eras (bluetooth.md entry 29); the two old values remain as umbrellas (see DeviceStackLineageTest).
+        assertEquals(BluetoothStackLineage.LEGACY_GD_OPTIONAL_31_32, deriveStackLineage(32))
+        assertEquals(BluetoothStackLineage.PLATFORM_SYSTEM_BT, deriveStackLineage(32).umbrella)
+        assertEquals(BluetoothStackLineage.GD_CORE_33, deriveStackLineage(33))
+        assertEquals(BluetoothStackLineage.BLUETOOTH_MODULE, deriveStackLineage(33).umbrella)
     }
 
     /**

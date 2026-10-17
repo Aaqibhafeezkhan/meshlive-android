@@ -115,6 +115,14 @@ def launch_extras(args):
               "test_playback_gain": args.playback_gain}
     if args.voice:
         extras["test_voice_calls"] = True  # voice invites/offers need it on both endpoints
+    for item in getattr(args, "extra", None) or []:
+        # A DEBUG benchmark launch reads only its extras, so user-default features (rotating IDs, BMH3, pseudonyms,
+        # "Find iPhones") must be passed explicitly: KEY=true|false|<int>|<text>.
+        key, _, value = item.partition("=")
+        if not key.startswith("test_") or not value:
+            raise SystemExit(f"--extra needs test_KEY=VALUE, got {item!r}")
+        lowered = value.lower()
+        extras[key] = (lowered == "true") if lowered in ("true", "false") else int(value) if value.isdigit() else value
     return extras
 
 
@@ -490,6 +498,8 @@ def build_parser():
         item.add_argument("--rate-control", default="automatic")
         item.add_argument("--playback-gain", type=float, default=0.05, help="runner default 0.05; 1.0 = full volume")
         item.add_argument("--active-timeout", type=float, default=45, help="accept/answer to ACTIVE")
+        item.add_argument("--extra", action="append", metavar="test_KEY=VALUE",
+                          help="additional launch extra, repeatable (e.g. test_rotating_ids=true)")
     callee, caller = sub.choices["callee"], sub.choices["caller"]
     callee.add_argument("--ring-timeout", type=float, default=180, help="wait for the incoming ring")
     caller.add_argument("--peer", required=True, help="12-hex node prefix or SSSSS-SSSSS handle")

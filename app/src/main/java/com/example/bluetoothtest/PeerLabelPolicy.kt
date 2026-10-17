@@ -82,9 +82,18 @@ internal object TitleAdvertisingDecision {
         data class Skip(val reason: String) : Outcome()
     }
 
-    /** [freeSets] is the last probe result (null: not probed yet, so probe first). */
-    fun decide(policyAllows: Boolean, freeSets: Int?, minFree: Int = TitleAdvertiser.MIN_FREE_SETS): Outcome = when {
+    /**
+     * [freeSets] is the last probe result (null: not probed yet, so probe first). [budgetSkip] is the reason the
+     * learned advertising-set budget ([AdvertisingBudget.skipReason]) leaves no room for the title set, or null.
+     */
+    fun decide(
+        policyAllows: Boolean,
+        freeSets: Int?,
+        minFree: Int = TitleAdvertiser.MIN_FREE_SETS,
+        budgetSkip: String? = null,
+    ): Outcome = when {
         !policyAllows -> Outcome.Skip("device_policy")
+        budgetSkip != null -> Outcome.Skip(budgetSkip)
         freeSets != null && freeSets < minFree -> Outcome.Skip("probe_found_$freeSets")
         else -> Outcome.Start
     }

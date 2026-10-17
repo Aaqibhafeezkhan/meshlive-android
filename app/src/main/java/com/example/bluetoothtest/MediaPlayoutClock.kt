@@ -36,6 +36,12 @@ class MediaPlayoutClock(
      * and more held latency; the A/B measures which users see as better.
      */
     private val burstGrowthFactor: Double? = DebugTunables.playoutBurstGrowth,
+    /**
+     * Experimental time-based target (Q31, DebugTunables.playoutTimeTarget, null = off, streams only):
+     * the delay grows to the measured arrival jitter before a frame is late, and calm shrinking stops at
+     * it. The lateness rule above still applies, and still reaches [adaptiveMaxDelayMs].
+     */
+    private val timeTarget: PlayoutJitterTarget? = null,
 ) {
     private val calmBeforeShrinkNs = calmBeforeShrinkMs * NANOS_PER_MILLISECOND
     private var anchorPresentationUs: Long? = null
@@ -46,6 +52,8 @@ class MediaPlayoutClock(
     private var lastShrinkNs = Long.MIN_VALUE
     /** Extra delay kept even when calm (see [reserve]). */
     private var reservedExtraNs = 0L
+    /** Extra delay the time-based target currently asks for; calm shrinking stops there (0 when off). */
+    private var timeFloorNs = 0L
 
     /** Times the anchor moved earlier because packets arrived ahead of a stale anchor. */
     @Volatile var reanchors = 0
@@ -93,6 +101,9 @@ class MediaPlayoutClock(
         }
     }
 
+    /** Time-based target counters for the viewer's `playout_time_target` line; null with the arm off. */
+    fun timeTargetSummary(): String? = timeTarget?.summary()
+
     /** Delay added above the starting delay to absorb late arrivals on this link. */
     val addedDelayMs: Long
         get() = currentDelayMs - delayMs
@@ -126,6 +137,7 @@ class MediaPlayoutClock(
             anchorPresentationUs = presentationTimeUs
             anchorRenderNs = nowNs + effectiveDelayNs
             latestPresentationUs = presentationTimeUs
+            timeTarget?.reset()
         } else if (latest == null || presentationTimeUs > latest) {
             latestPresentationUs = presentationTimeUs
         }
@@ -166,6 +178,24 @@ class MediaPlayoutClock(
                 lastShrinkNs = nowNs
             }
         }
+        if (adaptive && timeTarget != null) {
+            timeTarget.onArrival(nowNs, presentationTimeUs)
+            val neededMs = timeTarget.neededDelayMs(nowNs)
+            if (neededMs != null) {
+                val capMs = minOf(adaptiveMaxDelayMs, timeTarget.budgetMs)
+                val wantExtraNs = (minOf(neededMs, capMs) - delayMs).coerceAtLeast(0L) * NANOS_PER_MILLISECOND
+                timeFloorNs = wantExtraNs
+                if (wantExtraNs > extraDelayNs) {
+                    // Grows to cover the measured jitter in one step. Not late media: the saturation
+                    // flag and the calm-shrink timers belong to the lateness rule.
+                    val deltaNs = wantExtraNs - extraDelayNs
+                    extraDelayNs = wantExtraNs
+                    anchorRenderNs += deltaNs
+                    rawTargetNs += deltaNs
+                    timeTarget.noteGrow()
+                }
+            }
+        }
         currentDelayMs = delayMs + extraDelayNs / NANOS_PER_MILLISECOND
         val latestAllowedTargetNs = nowNs + maxScheduleAheadMs * NANOS_PER_MILLISECOND
         return MediaPlayoutTiming(
@@ -175,10 +205,11 @@ class MediaPlayoutClock(
     }
 
     private fun shrinkWhenCalm(nowNs: Long) {
-        if (extraDelayNs <= reservedExtraNs || lastLateNs == Long.MIN_VALUE || nowNs - lastLateNs < calmBeforeShrinkNs) return
+        val floorNs = maxOf(reservedExtraNs, timeFloorNs)
+        if (extraDelayNs <= floorNs || lastLateNs == Long.MIN_VALUE || nowNs - lastLateNs < calmBeforeShrinkNs) return
         val elapsedNs = nowNs - maxOf(lastShrinkNs, lastLateNs + calmBeforeShrinkNs)
         if (elapsedNs <= 0L) return
-        val shrinkNs = (elapsedNs / SHRINK_DIVISOR).coerceAtMost(extraDelayNs - reservedExtraNs)
+        val shrinkNs = (elapsedNs / SHRINK_DIVISOR).coerceAtMost(extraDelayNs - floorNs)
         if (shrinkNs <= 0L) return
         extraDelayNs -= shrinkNs
         anchorRenderNs -= shrinkNs

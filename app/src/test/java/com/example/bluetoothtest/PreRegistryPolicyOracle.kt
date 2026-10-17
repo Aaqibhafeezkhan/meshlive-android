@@ -435,7 +435,7 @@ internal object PreRegistryPolicyOracle {
      * Experimental legacy relief (default off; DEBUG `test_call_legacy_relief`): returns a neutral
      * fingerprint, so none of the legacy call protections applies and this phone advertises its normal
      * receive limits. Relay and stream rules keep the real fingerprint. Confidence: low until the
-     * phone A/B in the README test plan.
+     * phone A/B in docs/TESTING.md.
      */
     fun privateCallStackFingerprint(
         current: BluetoothStackFingerprint = BluetoothStackFingerprint.current(),

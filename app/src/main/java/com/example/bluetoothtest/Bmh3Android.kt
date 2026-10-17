@@ -60,7 +60,17 @@ internal object Bmh3Wiring {
         rotatingIds: Boolean = false,
         pseudonyms: Boolean = true,
         strangerIdentity: SigningIdentity? = null,
+        /** BVMID2: scanning a verification code (the scanner presents its real key; PROTOCOL "Scanner"). */
+        qrScan: Bvmid2Payload? = null,
     ): Bmh3InitiatorOptions? {
+        if (qrScan != null) {
+            val pins = Bmh3Android.pins(context)
+            return Bmh3Policy.initiatorOptions(
+                selected, layer, log = Bmh3Android::log,
+                pinResult = { peer -> runCatching { pins.pin(peer.nodeId.toByteArray()) } },
+                qrScan = qrScan,
+            )
+        }
         if (!Bmh3Feature.enabled) return null
         val pins = Bmh3Android.pins(context)
         val pinned = selected != null && pins.isPinned(selected.nodeIdPrefix)
@@ -92,6 +102,8 @@ internal object Bmh3Wiring {
         fixedPrefix: ByteArray,
         rotatingIds: Boolean = false,
         pseudonyms: Boolean = true,
+        qrDisplay: QrCodeDisplay? = null,
+        qrGate: QrConnectionGate? = null,
     ): Bmh3ResponderOptions? {
         if (!Bmh3Feature.enabled) return null
         val pseudonymMode = pseudonyms && Bmh3PseudonymFeature.active(rotatingIds)
@@ -103,6 +115,8 @@ internal object Bmh3Wiring {
             leaseSource = if (rotatingIds) PresenceLeaseSource else null,
             pseudonyms = pseudonymMode,
             epoch = if (pseudonymMode) runCatching { RotatingDiscovery.currentEpoch() }.getOrNull() else null,
+            qrDisplay = qrDisplay,
+            qrGate = qrGate,
         )
     }
 }

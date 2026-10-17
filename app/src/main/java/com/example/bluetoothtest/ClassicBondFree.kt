@@ -125,9 +125,13 @@ internal object ClassicSockets {
             adapter.listenUsingInsecureRfcommWithServiceRecord(serviceName, ClassicTransport.APP_SERVICE.serviceUuid)
         }
 
+    /**
+     * [bondFree] is pinned by the connector at the start of a connect, so a settings change in the
+     * middle of one (a bond-free connect in progress) can never open a secure socket to the peer.
+     */
     @SuppressLint("MissingPermission")
-    fun create(device: BluetoothDevice, role: ClassicRole): BluetoothSocket =
-        if (classicRoleUsesSecureRfcomm(role, ClassicFeatures.current.bondFree)) {
+    fun create(device: BluetoothDevice, role: ClassicRole, bondFree: Boolean = ClassicFeatures.current.bondFree): BluetoothSocket =
+        if (classicRoleUsesSecureRfcomm(role, bondFree)) {
             device.createRfcommSocketToServiceRecord(ClassicTransport.APP_SERVICE.serviceUuid)
         } else {
             device.createInsecureRfcommSocketToServiceRecord(ClassicTransport.APP_SERVICE.serviceUuid)

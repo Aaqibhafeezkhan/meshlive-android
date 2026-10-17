@@ -9,6 +9,7 @@ import com.example.bluetoothtest.PolicyConfidence.MEDIUM
 import com.example.bluetoothtest.PolicySourceKind.AOSP_COMMIT
 import com.example.bluetoothtest.PolicySourceKind.AOSP_SOURCE
 import com.example.bluetoothtest.PolicySourceKind.API_REFERENCE
+import com.example.bluetoothtest.PolicySourceKind.BLUETOOTH_SPEC
 import com.example.bluetoothtest.PolicySourceKind.CDD
 import com.example.bluetoothtest.PolicySourceKind.GOOGLE_OPEN_SOURCE
 import com.example.bluetoothtest.PolicySourceKind.PLATFORM_DOC
@@ -627,16 +628,27 @@ internal object DevicePolicyRegistry {
             title = "Android 14+: first GATT MTU request fixes 517",
             matcher = DeviceMatcher(sdkMin = 34),
             behaviour = "Mark the test_gatt_request_mtu experiment as not applicable when either phone runs API 34+ " +
-                "(the stack requests 517 for the first client and ignores later requests) and log the negotiated MTU instead.",
+                "(the stack requests 517 for the first client and ignores later requests) and log the negotiated MTU instead. " +
+                "A 517-byte MTU does not raise the attribute-value limit: a write-with-response or long read carries at most " +
+                "512 bytes of value (MTU-3 = 514 is only the notification / write-without-response payload), and Android 13+ " +
+                "enforces that, so an oversized write-with-response or long read fails (reports: a read over 512 bytes fails with status -100 and a disconnect; a 543-byte write-with-response crashed the native stack on Android 13).",
             sources = listOf(
                 PolicySource(
                     PLATFORM_DOC,
                     "https://developer.android.com/about/versions/14/behavior-changes-all",
                     "'MTU is set to 517 for the first GATT client requesting an MTU' and later requests on that ACL are disregarded",
                 ),
+                PolicySource(
+                    BLUETOOTH_SPEC,
+                    "Bluetooth Core Specification 5.2, Vol 3 Part F, 3.2.9 'Long attribute values'",
+                    "the maximum length of an attribute value is 512 octets; 517 = 512 value + 3 ATT header + 2 offset bytes of a long operation, so it is not a payload size",
+                ),
             ),
             evidence = listOf("none: no MTU-experiment run on API 34+ yet"),
             confidence = HIGH,
+            confidenceNote = "high for the 517 negotiation (Android 14 behaviour-change page) and for the 512-byte limit (spec); " +
+                "the Android 13+ enforcement rests on library maintainer reports (Android-BLE-Library, Nordic; FlutterBluePlus #984, " +
+                "RxAndroidBle) and is not yet reproduced on an owned phone",
         ),
         proposal(
             id = "ble-scan-start-quota",
@@ -644,8 +656,10 @@ internal object DevicePolicyRegistry {
             validation = PolicyValidation.UPSTREAM_DOCUMENTED,
             title = "BLE scan-start quota (5 per 30 s)",
             matcher = DeviceMatcher(),
-            behaviour = "Count scan starts per 30 s, keep mode switches and discovery restarts under 5 per window, and " +
-                "treat onScanFailed(SCAN_FAILED_SCANNING_TOO_FREQUENTLY) as a timed back-off instead of a discovery error.",
+            behaviour = "Count scan starts per 30 s and keep mode switches and discovery restarts under 5 per window. The " +
+                "stack's refusal is silent (no onScanFailed(SCAN_FAILED_SCANNING_TOO_FREQUENTLY) is delivered on any release, " +
+                "aosp-bt-versions SCAN-01), so a callback back-off cannot work: the app's own start budget is the protection and " +
+                "is implemented as le-scan-start-quota (this proposal is kept for its sources).",
             sources = listOf(
                 PolicySource(
                     AOSP_COMMIT,
@@ -661,7 +675,7 @@ internal object DevicePolicyRegistry {
                 PolicySource(
                     API_REFERENCE,
                     "https://developer.android.com/reference/android/bluetooth/le/ScanCallback#SCAN_FAILED_SCANNING_TOO_FREQUENTLY",
-                    "error 6 (constant published in API 33) when an app starts scans too frequently",
+                    "error 6 (constant published in API 33); the stack never delivers it for the quota breach (SCAN-01)",
                 ),
             ),
             evidence = listOf("none: no code-6 scan failure recorded yet"),
@@ -695,16 +709,19 @@ internal object DevicePolicyRegistry {
             id = "one-ui-never-sleeping-apps",
             area = PolicyArea.BACKGROUND,
             validation = PolicyValidation.UPSTREAM_DOCUMENTED,
-            title = "One UI: offer 'Never sleeping apps'",
+            title = "One UI: offer 'Never sleeping apps' (implemented as bg-oem-samsung guidance)",
             matcher = DeviceMatcher(skins = setOf(OemSkin.ONE_UI)),
-            behaviour = "When the user turns on background availability (store-and-forward carrying, incoming calls), offer " +
-                "Samsung's Never sleeping apps list (com.samsung.android.lool, ACTION_OPEN_CHECKABLE_LISTACTIVITY, activity_type 2).",
+            behaviour = "Implemented by the plain-text entry bg-oem-samsung: when the user turns on background availability " +
+                "(store-and-forward carrying, incoming calls), point to Samsung's Never sleeping apps list " +
+                "(com.samsung.android.lool, ACTION_OPEN_CHECKABLE_LISTACTIVITY, activity_type 2). One UI gives no guarantee that a " +
+                "foreground service keeps running (the Samsung page documents typed foreground services as an Android 14 rule only, and " +
+                "community reports of kills on One UI 6 exist), so the advice is guidance, never a promise.",
             sources = listOf(
                 PolicySource(
                     VENDOR_DOC,
                     "https://developer.samsung.com/mobile/app-management.html",
                     "Sleeping apps (unused ~3 days) and Deep sleeping apps are restricted; exemptions under Background usage " +
-                        "limits; deep link documented; One UI 6 guarantees Android 14 typed foreground services",
+                        "limits; deep link documented; typed foreground services are an Android 14 rule, not a One UI keep-alive guarantee",
                 ),
             ),
             evidence = listOf("none: Samsung phones have not run background-availability tests"),
@@ -714,10 +731,10 @@ internal object DevicePolicyRegistry {
             id = "hyperos-autostart-and-no-restrictions",
             area = PolicyArea.BACKGROUND,
             validation = PolicyValidation.UPSTREAM_DOCUMENTED,
-            title = "MIUI/HyperOS: autostart and 'No restrictions'",
+            title = "MIUI/HyperOS: autostart and 'No restrictions' (implemented as bg-oem-xiaomi guidance)",
             matcher = DeviceMatcher(skins = setOf(OemSkin.MIUI_HYPEROS)),
-            behaviour = "Explain that autostart is off by default and offer the battery 'No restrictions' setting when the " +
-                "user turns on background availability.",
+            behaviour = "Implemented by the plain-text entry bg-oem-xiaomi (kept here for its sources): explain that autostart is off by default " +
+                "and offer the battery 'No restrictions' setting when the user turns on background availability.",
             sources = listOf(
                 PolicySource(VENDOR_DOC, "https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1624",
                     "apps cannot autostart by default; the user allows it per app"),
@@ -734,10 +751,10 @@ internal object DevicePolicyRegistry {
             id = "asus-auto-start-manager",
             area = PolicyArea.BACKGROUND,
             validation = PolicyValidation.UPSTREAM_DOCUMENTED,
-            title = "ASUS: Auto-start Manager",
+            title = "ASUS: Auto-start Manager (implemented as bg-oem-asus guidance)",
             matcher = DeviceMatcher(skins = setOf(OemSkin.ASUS)),
-            behaviour = "Point users who enable background availability to Settings > Battery > Auto-start Manager and to " +
-                "the battery-draining-app auto-stop option.",
+            behaviour = "Implemented by the plain-text entry bg-oem-asus (kept here for its sources): point users who enable background " +
+                "availability to Settings > Battery > Auto-start Manager and to the battery-draining-app auto-stop option.",
             sources = listOf(
                 PolicySource(VENDOR_DOC, "https://www.asus.com/support/faq/1054036/", "Auto-start Manager allows or denies auto-start per app"),
                 PolicySource(VENDOR_DOC, "https://rog.asus.com/support/faq/1041329/", "'Detect battery-draining apps' can stop apps in the background"),
@@ -752,11 +769,37 @@ internal object DevicePolicyRegistry {
             title = "OMX encoders ignore QP bounds",
             matcher = DeviceMatcher(),
             component = CodecComponentMatcher(prefixes = setOf("OMX.")),
-            behaviour = "Gate the DEBUG QP-bound experiment (test_hw_qp_min/max) on FEATURE_QpBounds and log it as " +
-                "unsupported for OMX components instead of configuring keys that never reach them.",
-            sources = listOf(CCODEC_QP, QP_REWORK, QP_FEATURE),
+            behaviour = "Gate the DEBUG QP-bound experiment (test_hw_qp_min/max) on FEATURE_QpBounds and log the standard " +
+                "video-qp-* keys as unsupported for OMX components instead of configuring keys that never reach them. " +
+                "This covers the standard keys only: OMX.Exynos encoders do honour the vendor keys " +
+                "vendor.sec-ext-enc-qp-range.{I,P,B}-{min,max}QP (Samsung slsi OpenMAX source maps them to Set_QpRange and " +
+                "OMX_IndexConfigVideoQPRange) and OMX.qcom encoders expose qti-ext-enc-qp-range, so a vendor-key QP arm " +
+                "is a separate default-off experiment, enabled per component only after the key appears in " +
+                "MediaCodec.getSupportedVendorParameters() (API 31+) or the input/output format dump.",
+            sources = listOf(
+                CCODEC_QP, QP_REWORK, QP_FEATURE,
+                PolicySource(
+                    VENDOR_DOC,
+                    "https://github.com/LineageOS/android_hardware_samsung_slsi-linaro_openmax/blob/15ab30812af9fe39fff2ae3cd867d7e954c73881/openmax/component/video/enc/vp9/Exynos_OMX_Vp9enc.c",
+                    "Samsung slsi OpenMAX VP9 encoder (LineageOS mirror, not retail firmware): AddVendorExt registers " +
+                        "sec-ext-enc-qp-range; the component applies it through Set_QpRange / OMX_IndexConfigVideoQPRange",
+                ),
+                PolicySource(
+                    AOSP_SOURCE,
+                    "https://android.googlesource.com/platform/hardware/qcom/sdm845/media/+/refs/heads/main/mm-video-v4l2/vidc/venc/src/omx_video_extensions.hpp",
+                    "Qualcomm OMX video encoder vendor extensions include qti-ext-enc-qp-range",
+                ),
+                PolicySource(
+                    API_REFERENCE,
+                    "https://developer.android.com/reference/android/media/MediaCodec#getSupportedVendorParameters()",
+                    "API 31: lists the vendor parameter names a codec accepts (runtime detection, no model matcher)",
+                ),
+            ),
             evidence = listOf("benchmarks/runs/lane-b-burst-r1-529f36cc"),
             confidence = HIGH,
+            confidenceNote = "high that the standard keys never reach an OMX component (AOSP source plus the local run); the " +
+                "Exynos vendor-key behaviour on retail firmware (M31 OMX.Exynos.VP9.Encoder) is read from vendor source only " +
+                "and its effect on the M31 overshoot is unmeasured",
         ),
         proposal(
             id = "omx-exynos-vp9-framerate-bitrate-adjuster",
@@ -788,16 +831,34 @@ internal object DevicePolicyRegistry {
      * area object touched first (its init then initialises this object) never sees a half-built list;
      * area files may use this object's matchers and constants, never [entries].
      */
-    val entries: List<DevicePolicyEntry> by lazy {
-        coreEntries +
-            CodecPolicy.entries +
-            YuvPolicy.entries +
-            BluetoothTransportPolicy.entries +
-            BackgroundPolicy.entries +
-            MemoryThermalPolicy.entries +
-            NativeCompat.policyEntries +
-            PeerLabelPolicy.entries
-    }
+    val entries: List<DevicePolicyEntry> by lazy { coreEntries + areaEntryLists().flatten() }
+
+    /**
+     * Plug-in convention for policy areas and feature batches: an area file exposes
+     * `internal val entries: List<DevicePolicyEntry>` (entries built from this object's matchers and
+     * constants, never from [entries]) and is listed here on ONE line of its own, so adding an area is
+     * a one-line append that does not touch its neighbours. `DevicePolicyConventionTest` checks every
+     * entry of every listed area against the same metadata rules.
+     */
+    private fun areaEntryLists(): List<List<DevicePolicyEntry>> = listOf(
+        CodecPolicy.entries,
+        YuvPolicy.entries,
+        BluetoothTransportPolicy.entries,
+        BackgroundPolicy.entries,
+        MemoryThermalPolicy.entries,
+        NativeCompat.policyEntries,
+        PeerLabelPolicy.entries,
+        ScanPolicy.entries,
+        ServiceFamilyPolicy.entries,
+        AudioPolicyEntries.entries,
+        CocPolicy.entries,
+        CameraPolicy.entries,
+        AdvertisingPolicy.entries,
+        PhyLinkPolicy.entries,
+        // Batch plug-in point (append one line per batch). Not listed here because an area already
+        // concatenates them: GattLinkPolicy (inside BluetoothTransportPolicy), DecoderPolicyEntries
+        // (inside CodecPolicy), BackgroundOem (inside BackgroundPolicy), ThermalFamilyEntries (inside MemoryThermalPolicy).
+    )
 
     private fun proposal(
         id: String,
@@ -811,6 +872,7 @@ internal object DevicePolicyRegistry {
         status: PolicySourceStatus = OFFICIAL,
         area: PolicyArea = PolicyArea.BLUETOOTH_TRANSPORT,
         validation: PolicyValidation = PolicyValidation.UPSTREAM_DOCUMENTED,
+        confidenceNote: String = "",
     ) = DevicePolicyEntry(
         id = id,
         title = title,
@@ -825,6 +887,7 @@ internal object DevicePolicyRegistry {
         origin = "Proposal (not implemented)",
         component = component,
         proposed = true,
+        confidenceNote = confidenceNote,
         area = area,
         validation = validation,
     )

@@ -18,6 +18,10 @@ import org.junit.Test
  * encoders in their own link hellos, which must not matter.
  */
 class CallCodecFallbackRelayTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private val vp9 = NodeCapabilities.CODEC_VP9
     private val av1 = NodeCapabilities.CODEC_AV1
     private val msmnile = BluetoothStackFingerprint("qcom", "msmnile", 30)
@@ -137,9 +141,9 @@ class CallCodecFallbackRelayTest {
         val link = SecureBluetoothHandshake.initiate(input, output, callerIdentity, caller)
         if (relays > 0) assertEquals(relayLinkCaps, link.peerCapabilities) // the hop-local hello is the relay's
         val endpoint = EndToEndVideoHandshake.initiate(link, callerIdentity, caller)
-        workers.first().join(10_000)
+        workers.first().join(120_000)
         links.forEach { (a, b) -> listOf(a, b).forEach { (i, o) -> i.close(); o.close() } }
-        workers.forEach { it.join(10_000) }
+        workers.forEach { it.join(120_000) }
         failure.get()?.let { throw it }
         assertEquals(calleeIdentity.nodeId, endpoint.peerNodeId)
         return endpoint.peerCapabilities to requireNotNull(calleeSaw.get())

@@ -261,6 +261,7 @@ object LinkCapacity {
 
     fun attach(context: Context, adapter: BluetoothAdapter?) {
         WifiCoexistence.attach(context)
+        BluetoothAudioCoexistence.attach(context)
         prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         AdaptivePhyMemory.attach(context)
         buildStamp = runCatching {
@@ -271,7 +272,8 @@ object LinkCapacity {
         Log.i(
             "BluetoothVideo",
             "Phone radio features: ${features?.summary ?: "unavailable"}; " +
-                "Wi-Fi ${WifiCoexistence.connectedFrequencyMhz()?.let { "$it MHz" } ?: "not connected"}",
+                "Wi-Fi ${WifiCoexistence.connectedFrequencyMhz()?.let { "$it MHz" } ?: "not connected"}; " +
+                BluetoothAudioCoexistence.benchmarkField(),
         )
         BluetoothTransportOption.entries.forEach { Log.i("BluetoothVideo", "Link capacity ${summary(it)}") }
     }
@@ -304,6 +306,7 @@ object LinkCapacity {
     /** Capacity learned while 2.4 GHz Wi-Fi shares the radio is kept apart from clean-radio capacity. */
     private fun radioKey(transport: BluetoothTransportOption): String =
         transport.name + (if (WifiCoexistence.sharesBluetoothBand()) ".wifi24" else "") +
+            BluetoothAudioCoexistence.capacityKeySuffix() + // "" unless the Experimental test_bt_audio_capacity_key is on
             phyCapacityKey(transport, DebugTunables.experimentalBlePhy)
 
     fun learned(transport: BluetoothTransportOption, kind: LinkLoadKind): LearnedLinkCapacity {

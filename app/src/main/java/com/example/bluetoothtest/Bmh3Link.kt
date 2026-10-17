@@ -297,6 +297,7 @@ internal object Bmh3LinkHandshake {
             peerBuildTag = tag,
             peerPseudonymous = result.peer.pseudonymous,
             ownPseudonymous = result.ownPseudonymous,
+            qrTagMatched = result.qrTagMatched,
         ).also { result.wipe() }
     }
 }
@@ -402,6 +403,7 @@ internal object Bmh3EndpointHandshake {
             opener = EndToEndContentOpener(result.receiveKey),
             peerFingerprint = fingerprint,
             reveal = reveal,
+            qrTagMatched = result.qrTagMatched,
         ).also { result.wipe() }
     }
 }

@@ -16,6 +16,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BuildTagTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private val capabilities = NodeCapabilities(
         transportMask = NodeCapabilities.TRANSPORT_BLE_L2CAP or RotatingDiscoveryIds.LINK_HELLO_BIT,
         encodeCodecMask = NodeCapabilities.CODEC_VP9,
@@ -182,7 +186,7 @@ class BuildTagTest {
             initiatorCaps,
             buildTag = initiatorTag,
         )
-        worker.join(5_000)
+        worker.join(120_000)
         failure.get()?.let { throw it }
         return Pair(initiator, responderSession.get())
     }

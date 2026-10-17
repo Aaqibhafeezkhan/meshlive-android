@@ -320,10 +320,12 @@ class PrivateCallMediaTest {
     @Test
     fun closeWaitEndsWhenThePeerClosesTheLink() {
         val reader = Thread { Thread.sleep(50) }.apply { start() }
-        val started = System.nanoTime()
-        val outcome = awaitPrivateCallClose(reader, PrivateCallCloseWait(waitForPeer = true, maxMs = 3_000L))
+        // The cap is far above anything a loaded machine needs to run a 50 ms thread, so "closed before the cap" cannot be
+        // lost to scheduling (a 3 s cap with a 2 s elapsed assertion could).
+        val capMs = 60_000L
+        val outcome = awaitPrivateCallClose(reader, PrivateCallCloseWait(waitForPeer = true, maxMs = capMs))
         assertTrue(outcome.peerClosed)
-        assertTrue("returned at the peer close, not the cap", (System.nanoTime() - started) < 2_000_000_000L)
+        assertTrue("returned at the peer close, not the cap", outcome.waitedMs < capMs)
     }
 
     @Test

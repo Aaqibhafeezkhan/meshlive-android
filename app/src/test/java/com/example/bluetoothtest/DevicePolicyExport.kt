@@ -42,7 +42,14 @@ internal object DevicePolicyExport {
         "origin" to entry.origin,
     )
 
-    private fun matcher(matcher: DeviceMatcher): Map<String, Any?> = linkedMapOf(
+    private fun matcher(matcher: DeviceMatcher): Map<String, Any?> = matcherFields(matcher).also { fields ->
+        // Newer constraints appear only when set, so entries without them export exactly as before.
+        if (matcher.patchMin != null) fields["patch_min"] = matcher.patchMin
+        if (matcher.patchMax != null) fields["patch_max"] = matcher.patchMax
+        if (matcher.runtime != null) fields["runtime"] = matcher.runtime.describe()
+    }
+
+    private fun matcherFields(matcher: DeviceMatcher): MutableMap<String, Any?> = linkedMapOf(
         "sdk_min" to matcher.sdkMin,
         "sdk_max" to matcher.sdkMax,
         "hardware" to matcher.hardware.sorted(),
@@ -82,7 +89,7 @@ internal object DevicePolicyExport {
                 "soc_model" to traits.socModel,
                 "soc_family" to traits.socFamily.name,
                 "skin" to traits.oemSkin.name,
-                "stack_lineage" to traits.stackLineage.name,
+                "stack_lineage" to traits.stackFamily.name, // umbrella value: tools/device_policy_report.py derives the same two
                 "codec_components" to traits.codecComponents,
             ),
             "active" to resolved.active.filter { it.component == null }.map { it.id },

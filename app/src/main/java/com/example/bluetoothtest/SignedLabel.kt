@@ -21,13 +21,32 @@ import java.util.UUID
  */
 object PeerLabelFeature {
     const val EXTRA = "test_peer_labels"
-    const val PREF = "experimental_peer_labels"
+    /** New key since 2026-10-17 (no Settings switch any more): no stored 0.2.0 choice applies. */
+    const val PREF = "experimental_peer_labels_v2"
     const val PREF_NAME = "peer_label_name"
 
     /** End-to-end hello transport-mask bit 5: "accepts and sends LABELS (BME1 type 10)". Never in link hellos. */
     const val CAPABILITY_BIT = 1 shl 5
 
     @Volatile var enabled = false
+
+    /**
+     * Naming v2 (Design G, G1): the PUBLIC stream title pages are a separate switch from the in-session names and subjects
+     * ([enabled]). A title is a title, not a person, and the Go-live dialog says it is public. The in-session stream title
+     * (the signed label a joining viewer receives) still needs [enabled]; the advert pages and reading others' pages need
+     * this. Default off like [enabled]; a user who explicitly switched the old combined "Names and titles" on keeps both
+     * (one-time migration, [NamingMigration]); a DEBUG benchmark launch with `test_peer_labels` keeps both too.
+     */
+    @Volatile var titlePagesEnabled = false
+
+    /** Who sees the name ("Everyone I call or answer", "Only people I verified", "Nobody"). */
+    @Volatile internal var audience: NamesAudience = NamesAudience.EVERYONE
+
+    /**
+     * "Show my name before they answer": the caller's name is queued before `INVITE` in a stranger (pseudonym) session.
+     * False is the Design F control arm, and what a DEBUG benchmark launch uses unless it gives `test_names_before_answer`.
+     */
+    @Volatile var nameBeforeAnswer = false
 
     /** Your optional display name (already normalized), or null for anonymous (handle only). */
     @Volatile var localName: String? = null

@@ -1,5 +1,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Monochrome dark Material 3 theme (dark in every system mode); tokens in values/colors.xml. -->
+    <!-- "Plain Signal": black ground, Manrope, white actions, red/green only where they carry meaning.
+         Tokens in values/colors.xml. Dark in every system mode. -->
     <style name="Base.Theme.Bluetoothtest" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/accent</item>
         <item name="colorOnPrimary">@color/on_accent</item>
@@ -10,74 +11,142 @@
         <item name="colorSecondaryContainer">@color/accent_container</item>
         <item name="colorOnSecondaryContainer">@color/on_accent_container</item>
         <item name="colorError">@color/danger</item>
-        <item name="colorSurface">@color/surface</item>
+        <item name="colorSurface">@color/app_background</item>
         <item name="colorOnSurface">@color/text_primary</item>
-        <item name="colorSurfaceVariant">@color/surface_variant</item>
+        <item name="colorSurfaceVariant">@color/surface_raised</item>
         <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorSurfaceContainerLowest">@color/app_background</item>
+        <item name="colorSurfaceContainerLow">@color/surface</item>
         <item name="colorSurfaceContainer">@color/surface</item>
         <item name="colorSurfaceContainerHigh">@color/surface</item>
-        <item name="colorSurfaceContainerHighest">@color/surface_variant</item>
-        <item name="colorOutline">@color/outline</item>
+        <item name="colorSurfaceContainerHighest">@color/surface_raised</item>
+        <item name="colorOutline">@color/text_secondary</item>
+        <item name="colorOutlineVariant">@color/outline</item>
         <item name="android:colorBackground">@color/app_background</item>
         <item name="android:textColorPrimary">@color/text_primary</item>
         <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:textColorHint">@color/text_disabled</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.BodyLarge</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">@bool/light_system_bars</item>
         <item name="android:windowLightNavigationBar">@bool/light_system_bars</item>
         <item name="materialSwitchStyle">@style/Widget.App.Switch</item>
         <item name="materialButtonStyle">@style/Widget.App.Button.Primary</item>
+        <item name="editTextStyle">@style/Widget.App.EditText</item>
+        <item name="bottomNavigationStyle">@style/Widget.App.BottomNavigation</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.App.Dialog</item>
+        <item name="textAppearanceTitleLarge">@style/TextAppearance.App.Readout</item>
+        <item name="textAppearanceTitleMedium">@style/TextAppearance.App.Title</item>
+        <item name="textAppearanceBodyLarge">@style/TextAppearance.App.BodyLarge</item>
+        <item name="textAppearanceBodyMedium">@style/TextAppearance.App.Body</item>
+        <item name="textAppearanceLabelLarge">@style/TextAppearance.App.Button</item>
+        <item name="textAppearanceHeadlineSmall">@style/TextAppearance.App.Headline</item>
     </style>
 
     <style name="Theme.Bluetoothtest" parent="Base.Theme.Bluetoothtest" />
 
+    <!-- Dialogs and sheets are the one place a surface fill is used; 24 dp corners. -->
+    <style name="ThemeOverlay.App.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurfaceContainerHigh">@color/surface</item>
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.App.Dialog</item>
+        <item name="materialAlertDialogTitleTextStyle">@style/MaterialAlertDialog.App.Title</item>
+        <item name="buttonBarPositiveButtonStyle">@style/Widget.App.Button.Text</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Widget.App.Button.Text</item>
+        <item name="buttonBarNeutralButtonStyle">@style/Widget.App.Button.Text</item>
+    </style>
+    <style name="ShapeAppearance.App.Dialog" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">24dp</item>
+    </style>
+    <style name="MaterialAlertDialog.App.Title" parent="MaterialAlertDialog.Material3.Title.Text">
+        <item name="android:textAppearance">@style/TextAppearance.App.Title</item>
+        <item name="android:textSize">20sp</item>
+    </style>
+
+    <!-- Switch: track off #3A3A3A, on white with a black thumb. No outline. -->
     <style name="Widget.App.Switch" parent="Widget.Material3.CompoundButton.MaterialSwitch">
         <item name="android:minHeight">56dp</item>
         <item name="android:textColor">@color/text_primary</item>
-        <item name="android:textSize">16sp</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.RowLabel</item>
+        <item name="trackTint">@color/switch_track</item>
+        <item name="trackDecorationTint">@android:color/transparent</item>
+        <item name="thumbTint">@color/switch_thumb</item>
+        <item name="thumbIconTint">@color/switch_thumb_icon</item>
     </style>
 
-    <!-- Typography ("Field radio"): condensed readouts for names, titles, timers and counts;
-         the regular sans for reading. Scale 34 / 24 / 20 / 16 / 14 / 12, sentence case only. -->
+    <!-- Typography. Scale: 28 title, 20 readout, 17 row title / button, 16 body, 15 section, 14 subtitle,
+         13 control label, 12 badge. Sentence case only. Weights 400/500/600/700. -->
     <style name="TextAppearance.App.Display" parent="TextAppearance.Material3.HeadlineMedium">
         <item name="android:textColor">@color/text_primary</item>
-        <item name="android:fontFamily">sans-serif</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:fontFamily">@font/manrope_w700</item>
+        <item name="android:textFontWeight">700</item>
         <item name="android:textSize">28sp</item>
+        <item name="android:lineHeight">34sp</item>
         <item name="android:letterSpacing">0</item>
     </style>
     <style name="TextAppearance.App.Headline" parent="TextAppearance.Material3.HeadlineSmall">
         <item name="android:textColor">@color/text_primary</item>
-        <item name="android:fontFamily">sans-serif</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:fontFamily">@font/manrope_w700</item>
+        <item name="android:textFontWeight">700</item>
         <item name="android:textSize">28sp</item>
+        <item name="android:lineHeight">34sp</item>
+        <item name="android:letterSpacing">0</item>
     </style>
     <style name="TextAppearance.App.Readout" parent="TextAppearance.Material3.TitleLarge">
         <item name="android:textColor">@color/text_primary</item>
-        <item name="android:fontFamily">sans-serif</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:fontFamily">@font/manrope_w700</item>
+        <item name="android:textFontWeight">700</item>
         <item name="android:textSize">20sp</item>
+        <item name="android:letterSpacing">0</item>
         <item name="android:fontFeatureSettings">tnum</item>
     </style>
+    <!-- Row title. -->
     <style name="TextAppearance.App.Title" parent="TextAppearance.Material3.TitleMedium">
         <item name="android:textColor">@color/text_primary</item>
-        <item name="android:fontFamily">sans-serif</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:textSize">16sp</item>
+        <item name="android:fontFamily">@font/manrope_w600</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:textSize">17sp</item>
+        <item name="android:lineHeight">22sp</item>
+        <item name="android:letterSpacing">0</item>
     </style>
+    <!-- Row subtitle (secondary). -->
     <style name="TextAppearance.App.Body" parent="TextAppearance.Material3.BodyMedium">
         <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:fontFamily">@font/manrope_regular</item>
+        <item name="android:textFontWeight">400</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:lineHeight">18sp</item>
+        <item name="android:letterSpacing">0</item>
     </style>
     <style name="TextAppearance.App.BodyLarge" parent="TextAppearance.Material3.BodyLarge">
         <item name="android:textColor">@color/text_primary</item>
+        <item name="android:fontFamily">@font/manrope_regular</item>
+        <item name="android:textFontWeight">400</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:lineHeight">22sp</item>
+        <item name="android:letterSpacing">0</item>
     </style>
-    <!-- Section titles: quiet, sentence case, condensed; structure comes from space, not boxes. -->
+    <!-- Section label: sentence case, quiet. -->
     <style name="TextAppearance.App.Section" parent="TextAppearance.Material3.LabelLarge">
         <item name="android:textColor">@color/text_secondary</item>
-        <item name="android:fontFamily">sans-serif</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:letterSpacing">0.01</item>
+        <item name="android:fontFamily">@font/manrope_w600</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:lineHeight">20sp</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+    <style name="TextAppearance.App.Button" parent="TextAppearance.Material3.LabelLarge">
+        <item name="android:fontFamily">@font/manrope_w600</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:textSize">17sp</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+    <style name="TextAppearance.App.Label" parent="TextAppearance.Material3.LabelMedium">
+        <item name="android:fontFamily">@font/manrope_w500</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:letterSpacing">0</item>
     </style>
     <style name="TextAppearance.App.Mono" parent="TextAppearance.Material3.BodyLarge">
         <item name="android:textColor">@color/text_primary</item>
@@ -85,23 +154,13 @@
         <item name="android:letterSpacing">0.05</item>
     </style>
 
-    <!-- Reusable view styles. -->
-    <!-- Lists, not cards: a "card" is now a flat group on the ground colour (settings, lists,
-         onboarding, verify, about). Only real controls use the Panel key below. -->
+    <!-- Reusable view styles. No cards or boxes: structure comes from space and dividers. -->
     <style name="Widget.App.Card" parent="Widget.Material3.CardView.Filled">
         <item name="cardBackgroundColor">@android:color/transparent</item>
         <item name="cardCornerRadius">0dp</item>
         <item name="cardElevation">0dp</item>
         <item name="strokeWidth">0dp</item>
         <item name="contentPadding">0dp</item>
-    </style>
-
-    <!-- Panel key: home action keys and the readiness strip. Squared (6 dp), no outline. -->
-    <style name="Widget.App.Key" parent="Widget.Material3.CardView.Filled">
-        <item name="cardBackgroundColor">@color/surface</item>
-        <item name="cardCornerRadius">@dimen/key_radius</item>
-        <item name="cardElevation">0dp</item>
-        <item name="strokeWidth">0dp</item>
     </style>
 
     <style name="Widget.App.SectionHeader" parent="">
@@ -113,14 +172,12 @@
         <item name="android:accessibilityHeading">true</item>
     </style>
 
-    <!-- Supporting text under a list row; its bottom edge carries the inset divider (M3 lists),
-         so the divider hides together with the row. -->
+    <!-- Supporting text (secondary). Used sparingly: values, one short line, never a paragraph. -->
     <style name="Widget.App.Description" parent="">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:textAppearance">@style/TextAppearance.App.Body</item>
-        <item name="android:paddingBottom">16dp</item>
-        <item name="android:background">@drawable/row_divider_bottom</item>
+        <item name="android:paddingBottom">8dp</item>
     </style>
 
     <style name="Widget.App.TopIconButton" parent="">
@@ -131,135 +188,7 @@
         <item name="tint">@color/text_primary</item>
     </style>
 
-    <!-- Icon button with a short label below, used on the call screen over video. -->
-    <style name="Widget.App.CallControl" parent="Widget.Material3.Button.TonalButton">
-        <item name="android:layout_width">0dp</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_weight">1</item>
-        <item name="android:minHeight">64dp</item>
-        <item name="android:minWidth">0dp</item>
-        <item name="android:layout_marginStart">4dp</item>
-        <item name="android:layout_marginEnd">4dp</item>
-        <item name="android:paddingStart">0dp</item>
-        <item name="android:paddingEnd">0dp</item>
-        <item name="android:paddingTop">8dp</item>
-        <item name="android:paddingBottom">8dp</item>
-        <item name="android:insetTop">0dp</item>
-        <item name="android:insetBottom">0dp</item>
-        <item name="android:maxLines">1</item>
-        <item name="android:ellipsize">end</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:textColor">@color/call_control_content</item>
-        <item name="backgroundTint">@color/call_control_background</item>
-        <item name="iconTint">@color/call_control_content</item>
-        <item name="iconGravity">top</item>
-        <item name="iconPadding">4dp</item>
-        <item name="iconSize">26dp</item>
-        <item name="cornerRadius">20dp</item>
-    </style>
-
-    <style name="Widget.App.CallAnswer" parent="Widget.Material3.Button">
-        <item name="android:layout_width">0dp</item>
-        <item name="android:layout_height">64dp</item>
-        <item name="android:layout_weight">1</item>
-        <item name="android:layout_marginStart">8dp</item>
-        <item name="android:layout_marginEnd">8dp</item>
-        <item name="android:textSize">16sp</item>
-        <item name="android:textColor">@color/white</item>
-        <item name="iconTint">@color/white</item>
-        <item name="iconGravity">textStart</item>
-        <item name="iconSize">24dp</item>
-        <item name="cornerRadius">32dp</item>
-    </style>
-    <!-- Large round call buttons (icon only; the label is a separate TextView below). -->
-    <style name="Widget.App.RoundControl" parent="Widget.Material3.Button.IconButton.Filled">
-        <item name="android:layout_width">56dp</item>
-        <item name="android:layout_height">56dp</item>
-        <item name="android:minWidth">56dp</item>
-        <item name="android:minHeight">56dp</item>
-        <item name="android:insetTop">0dp</item>
-        <item name="android:insetBottom">0dp</item>
-        <item name="android:padding">0dp</item>
-        <item name="iconGravity">textStart</item>
-        <item name="iconPadding">0dp</item>
-        <item name="iconSize">28dp</item>
-        <item name="cornerRadius">28dp</item>
-        <item name="backgroundTint">@color/call_control_background</item>
-        <item name="iconTint">@color/call_control_content</item>
-        <item name="android:stateListAnimator">@null</item>
-    </style>
-    <style name="Widget.App.RoundControl.Large">
-        <item name="android:layout_width">76dp</item>
-        <item name="android:layout_height">76dp</item>
-        <item name="android:minWidth">76dp</item>
-        <item name="android:minHeight">76dp</item>
-        <item name="iconSize">34dp</item>
-        <item name="cornerRadius">38dp</item>
-    </style>
-    <style name="Widget.App.RoundControlLabel" parent="">
-        <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">6dp</item>
-        <item name="android:maxLines">1</item>
-        <item name="android:ellipsize">end</item>
-        <item name="android:textColor">@color/overlay_text</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:shadowColor">#99000000</item>
-        <item name="android:shadowRadius">4</item>
-        <item name="android:importantForAccessibility">no</item>
-    </style>
-
-    <!-- Home action rows: full width, strong condensed title, no box. -->
-    <style name="Widget.App.ActionRow" parent="">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:minHeight">72dp</item>
-        <item name="android:gravity">center_vertical</item>
-        <item name="android:orientation">horizontal</item>
-        <item name="android:background">?attr/selectableItemBackground</item>
-        <item name="android:clickable">true</item>
-        <item name="android:focusable">true</item>
-        <item name="android:paddingTop">8dp</item>
-        <item name="android:paddingBottom">8dp</item>
-    </style>
-    <style name="Widget.App.ActionRowText" parent="">
-        <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginStart">16dp</item>
-        <item name="android:orientation">vertical</item>
-    </style>
-    <style name="Widget.App.RowDivider" parent="">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">1dp</item>
-        <item name="android:layout_marginStart">64dp</item>
-        <item name="android:background">@color/outline</item>
-    </style>
-
-    <!-- Shared button set: one primary, one secondary, one destructive, one text. -->
-    <style name="Widget.App.Button.Primary" parent="Widget.Material3.Button">
-        <item name="android:minHeight">48dp</item>
-        <item name="cornerRadius">@dimen/key_radius</item>
-    </style>
-    <style name="Widget.App.Button.Secondary" parent="Widget.Material3.Button.OutlinedButton">
-        <item name="android:minHeight">48dp</item>
-        <item name="cornerRadius">@dimen/key_radius</item>
-        <item name="android:textColor">@color/text_primary</item>
-        <item name="iconTint">@color/text_primary</item>
-        <item name="strokeColor">@color/outline_strong</item>
-    </style>
-    <style name="Widget.App.Button.Destructive" parent="Widget.Material3.Button">
-        <item name="android:minHeight">48dp</item>
-        <item name="cornerRadius">@dimen/key_radius</item>
-        <item name="backgroundTint">@color/danger</item>
-        <item name="android:textColor">@color/white</item>
-        <item name="iconTint">@color/white</item>
-    </style>
-    <style name="Widget.App.Button.Text" parent="Widget.Material3.Button.TextButton">
-        <item name="android:minHeight">48dp</item>
-        <item name="android:textColor">@color/text_primary</item>
-    </style>
-
-    <!-- Shared status line under a top bar. -->
+    <!-- A status or state line (one short line, secondary). -->
     <style name="Widget.App.StatusLine" parent="">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
@@ -269,15 +198,259 @@
         <item name="android:textAppearance">@style/TextAppearance.App.Body</item>
     </style>
 
-    <!-- Shared top-bar title. -->
+    <!-- Screen title in a tab's title bar. -->
     <style name="Widget.App.TopBarTitle" parent="">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_weight">1</item>
-        <item name="android:layout_marginStart">4dp</item>
         <item name="android:accessibilityHeading">true</item>
         <item name="android:maxLines">1</item>
         <item name="android:ellipsize">end</item>
         <item name="android:textAppearance">@style/TextAppearance.App.Headline</item>
+    </style>
+
+    <!-- Call controls: 64 dp circles, label underneath. Raised grey; white when toggled on. -->
+    <style name="Widget.App.RoundControl" parent="Widget.Material3.Button.IconButton.Filled">
+        <item name="android:layout_width">64dp</item>
+        <item name="android:layout_height">64dp</item>
+        <item name="android:minWidth">64dp</item>
+        <item name="android:minHeight">64dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:padding">0dp</item>
+        <item name="iconGravity">textStart</item>
+        <item name="iconPadding">0dp</item>
+        <item name="iconSize">28dp</item>
+        <item name="cornerRadius">32dp</item>
+        <item name="backgroundTint">@color/call_control_background</item>
+        <item name="iconTint">@color/call_control_content</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+    <style name="Widget.App.RoundControl.Large">
+        <item name="android:layout_width">72dp</item>
+        <item name="android:layout_height">72dp</item>
+        <item name="android:minWidth">72dp</item>
+        <item name="android:minHeight">72dp</item>
+        <item name="iconSize">32dp</item>
+        <item name="cornerRadius">36dp</item>
+    </style>
+    <style name="Widget.App.RoundControlLabel" parent="">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">8dp</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:textColor">@color/overlay_text</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.Label</item>
+        <item name="android:importantForAccessibility">no</item>
+    </style>
+    <!-- Wide call buttons (cancel while calling). -->
+    <style name="Widget.App.CallAnswer" parent="Widget.Material3.Button">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">56dp</item>
+        <item name="android:minHeight">56dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.Button</item>
+        <item name="android:textColor">@color/white</item>
+        <item name="iconTint">@color/white</item>
+        <item name="iconGravity">textStart</item>
+        <item name="iconSize">24dp</item>
+        <item name="cornerRadius">28dp</item>
+    </style>
+
+    <!-- Buttons: 56 dp, fully rounded, no outlines. Primary white, secondary raised grey, live red. -->
+    <style name="Widget.App.Button.Primary" parent="Widget.Material3.Button">
+        <item name="android:minHeight">56dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.Button</item>
+        <item name="android:textColor">@color/on_accent</item>
+        <item name="backgroundTint">@color/accent</item>
+        <item name="iconTint">@color/on_accent</item>
+        <item name="cornerRadius">28dp</item>
+    </style>
+    <style name="Widget.App.Button.Secondary" parent="Widget.Material3.Button.TonalButton">
+        <item name="android:minHeight">56dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.Button</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="backgroundTint">@color/surface_raised</item>
+        <item name="iconTint">@color/text_primary</item>
+        <item name="cornerRadius">28dp</item>
+    </style>
+    <style name="Widget.App.Button.Live" parent="Widget.Material3.Button">
+        <item name="android:minHeight">56dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.Button</item>
+        <item name="android:fontFamily">@font/manrope_w700</item>
+        <item name="android:textFontWeight">700</item>
+        <item name="android:textColor">@color/white</item>
+        <item name="backgroundTint">@color/live_red</item>
+        <item name="iconTint">@color/white</item>
+        <item name="iconGravity">textStart</item>
+        <item name="iconPadding">10dp</item>
+        <item name="iconSize">24dp</item>
+        <item name="cornerRadius">28dp</item>
+    </style>
+    <style name="Widget.App.Button.Text" parent="Widget.Material3.Button.TextButton">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.Button</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="iconTint">@color/text_primary</item>
+        <item name="cornerRadius">24dp</item>
+    </style>
+    <!-- Round 44 dp icon buttons on person rows: voice raised grey, video white. -->
+    <style name="Widget.App.IconCircle" parent="">
+        <item name="android:layout_width">44dp</item>
+        <item name="android:layout_height">44dp</item>
+        <item name="android:background">@drawable/icon_circle_raised</item>
+        <item name="android:padding">10dp</item>
+        <item name="android:scaleType">fitCenter</item>
+        <item name="android:focusable">false</item>
+        <item name="tint">@color/text_primary</item>
+    </style>
+    <style name="Widget.App.IconCircle.Filled">
+        <item name="android:background">@drawable/icon_circle_white</item>
+        <item name="tint">@color/on_accent</item>
+    </style>
+
+    <!-- List rows: plain, on black. -->
+    <style name="Widget.App.Row" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">56dp</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:background">?attr/selectableItemBackground</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+    <!-- Settings redesign (2026-10-17): 16 sp medium row labels, rounded group cards, small grey section labels. -->
+    <style name="TextAppearance.App.RowLabel" parent="TextAppearance.Material3.BodyLarge">
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:fontFamily">@font/manrope_w500</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:lineHeight">21sp</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+
+    <style name="Widget.App.SettingsCard" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">8dp</item>
+        <item name="android:orientation">vertical</item>
+        <item name="android:background">@drawable/settings_card</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:clipToOutline">true</item>
+        <item name="android:divider">@drawable/settings_divider</item>
+        <item name="android:showDividers">middle</item>
+    </style>
+
+    <style name="Widget.App.SectionLabel" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">24dp</item>
+        <item name="android:paddingStart">4dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.Body</item>
+        <item name="android:textSize">13sp</item>
+    </style>
+
+    <style name="Widget.App.RowIcon" parent="">
+        <item name="android:layout_width">24dp</item>
+        <item name="android:layout_height">24dp</item>
+        <item name="android:layout_marginEnd">16dp</item>
+        <item name="android:importantForAccessibility">no</item>
+        <item name="tint">@color/text_secondary</item>
+    </style>
+
+    <style name="Widget.App.RowTitle" parent="">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.RowLabel</item>
+    </style>
+
+    <!-- LIVE badge: red pill, white 12 sp bold. -->
+    <style name="Widget.App.LiveBadge" parent="">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:background">@drawable/live_chip_background</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
+        <item name="android:paddingTop">2dp</item>
+        <item name="android:paddingBottom">2dp</item>
+        <item name="android:text">@string/badge_live</item>
+        <item name="android:textColor">@color/white</item>
+        <item name="android:fontFamily">@font/manrope_w700</item>
+        <item name="android:textFontWeight">700</item>
+        <item name="android:textSize">12sp</item>
+    </style>
+
+    <!-- Text field: raised fill, 56 dp, 16 dp corners, no underline. The label is a TextView above. -->
+    <style name="Widget.App.EditText" parent="Widget.AppCompat.EditText">
+        <item name="android:background">@drawable/field_background</item>
+        <item name="android:minHeight">56dp</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.BodyLarge</item>
+        <item name="android:textColorHint">@color/text_disabled</item>
+        <item name="android:textCursorDrawable">@null</item>
+    </style>
+    <style name="Widget.App.FieldLabel" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginBottom">8dp</item>
+        <item name="android:paddingStart">0dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.Body</item>
+    </style>
+
+    <!-- Bottom navigation: Live / Calls / People. Active = white with a #262626 pill behind the icon. -->
+    <style name="Widget.App.BottomNavigation" parent="Widget.Material3.BottomNavigationView">
+        <item name="android:background">@color/app_background</item>
+        <item name="backgroundTint">@color/app_background</item>
+        <item name="itemIconTint">@color/nav_content</item>
+        <item name="itemTextColor">@color/nav_content</item>
+        <item name="itemActiveIndicatorStyle">@style/Widget.App.BottomNavigation.Indicator</item>
+        <item name="itemTextAppearanceActive">@style/TextAppearance.App.NavLabelActive</item>
+        <item name="itemTextAppearanceInactive">@style/TextAppearance.App.NavLabel</item>
+        <item name="labelVisibilityMode">labeled</item>
+        <item name="elevation">0dp</item>
+    </style>
+    <style name="Widget.App.BottomNavigation.Indicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:color">@color/accent_container</item>
+    </style>
+    <style name="TextAppearance.App.NavLabel" parent="TextAppearance.Material3.LabelMedium">
+        <item name="android:fontFamily">@font/manrope_w500</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+    <style name="TextAppearance.App.NavLabelActive" parent="TextAppearance.App.NavLabel">
+        <item name="android:fontFamily">@font/manrope_w700</item>
+        <item name="android:textFontWeight">700</item>
+    </style>
+
+    <!-- Spinner: raised field with a chevron, the same shape as a text field. -->
+    <style name="Widget.App.Spinner" parent="Widget.AppCompat.Spinner">
+        <item name="android:background">@drawable/spinner_background</item>
+        <item name="android:popupBackground">@color/surface_raised</item>
+        <item name="android:paddingStart">0dp</item>
+        <item name="android:paddingEnd">48dp</item>
+    </style>
+    <!-- A text action that sits in a settings list: left-aligned with the row titles, full width. -->
+    <style name="Widget.App.Button.Row" parent="Widget.App.Button.Text">
+        <item name="android:minHeight">56dp</item>
+        <item name="android:insetLeft">0dp</item>
+        <item name="android:insetRight">0dp</item>
+        <item name="android:paddingStart">0dp</item>
+        <item name="android:paddingEnd">0dp</item>
+        <item name="android:gravity">start|center_vertical</item>
+        <item name="android:textAlignment">viewStart</item>
+        <item name="cornerRadius">0dp</item>
     </style>
 </resources>

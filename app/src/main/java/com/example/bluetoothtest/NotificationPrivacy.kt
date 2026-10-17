@@ -14,8 +14,13 @@ import androidx.core.app.NotificationCompat
  * shown over the lock screen follows the same rule ([LockScreenNames]).
  * Message notifications never carry message text or sender; they are VISIBILITY_SECRET (nothing on a
  * secure lock screen) unless names are allowed, and then show a generic "New message".
+ *
+ * Ongoing call and stream-viewer notifications (design decision Q16, 2026-10-14) carry the peer's name in
+ * their full version, so an unlocked phone shows who the call or stream is with. A named session
+ * notification stays VISIBILITY_PRIVATE with its name-free public version unless the same lock-screen
+ * opt-in is on; an unnamed one is always PRIVATE.
  */
-internal enum class NotificationKind { SESSION, INCOMING_CALL, MESSAGE }
+internal enum class NotificationKind { SESSION, INCOMING_CALL, MESSAGE, AUDIO_LISTEN, AUDIO_BROADCAST }
 
 internal object NotificationPrivacy {
     const val PREFS = "notification_privacy"
@@ -23,6 +28,9 @@ internal object NotificationPrivacy {
     const val PUBLIC_TITLE = "Bluetooth Video"
     const val PUBLIC_SESSION_TEXT = "Active"
     const val PUBLIC_INCOMING_CALL_TEXT = "Incoming call"
+    /** Audio-only live (Design AL): neutral lock-screen text, never a name or a title. */
+    const val PUBLIC_AUDIO_LISTEN_TEXT = "Listening to a live broadcast"
+    const val PUBLIC_AUDIO_BROADCAST_TEXT = "Broadcasting audio"
     const val HIDDEN_PEER_TEXT = "Open the app to see who is calling."
 
     /** DEBUG override (`test_lock_screen_peer_names`); null follows the user's preference. */
@@ -40,7 +48,10 @@ internal object NotificationPrivacy {
     }
 
     fun visibility(kind: NotificationKind, peerNamesOptIn: Boolean): Int = when (kind) {
-        NotificationKind.SESSION -> NotificationCompat.VISIBILITY_PRIVATE
+        NotificationKind.AUDIO_LISTEN, NotificationKind.AUDIO_BROADCAST -> NotificationCompat.VISIBILITY_PRIVATE
+        // [peerNamesOptIn] is true only when the notification carries a name and the user allowed names there.
+        NotificationKind.SESSION ->
+            if (peerNamesOptIn) NotificationCompat.VISIBILITY_PUBLIC else NotificationCompat.VISIBILITY_PRIVATE
         NotificationKind.INCOMING_CALL ->
             if (peerNamesOptIn) NotificationCompat.VISIBILITY_PUBLIC else NotificationCompat.VISIBILITY_PRIVATE
         NotificationKind.MESSAGE ->
@@ -54,10 +65,35 @@ internal object NotificationPrivacy {
     fun incomingCallText(peerLabel: String?): String =
         peerLabel?.trim()?.takeIf { it.isNotEmpty() } ?: HIDDEN_PEER_TEXT
 
+    /** Longest peer name a notification carries; longer names are cut so a hostile label cannot fill the shade. */
+    const val MAX_PEER_NAME_CHARS = 40
+
+    /**
+     * The peer's name for an ongoing call or stream notification: trimmed, control characters removed,
+     * cut to [MAX_PEER_NAME_CHARS], or null when there is nothing to show.
+     */
+    fun sessionPeerName(raw: String?): String? =
+        raw?.filterNot { it.isISOControl() }?.trim()?.take(MAX_PEER_NAME_CHARS)?.trim()?.takeIf { it.isNotEmpty() }
+
+    /** The CallStyle person of an ongoing call: the peer's name, else the status text, else a neutral label. */
+    fun ongoingPersonName(statusText: String?, peerName: String?): String =
+        sessionPeerName(peerName) ?: statusText?.trim()?.takeIf { it.isNotEmpty() } ?: CallNotificationActions.NEUTRAL_PERSON
+
+    /**
+     * The full (unlocked) notification's text. A CallStyle call already shows the name as its title, so its
+     * text stays the status; any other session notification puts the name in front of the status.
+     */
+    fun sessionContentText(baseText: String, peerName: String?, ongoingCallStyle: Boolean): String {
+        val name = sessionPeerName(peerName)
+        return if (name == null || ongoingCallStyle) baseText else "$name \u00B7 $baseText"
+    }
+
     fun publicText(kind: NotificationKind): String = when (kind) {
         NotificationKind.SESSION -> PUBLIC_SESSION_TEXT
         NotificationKind.INCOMING_CALL -> PUBLIC_INCOMING_CALL_TEXT
         NotificationKind.MESSAGE -> "New message"
+        NotificationKind.AUDIO_LISTEN -> PUBLIC_AUDIO_LISTEN_TEXT
+        NotificationKind.AUDIO_BROADCAST -> PUBLIC_AUDIO_BROADCAST_TEXT
     }
 
     /** Applies visibility and a name-free public version to [builder]. */

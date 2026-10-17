@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Controls over video: translucent white; solid white when toggled on (muted, video off). -->
+<!-- Call controls: raised grey circles; solid white when toggled on (muted, video off, speaker on). -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_enabled="false" android:color="#26FFFFFF" />
-    <item android:state_checked="true" android:color="@color/overlay_button_on" />
-    <item android:color="@color/overlay_button" />
+    <item android:state_enabled="false" android:color="#801E1E1E" />
+    <item android:state_checked="true" android:color="@color/white" />
+    <item android:color="@color/surface_raised" />
 </selector>

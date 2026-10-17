@@ -9,9 +9,16 @@ import org.junit.Test
 
 class CallUxFeaturesTest {
     @Test
-    fun userSessionsGetTheBugFixesAndNoExperiment() {
+    fun userSessionsGetTheBugFixesAndTheCallFeaturesButNoExperiment() {
         val release = CallUxSettings.resolve(debugBuild = false, benchmarkLaunch = false) { true }
-        assertEquals(CallUxSettings(audioFocus = true, ringerPolicy = true), release)
+        // Ringback, call notifications, ear camera pause and lock-screen calls are on by default since 2026-10-17.
+        assertEquals(
+            CallUxSettings(
+                audioFocus = true, ringerPolicy = true, ringback = true, callStyleNotifications = true,
+                proximityCameraPause = true, lockScreen = true,
+            ),
+            release,
+        )
         // A release build ignores launch extras even if something claims a benchmark launch.
         assertEquals(release, CallUxSettings.resolve(debugBuild = false, benchmarkLaunch = true) { true })
         assertEquals(release, CallUxSettings.resolve(debugBuild = true, benchmarkLaunch = false) { true })

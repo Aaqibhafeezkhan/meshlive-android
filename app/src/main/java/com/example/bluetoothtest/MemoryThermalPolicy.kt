@@ -37,7 +37,11 @@ internal object MemoryThermalPolicy {
      * throttled, above 0.95 moderately, above 0.85 lightly. A forecast is less accurate than the
      * reported status (same guide), so this only ever raises the effective status to SEVERE at most;
      * it never reaches CRITICAL, which keeps blocking streaming tied to the platform's own status.
-     * NaN (unsupported, or called more than once per 10 s) implies no status.
+     * NaN implies no status. NaN means the device has no skin sensor with a SEVERE threshold (unsupported), or
+     * the call came sooner than PowerManager.MINIMUM_HEADROOM_TIME_MILLIS (500 ms) after the previous one. The
+     * "once per 10 s" in the official guide is advice, not the client limit; and a call every 10 s can never
+     * produce a forecast, because the server drops its samples after 10 s of silence and needs 3 to forecast
+     * (see [ThermalHeadroomSampler], which samples every 2 s inside the Experimental forecast path).
      */
     fun statusFromHeadroom(headroom: Float): Int = when {
         headroom.isNaN() -> PowerManager.THERMAL_STATUS_NONE
@@ -118,14 +122,72 @@ internal object MemoryThermalPolicy {
     @Volatile var senderQueueBytes: Long = DEFAULT_SENDER_QUEUE_BYTES
         private set
 
-    /** [policy] decides whether the low-RAM cap entry applies (`test_device_policy_off=low-ram-sender-queue`). */
-    fun configureForDevice(isLowRamDevice: Boolean, policy: ResolvedDevicePolicy = DeviceFamilyPolicy.current()) {
-        senderQueueBytes = if (isLowRamDevice && policy.has<SenderQueueByteLimit>()) {
+    /** Memory tier of this phone (null until configured with a MemTotal), see [MemoryTier]. */
+    @Volatile var memoryTier: MemoryTier? = null
+        private set
+
+    /** Buffer sizing for the tier; the original constants unless `test_memory_tier=true`. */
+    @Volatile var memorySizing: MemorySizing = MemorySizing(DEFAULT_SENDER_QUEUE_BYTES, MemoryTierPolicy.DEFAULT_MAX_LAG_FRAMES, "defaults")
+        private set
+
+    /**
+     * [policy] decides whether the low-RAM cap entry applies (`test_device_policy_off=low-ram-sender-queue`).
+     * With [totalMiB] the tier is derived and logged ([tierLoggingActive]); the tier sizes buffers only with the
+     * Experimental switch `test_memory_tier=true` and while `memory-tier-sizing` is not switched off, and then only
+     * downwards: the sender queue is the smaller of the low-RAM rule and the tier rule.
+     */
+    fun configureForDevice(
+        isLowRamDevice: Boolean,
+        policy: ResolvedDevicePolicy = DeviceFamilyPolicy.current(),
+        totalMiB: Long? = null,
+        sdkInt: Int = android.os.Build.VERSION.SDK_INT,
+        sizingSwitch: Boolean = ThermalSwitches.memoryTierSizing,
+    ) {
+        val lowRamBytes = if (isLowRamDevice && policy.has<SenderQueueByteLimit>()) {
             LOW_RAM_SENDER_QUEUE_BYTES
         } else {
             DEFAULT_SENDER_QUEUE_BYTES
         }
+        val tier = totalMiB?.let(MemoryTier::fromTotalMiB)
+        memoryTier = tier
+        val sizing = if (tier != null) {
+            MemoryTierPolicy.sizing(tier, sdkInt, isLowRamDevice, sizingSwitch && "memory-tier-sizing" !in policy.disabled)
+        } else {
+            MemorySizing(DEFAULT_SENDER_QUEUE_BYTES, MemoryTierPolicy.DEFAULT_MAX_LAG_FRAMES, "defaults")
+        }
+        memorySizing = sizing
+        senderQueueBytes = minOf(lowRamBytes, sizing.senderQueueBytes)
     }
+
+    /**
+     * Reads ActivityManager (low-RAM flag, MemTotal, heap class), configures the policy and returns the
+     * `BENCHMARK memory_tier:` line for the log. Root hook: replaces the existing configureForDevice call.
+     */
+    fun configureFromSystem(context: android.content.Context, policy: ResolvedDevicePolicy = DeviceFamilyPolicy.current()): String? {
+        val manager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+        val lowRam = manager?.isLowRamDevice == true
+        val totalMiB = MemoryTierPolicy.readTotalMiB(context)
+        configureForDevice(lowRam, policy, totalMiB)
+        if (!tierLoggingActive(policy)) return null
+        val tier = memoryTier ?: return "BENCHMARK memory_tier: totalMiB=unknown | lowRam=$lowRam | senderQueueBytes=$senderQueueBytes"
+        return MemoryTierPolicy.logLine(
+            totalMiB ?: 0L,
+            tier,
+            android.os.Build.VERSION.SDK_INT,
+            lowRam,
+            manager?.memoryClass ?: 0,
+            memorySizing,
+            ThermalSwitches.memoryTierSizing && "memory-tier-sizing" !in policy.disabled,
+        )
+    }
+
+    /** True while the tier log entry is on (`test_device_policy_off=memory-tier-log`). */
+    fun tierLoggingActive(policy: ResolvedDevicePolicy = DeviceFamilyPolicy.current()): Boolean =
+        policy.has<MemoryTierLogging>()
+
+    /** True when the headroom sampler has a reason to run: reduction is on and the forecast or the fallback experiment is. */
+    fun headroomSamplerNeeded(thermalReductionOn: Boolean): Boolean =
+        thermalReductionOn && (headroomForecast || ThermalSwitches.batteryFallback)
 
     /** True while the thermal workload ladder entry is on (switch: `test_device_policy_off=thermal-status-ladder`). */
     fun ladderActive(policy: ResolvedDevicePolicy = DeviceFamilyPolicy.current()): Boolean =
@@ -170,7 +232,7 @@ internal object MemoryThermalPolicy {
     const val MODERATE_SPEED_FLOOR = 8
 
     /** This area's registry entries (joined by DevicePolicyRegistry). */
-    val entries: List<DevicePolicyEntry> get() = MemoryThermalEntries.entries
+    val entries: List<DevicePolicyEntry> get() = MemoryThermalEntries.entries + ThermalFamilyEntries.entries
 }
 
 // ---- Registry entries (area MEMORY_THERMAL) ------------------------------------------------------
@@ -217,8 +279,22 @@ internal object MemoryThermalEntries {
         ADPF_PAGE,
         "Statuses: LIGHT/MODERATE are 'some throttling, no significant performance impact'; SEVERE, CRITICAL, EMERGENCY, " +
             "SHUTDOWN 'significant throttling that impacts performance'. getThermalHeadroom: 0.0 no throttling to 1.0 " +
-            "THERMAL_STATUS_SEVERE; the forecast is 'less accurate than using the current thermal status'. NaN means the " +
-            "API is unsupported or was called more than once per 10 s",
+            "THERMAL_STATUS_SEVERE; the forecast is 'less accurate than using the current thermal status'. The page says " +
+            "NaN means the API is unsupported or was called more than once per 10 s; AOSP's client limit is 500 ms " +
+            "(see HEADROOM_CALLS)",
+    )
+    private val HEADROOM_CALLS = PolicySource(
+        PolicySourceKind.AOSP_SOURCE,
+        "https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/os/PowerManager.java",
+        "getThermalHeadroom: MINIMUM_HEADROOM_TIME_MILLIS = 500, a call sooner than that returns NaN; 'no benefit to " +
+            "calling more frequently than about once per second'. Forecast range 0..60 s",
+    )
+    private val HEADROOM_SERVER = PolicySource(
+        PolicySourceKind.AOSP_SOURCE,
+        "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-13.0.0_r1/services/core/java/com/android/server/power/ThermalManagerService.java",
+        "TemperatureWatcher: samples skin temperature once per second only while forecast calls arrive within " +
+            "INACTIVITY_THRESHOLD_MILLIS (10000), otherwise clears all samples; MINIMUM_SAMPLE_COUNT = 3 (fewer returns " +
+            "the current normalised value); NaN when no TYPE_SKIN SEVERE threshold exists ('No temperature thresholds found')",
     )
     private val HAL_SEVERITY = PolicySource(
         PolicySourceKind.AOSP_SOURCE,
@@ -314,7 +390,9 @@ internal object MemoryThermalEntries {
             reviewed = REVIEWED,
             origin = "new (the app had no onTrimMemory handler)",
             confidenceNote = "The maps are rebuilt by the next scan; their small size makes the saving modest. Android 14+ " +
-                "sends no RUNNING_* levels, so there only the BACKGROUND release applies.",
+                "sends no RUNNING_* levels, so there only the BACKGROUND release applies. A screen-off foreground-service " +
+                "process is not cached and, per the AOSP cached-apps freezer page, gets at most TRIM_MEMORY_BACKGROUND, so no " +
+                "pressure notice is expected there: sizing relies on the memory tier budget (MemoryTier), not on trim levels.",
             area = PolicyArea.MEMORY_THERMAL,
             validation = PolicyValidation.UPSTREAM_DOCUMENTED,
             fallback = "No release (the maps are pruned by their normal freshness checks)",
@@ -351,21 +429,31 @@ internal object MemoryThermalEntries {
             matcher = DeviceMatcher(sdkMin = 30),
             effects = listOf(ThermalHeadroomForecastWorkload),
             behaviour = "Proposed: treat getThermalHeadroom(10) above 0.85/0.95/1.0 as LIGHT/MODERATE/SEVERE for the workload " +
-                "ladder only (never CRITICAL, never a stream stop), sampled at most every 10 s, so reduction starts before " +
-                "the reported status rises. Documented guide thresholds, not locally tested.",
-            sources = listOf(ADPF_STATUSES, POWER_MANAGER),
+                "ladder only (never CRITICAL, never a stream stop), so reduction starts before the reported status rises. " +
+                "Corrected sampling (T-01): ThermalHeadroomSampler calls every 2 s while a session runs (never below the " +
+                "500 ms client limit), discards the first 3 s of each window, and gives the ladder a value every 10 s; " +
+                "NaN twice in a row means unsupported. The original arm (one call per 10 s) stays behind " +
+                "test_thermal_forecast_legacy_10s. The default path (status ladder alone) is untouched.",
+            sources = listOf(ADPF_STATUSES, POWER_MANAGER, HEADROOM_CALLS, HEADROOM_SERVER),
             sourceStatus = PolicySourceStatus.PARTIAL,
-            evidence = listOf(NO_RUN),
+            evidence = listOf(
+                NO_RUN,
+                "NEEDS RETEST: every earlier forecast A/B ran at the 10 s cadence, where the AOSP watcher is idle or just " +
+                    "cleared at each call and returns the current value, so the forecast arm was never active",
+            ),
             confidence = PolicyConfidence.LOW,
             reviewed = REVIEWED,
-            origin = "new experiment; the app only logged the headroom at debug level",
-            confidenceNote = "The guide gives the thresholds for devices whose status lags and warns the forecast is less " +
-                "accurate; SoC families differ in forecast quality (vendor thermal HAL), and NaN is common on budget SoCs.",
+            origin = "new experiment; the app only logged the headroom at debug level. Sampling rewritten in batch T (T-01)",
+            confidenceNote = "The mechanism of the cadence fix is read from AOSP (high confidence); the guide thresholds, the " +
+                "forecast quality per vendor thermal HAL and the benefit of acting early are not locally tested.",
             area = PolicyArea.MEMORY_THERMAL,
             proposed = true,
             validation = PolicyValidation.EXPERIMENTAL,
             fallback = "The reported status alone drives the ladder",
-            legacySwitches = listOf("DEBUG test_thermal_forecast=true enables the code path (default off)"),
+            legacySwitches = listOf(
+                "DEBUG test_thermal_forecast=true enables the code path (default off)",
+                "DEBUG test_thermal_forecast_legacy_10s=true selects the original 10 s sampling arm",
+            ),
         ),
         DevicePolicyEntry(
             id = "thermal-native-speed-floor",
@@ -396,12 +484,15 @@ internal object MemoryThermalEntries {
         ),
         DevicePolicyEntry(
             id = "thermal-battery-temperature-fallback",
-            title = "Battery temperature as the thermal signal on SoCs without a thermal HAL",
-            matcher = DeviceMatcher(socFamilies = setOf(SocFamily.UNISOC, SocFamily.MEDIATEK), sdkMin = 29),
+            title = "Battery temperature as the thermal signal when headroom has no skin thresholds",
+            matcher = DeviceMatcher(sdkMin = 29),
             effects = listOf(ThermalBatteryTemperatureFallback),
-            behaviour = "Proposed, not implemented: if getCurrentThermalStatus stays NONE and getThermalHeadroom is NaN on a " +
-                "budget Unisoc/MediaTek phone, drive the ladder from ACTION_BATTERY_CHANGED temperature (the app only " +
-                "shows it today). Matches the SoC families where a missing thermal HAL is most likely; reported only.",
+            behaviour = "Proposed (Experimental, test_thermal_battery_fallback=true): when ThermalHeadroomSampler sees NaN three " +
+                "times in a row about 2 s apart (or, on API 35+, getThermalHeadroomThresholds() is empty), the phone is marked " +
+                "'no skin thresholds' and the ladder status becomes the higher of the reported status and the battery " +
+                "temperature (40/43/46 degrees Celsius for LIGHT/MODERATE/SEVERE, never CRITICAL). Runtime detection replaces " +
+                "the former Unisoc/MediaTek matcher; the log line also says when the reported status stays NONE while the " +
+                "battery is hot.",
             sources = listOf(
                 PolicySource(
                     PolicySourceKind.PLATFORM_DOC,
@@ -409,19 +500,26 @@ internal object MemoryThermalEntries {
                     "'If the initial value of GetThermalHeadroom() is NaN, the API is not available on the device'; the " +
                         "device model may not have the thermal hardware",
                 ),
+                HEADROOM_SERVER,
+                HEADROOM_CALLS,
                 BATTERY,
             ),
             sourceStatus = PolicySourceStatus.PARTIAL,
-            evidence = listOf("none: no owned phone is Unisoc, and no owned MediaTek phone lacks the thermal HAL"),
+            evidence = listOf(
+                "none: no owned phone is expected to return NaN; the first-call result per owned phone is still to be logged " +
+                    "(BENCHMARK thermal_sampler / thermal_fallback)",
+            ),
             confidence = PolicyConfidence.LOW,
             reviewed = REVIEWED,
-            origin = "new proposal for devices the project does not own",
-            confidenceNote = "That these SoC families lack the HAL is an expectation, not a documented fact; the NaN rule is " +
-                "official. A temperature threshold needs per-SoC data before promotion.",
+            origin = "new proposal for devices the project does not own; matcher changed from SoC family to runtime detection in batch T (T-02)",
+            confidenceNote = "The NaN mechanism is read from AOSP (high); which phones lack skin thresholds is unknown, so no family " +
+                "is named. The battery thresholds are ours (battery temperature lags skin temperature) and need per-SoC data " +
+                "before promotion.",
             area = PolicyArea.MEMORY_THERMAL,
             proposed = true,
             validation = PolicyValidation.EXPERIMENTAL,
             fallback = "Encode-time overload stepping (NativeEncoderSpeedGovernor) and link-rate control remain the only load shedding",
+            legacySwitches = listOf("DEBUG test_thermal_battery_fallback=true enables the code path (default off)"),
         ),
     )
 }

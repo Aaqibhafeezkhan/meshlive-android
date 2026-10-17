@@ -31,11 +31,27 @@ class BenchmarkPlanTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.tunable_extras({"gatt_request_mtu": True})
 
+    def test_auto_ladder_tunables_map_to_their_debug_extras(self):
+        self.assertEqual({"test_auto_ladder": True, "test_auto_ladder_class": "weak"},
+                         runner.tunable_extras({"auto_ladder": True, "auto_ladder_class": "weak"}))
+        self.assertEqual({"test_auto_ladder": False}, runner.tunable_extras({"auto_ladder": False}))
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"auto_ladder": "on"})
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"auto_ladder_class": True})
+
     def test_phy_setup_stall_tunable_maps_to_its_debug_extra(self):
         # Default-on call 2M setup-stall guard; false is the control arm (2026-10-10).
         self.assertEqual({"test_phy_setup_stall": False}, runner.tunable_extras({"phy_setup_stall": False}))
         with self.assertRaises(ValueError):
             runner.tunable_extras({"phy_setup_stall": "off"})
+
+    def test_message_dial_and_progress_total_tunables_map_to_their_debug_extras(self):
+        # Default-on control arms of the store-and-forward dial fixes (2026-10-13).
+        self.assertEqual({"test_message_adaptive_phy": False}, runner.tunable_extras({"message_adaptive_phy": False}))
+        self.assertEqual({"test_mv2_progress_total": False}, runner.tunable_extras({"mv2_progress_total": False}))
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"message_adaptive_phy": "off"})
 
     def test_coc_phy_after_connect_tunable_maps_to_its_debug_extra(self):
         # Experimental CoC PHY request after connect + hop auth (app default off, 2026-10-10).
@@ -77,6 +93,13 @@ class BenchmarkPlanTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.tunable_extras({"relay_child_media_age": 1})
 
+    def test_relay_child_thinning_tunable_maps_to_its_debug_extra(self):
+        # Experimental relay child thinning is set on every phone of the chain (app default off).
+        self.assertEqual({"test_relay_child_thinning": True}, runner.tunable_extras({"relay_child_thinning": True}))
+        self.assertEqual({"test_relay_child_thinning": False}, runner.tunable_extras({"relay_child_thinning": False}))
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"relay_child_thinning": 1})
+
     def test_relay_parent_trickle_and_one_pdu_move_map_to_their_debug_extras(self):
         self.assertEqual(
             {"test_relay_parent_trickle": False, "test_relay_one_pdu_move": False},
@@ -97,6 +120,9 @@ class BenchmarkPlanTest(unittest.TestCase):
     def test_relay_establish_fallback_maps_to_its_debug_extra(self):
         self.assertEqual({"test_relay_establish_fallback": False}, runner.tunable_extras({"relay_establish_fallback": False}))
 
+    def test_relay_establish_budget_maps_to_its_debug_extra(self):
+        self.assertEqual({"test_relay_establish_budget": True}, runner.tunable_extras({"relay_establish_budget": True}))
+
     def test_relay_cold_start_maps_to_its_debug_extra(self):
         self.assertEqual({"test_relay_cold_start": False}, runner.tunable_extras({"relay_cold_start": False}))
 
@@ -105,6 +131,21 @@ class BenchmarkPlanTest(unittest.TestCase):
         self.assertEqual({"test_relay_child_reanchor": False}, runner.tunable_extras({"relay_child_reanchor": False}))
         with self.assertRaises(ValueError):
             runner.tunable_extras({"relay_child_reanchor": 0})
+
+    def test_time_based_sizing_tunables_map_to_their_debug_extras(self):
+        # Q31: both arms are experiments (app default off); the budgets are integers in milliseconds.
+        self.assertEqual(
+            {"test_relay_time_queue": True, "test_playout_time_target": True,
+             "test_time_queue_budget_ms": 1200, "test_time_queue_floor_ms": 300},
+            runner.tunable_extras({"relay_time_queue": True, "playout_time_target": True,
+                                   "time_queue_budget_ms": 1200, "time_queue_floor_ms": 300}))
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"relay_time_queue": 1})
+        # The sustained-drain estimator is a separate experiment (app default off).
+        self.assertEqual({"test_relay_drain_sustained": True},
+                         runner.tunable_extras({"relay_drain_sustained": True}))
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"relay_drain_sustained": 1})
 
     def test_relay_pacing_tunables_map_to_their_debug_extras(self):
         # relay_pace_head is a default-on fix (control arm false); relay_pace_lead_cap is an experiment.
@@ -119,6 +160,12 @@ class BenchmarkPlanTest(unittest.TestCase):
                          runner.tunable_extras({"relay_child_stall_guard": False, "relay_upstream_dck": True}))
         with self.assertRaises(ValueError):
             runner.tunable_extras({"relay_upstream_dck": 1})
+
+    def test_decoder_size_rebuild_is_a_default_on_control_arm(self):
+        self.assertEqual({"test_decoder_size_rebuild": False},
+                         runner.tunable_extras({"decoder_size_rebuild": False}))
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"decoder_size_rebuild": "no"})
 
     def test_call_audio_tunables_map_to_their_debug_extras(self):
         # Gap realignment is a default-on fix (control arm false); the other two are experiments.
@@ -848,9 +895,13 @@ class BenchmarkPlanTest(unittest.TestCase):
                     self.assertEqual(launch[launch.index("test_audio") + 1], "true")
                     self.assertIn("test_raw_yuv", launch)
                     self.assertTrue(launch[launch.index("test_raw_yuv") + 1].endswith(".yuv"))
+                    # The declared geometry travels with the file: the app never infers it from the encoder.
+                    self.assertEqual(launch[launch.index("test_raw_width") + 1], "640")
+                    self.assertEqual(launch[launch.index("test_raw_height") + 1], "360")
                     self.assertTrue(any(call.args[1] == "push" for call in instance.adb.call_args_list))
                 else:
                     self.assertNotIn("test_raw_yuv", launch)
+                    self.assertNotIn("test_raw_width", launch)
 
     def test_raw_manifest_retains_exact_fixture_identity_and_distinct_scope(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -896,6 +947,24 @@ class BenchmarkPlanTest(unittest.TestCase):
             instance.adb = Mock(side_effect=["", "", "0" * 64 + "  corrupted.yuv"])
             with self.assertRaisesRegex(RuntimeError, "hash mismatch"):
                 instance.stage_raw_fixture("a")
+
+    def test_input_folder_is_created_by_the_app_and_shell_owned_folder_blocks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = runner.Runner("adb", self.devices("ab"), self.case([{"phone": "b", "parent": "a"}]),
+                                     Path(directory) / "run")
+            instance.adb = Mock(return_value="u0_a489")
+            instance.prepare_app_files_dir("a")
+            command = instance.adb.call_args.args[2]
+            self.assertTrue(command.startswith(f"run-as {runner.PACKAGE} mkdir -p "))
+            self.assertEqual(instance.events[-1], {"device": "a", "action": "app_files_dir_ready", "owner": "u0_a489"})
+            instance.adb = Mock(return_value="shell")
+            with self.assertRaisesRegex(RuntimeError, "owned by shell"):
+                instance.prepare_app_files_dir("a")
+            # HyperOS: run-as fails, one app launch creates the folder.
+            instance.adb = Mock(side_effect=[RuntimeError("run-as: Permission denied"), "", "", "u0_a59"])
+            instance.prepare_app_files_dir("a")
+            self.assertEqual(instance.adb.call_args_list[1].args[1:4], ("shell", "am", "start"))
+            self.assertEqual(instance.events[-1]["owner"], "u0_a59")
 
     def trace_instance(self, directory):
         case = self.case([{"phone": "b", "parent": "a"}])

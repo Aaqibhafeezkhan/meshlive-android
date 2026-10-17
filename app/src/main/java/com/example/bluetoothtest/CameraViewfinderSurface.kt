@@ -3,6 +3,7 @@ package com.example.bluetoothtest
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.os.Looper
+import android.util.Log
 import android.view.Surface
 import androidx.camera.viewfinder.core.ScaleType
 import androidx.camera.viewfinder.core.ViewfinderSurfaceRequest
@@ -46,6 +47,17 @@ class CameraViewfinderSurface(
         }
         viewfinder.transformationInfo =
             Camera2TransformationInfo.createFromCharacteristics(characteristics)
+        // V-21: the facts the preview transform follows (a SurfaceView is transformed by the viewfinder, never by
+        // scaleX/scaleY), so a rotated or mis-framed preview on large-sensor phones can be read from the log.
+        runCatching {
+            val sensorOrientation = safeCameraRead("SENSOR_ORIENTATION") { characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) }
+            val facing = safeCameraRead("LENS_FACING") { characteristics.get(CameraCharacteristics.LENS_FACING) }
+            Log.i(
+                "BluetoothVideo",
+                "BENCHMARK camera_transform: scaleMode=$scaleMode | sensorOrientation=${sensorOrientation ?: "unknown"} | " +
+                    "lensFacing=${facing ?: "unknown"} | surface=${width}x$height",
+            )
+        }
         val pending = viewfinder.requestSurfaceSessionAsync(
             ViewfinderSurfaceRequest(width, height),
         )

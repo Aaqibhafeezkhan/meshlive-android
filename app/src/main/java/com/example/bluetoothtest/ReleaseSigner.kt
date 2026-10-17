@@ -4,7 +4,7 @@ import java.security.MessageDigest
 
 /**
  * The signing certificate the project's release APKs carry, pinned in the app (updater). The value
- * is the one constant [AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256], which README "Verifying a
+ * is the one constant [AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256], which docs/USER_GUIDE.md "Verifying a
  * release" and `tools/make_release.py` (`EXPECTED_CERT_SHA256`) must equal (tests of both sides
  * check it). A certificate rotation adds the next certificate here in a release signed by the old
  * key, before the old key stops signing: only then can an installed copy still verify the new APK.

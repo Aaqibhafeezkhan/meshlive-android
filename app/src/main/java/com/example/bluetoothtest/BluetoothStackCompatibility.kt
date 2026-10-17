@@ -62,7 +62,7 @@ internal fun pauseClassicViewerDiscoveryAtCapacity(
  * Experimental legacy relief (default off; DEBUG `test_call_legacy_relief`): call paths get a view
  * of this phone with every LEGACY_QUALCOMM_CALL entry switched off, so none of the legacy call
  * protections applies and this phone advertises its normal receive limits. Relay and stream rules
- * keep the real traits. Confidence: low until the phone A/B in the README test plan.
+ * keep the real traits. Confidence: low until the phone A/B in docs/TESTING.md.
  */
 internal fun privateCallStackFingerprint(
     current: BluetoothStackFingerprint = BluetoothStackFingerprint.current(),

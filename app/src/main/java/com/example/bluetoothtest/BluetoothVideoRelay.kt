@@ -275,6 +275,7 @@ class BluetoothVideoRelay(
         ).also(BleDiscoveryAdvertiser::start)
         onStatus("Classic relay is advertising. Start the source phone now.")
         val socket = serverSocket.accept()
+        ClassicRfcommCap.note(socket)
         upstreamSocket = socket
         upstreamDiscoveryAdvertiser?.close()
         upstreamDiscoveryAdvertiser = null

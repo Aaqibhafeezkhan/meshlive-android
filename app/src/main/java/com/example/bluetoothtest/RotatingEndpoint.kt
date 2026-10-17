@@ -31,7 +31,7 @@ object CallEndpointOpening {
     ): DiscoverySelectionCheck.Result {
         val result = DiscoverySelectionCheck.check(
             selected,
-            RotatingDiscoveryIds.ROLE_CALL_OFFER,
+            RotatingDiscoveryIds.roleFor(selected),
             endpointNodeId.toByteArray(),
             opening,
         )
@@ -63,12 +63,20 @@ object CallEndpointOpening {
  * peer's real identity (null: no store attached).
  */
 object PresenceEligibility {
-    fun reason(vaultPresent: Boolean, persistent: Boolean, peerState: VerificationState?, visibleToThem: Boolean): String? = when {
+    fun reason(
+        vaultPresent: Boolean,
+        persistent: Boolean,
+        peerState: VerificationState?,
+        visibleToThem: Boolean,
+        /** Naming v2 ([CodeOnlyLeaseRule]): a contact only checked by code gets no new leases until scanned both ways. */
+        codeOnlyUnscanned: Boolean = false,
+    ): String? = when {
         !vaultPresent -> "no_vault"
         !persistent -> "vault_not_persistent"
         peerState == null -> "no_contact_store"
         peerState != VerificationState.VERIFIED -> "peer_${peerState.name.lowercase()}"
         !visibleToThem -> "contact_switch_off"
+        codeOnlyUnscanned -> "code_only_not_scanned"
         else -> null
     }
 }

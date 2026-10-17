@@ -136,6 +136,17 @@ enum class ChildQueueOffer {
      * already outstanding (repeated with a per-child backoff, RelayRecoveryBackoff, until a keyframe arrives).
      */
     SHED_DROPPED,
+    /**
+     * Experimental relay child thinning only (RelayChildLayerPolicy, level BASE): a verified-discardable
+     * frame was not forwarded to this child. No keyframe is needed and no upstream request follows.
+     */
+    LAYER_THINNED,
+    /**
+     * Experimental relay child thinning only (level AUDIO): video is paused for this child. Nothing is
+     * requested upstream while paused. After the pause the first video is the (paced) keyframe request
+     * reported as [SHED_WAITING_FOR_KEYFRAME], then [SHED_DROPPED] until the keyframe arrives.
+     */
+    LAYER_PAUSED,
 }
 
 /**
@@ -158,6 +169,18 @@ class RelayChildQueue(
      * codec-safely beyond its age budget. Null: nothing is ever shed.
      */
     private val mediaAgeBound: RelayMediaAgeBound? = null,
+    /**
+     * Audio-only live stream (Design AL), null for video. Non-null: this queue never waits for a join
+     * keyframe, sheds its oldest whole audio records beyond the age bound (when [AudioLiveRelayQueue.ageBound])
+     * and feeds the child health rules.
+     */
+    private val audioLive: AudioLiveRelayQueue? = null,
+    /**
+     * Experimental relay child thinning (off by default): a [RelayChildLayerPolicy] level can be set on
+     * this queue ([setLayerLevel]); at BASE verified-discardable frames are not queued, at AUDIO no video
+     * is. Off: [setLayerLevel] does nothing and no record is ever dropped for a layer.
+     */
+    private val layerThinning: Boolean = false,
     private val nanoTime: () -> Long = System::nanoTime,
 ) {
     private class Queued(val envelope: MeshEnvelope, val atNs: Long)
@@ -175,13 +198,44 @@ class RelayChildQueue(
     private var lastKeyFrameTakenNs = Long.MIN_VALUE
     private val videoWaitMax = WindowMax()
 
+    // Experimental relay child thinning (all guarded by [lock]; untouched while [layerThinning] is false).
+    private var layerLevel = RelayChildLevel.FULL
+    private var offeredFullBytes = 0L
+    private var offeredBaseBytes = 0L
+    private var lastOfferedKeyFrameBytes = 0
+    private var lastDiscardableOfferedNs = Long.MIN_VALUE
+    private var lastAudioOfferedNs = Long.MIN_VALUE
+    private var layerThinnedFrames = 0L
+    private var layerPausedFrames = 0L
+    private var layerResumeWait = false
+    private val layerResumeRequests = RelayRecoveryBackoff()
+
     fun offer(envelope: MeshEnvelope): ChildQueueOffer = lock.withLock {
-        if (waitingForJoinKeyFrame && !envelope.isControl && !envelope.isAudio) {
+        audioLive?.let { return offerAudio(it, envelope) }
+        // Experimental time-based sizing: the offered load, before any record is dropped.
+        mediaAgeBound?.timeSizer?.onOffered(envelope.payload.size, envelope.isKeyFrame)
+        if (layerThinning) offerLayered(envelope)?.let { return it }
+        // After the audio level, configuration and other never-dropped records pass while video waits for its
+        // keyframe: the source's encoder may have restarted meanwhile and the keyframe needs its new configuration.
+        val resumeKeeps = layerResumeWait && relayEnvelopeShedClass(envelope) == ShedClass.KEEP
+        if (waitingForJoinKeyFrame && !envelope.isControl && !envelope.isAudio && !resumeKeeps) {
             if (!envelope.isKeyFrame) {
                 skippedBeforeJoin++
+                if (layerResumeWait) {
+                    // Left the audio level: the keyframe request is paced like a bounded-age recovery.
+                    return if (layerResumeRequests.tryRequest(nanoTime())) {
+                        ChildQueueOffer.SHED_WAITING_FOR_KEYFRAME
+                    } else {
+                        ChildQueueOffer.SHED_DROPPED
+                    }
+                }
                 return ChildQueueOffer.WAITING_FOR_JOIN_KEYFRAME
             }
             waitingForJoinKeyFrame = false
+            if (layerResumeWait) {
+                layerResumeWait = false
+                mediaAgeBound?.shedder?.reset()
+            }
             append(envelope)
             return ChildQueueOffer.STARTED_AT_KEYFRAME
         }
@@ -198,6 +252,135 @@ class RelayChildQueue(
         append(envelope)
         ChildQueueOffer.QUEUED
     }
+
+    /**
+     * Experimental relay child thinning: measures what is offered (before any drop, so the policy sees the
+     * stream's real rates) and applies the current level. Returns null when the record goes on to the
+     * ordinary rules. Whole records only: audio, configuration, rotation, lifecycle and headers are never
+     * dropped here. The lock is held.
+     */
+    private fun offerLayered(envelope: MeshEnvelope): ChildQueueOffer? {
+        val shedClass = relayEnvelopeShedClass(envelope)
+        val size = envelope.payload.size.toLong()
+        val nowNs = nanoTime()
+        if (shedClass == ShedClass.KEEP) {
+            if (envelope.isAudio) {
+                lastAudioOfferedNs = nowNs
+                offeredFullBytes += size
+                offeredBaseBytes += size
+            }
+            return null
+        }
+        offeredFullBytes += size
+        val discardable = envelope.isDiscardable && !envelope.isKeyFrame
+        if (discardable) {
+            lastDiscardableOfferedNs = nowNs
+        } else {
+            offeredBaseBytes += size
+        }
+        if (envelope.isKeyFrame) lastOfferedKeyFrameBytes = envelope.payload.size
+        return when (layerLevel) {
+            RelayChildLevel.AUDIO -> {
+                layerPausedFrames++
+                // The wait for a keyframe began when the level was set; a keyframe offered while paused is dropped too.
+                ChildQueueOffer.LAYER_PAUSED
+            }
+            RelayChildLevel.BASE -> if (discardable) {
+                layerThinnedFrames++
+                ChildQueueOffer.LAYER_THINNED
+            } else {
+                null
+            }
+            RelayChildLevel.FULL -> null
+        }
+    }
+
+    /**
+     * Moves this child to [level]. BASE drops the discardable video already queued; AUDIO drops all queued
+     * video and makes the queue wait for a keyframe (as a joining child does) for when video returns; leaving
+     * AUDIO keeps that wait and starts the paced keyframe requests. Returns false when nothing changed.
+     */
+    fun setLayerLevel(level: RelayChildLevel): Boolean = lock.withLock {
+        if (!layerThinning || level == layerLevel) return false
+        val previous = layerLevel
+        layerLevel = level
+        when (level) {
+            RelayChildLevel.FULL -> Unit
+            RelayChildLevel.BASE -> removeQueued { relayEnvelopeShedClass(it) == ShedClass.VIDEO && it.isDiscardable }
+            RelayChildLevel.AUDIO -> {
+                removeQueued { relayEnvelopeShedClass(it) != ShedClass.KEEP }
+                waitingForJoinKeyFrame = true
+                layerResumeWait = true
+                mediaAgeBound?.shedder?.reset()
+            }
+        }
+        if (previous == RelayChildLevel.AUDIO) {
+            // Video is back: from the next frame on a keyframe is requested (paced) and video waits for it.
+            layerResumeWait = true
+            waitingForJoinKeyFrame = true
+        }
+        true
+    }
+
+    private fun removeQueued(predicate: (MeshEnvelope) -> Boolean) {
+        val iterator = packets.iterator()
+        while (iterator.hasNext()) {
+            val queued = iterator.next()
+            if (predicate(queued.envelope)) {
+                queuedBytes -= queued.envelope.payload.size
+                layerThinnedFrames++
+                iterator.remove()
+            }
+        }
+    }
+
+    /** What the policy needs from this queue; zeros while thinning is off. */
+    fun layerStats(): RelayChildLayerStats = lock.withLock {
+        val nowNs = nanoTime()
+        RelayChildLayerStats(
+            level = layerLevel,
+            offeredFullBytes = offeredFullBytes,
+            offeredBaseBytes = offeredBaseBytes,
+            lastKeyFrameBytes = lastOfferedKeyFrameBytes,
+            hasBaseLayer = lastDiscardableOfferedNs != Long.MIN_VALUE &&
+                nowNs - lastDiscardableOfferedNs <= BASE_LAYER_RECENT_NS,
+            hasAudio = lastAudioOfferedNs != Long.MIN_VALUE && nowNs - lastAudioOfferedNs <= AUDIO_RECENT_NS,
+            keyFrameGrace = lastKeyFrameTakenNs != Long.MIN_VALUE && nowNs - lastKeyFrameTakenNs < RELAY_KEY_FRAME_GRACE_NS,
+            thinnedFrames = layerThinnedFrames,
+            pausedFrames = layerPausedFrames,
+            shedEvents = mediaAgeBound?.shedder?.shedEvents ?: 0L,
+            keyFrameRequests = layerResumeRequests.requests,
+        )
+    }
+
+    /** Audio-only: append, then drop stale whole records (exact relay predicate); the lock is held. */
+    private fun offerAudio(audio: AudioLiveRelayQueue, envelope: MeshEnvelope): ChildQueueOffer {
+        append(envelope)
+        val nowNs = nanoTime()
+        val nowMs = nowNs / 1_000_000L
+        if (AudioLiveShed.isRelayEnvelopeSheddable(envelope, true)) audio.health.onQueued(nowMs)
+        val plan = AudioLiveQueuePolicy.planShed(
+            packets.map { AudioLiveQueued(AudioLiveShed.isRelayEnvelopeSheddable(it.envelope, true), it.atNs) },
+            nowNs,
+            audio.ageBound,
+        )
+        if (plan.isNotEmpty()) {
+            for (index in plan.sortedDescending()) {
+                queuedBytes -= packets.removeAt(index).envelope.payload.size
+            }
+            audio.health.onShed(plan.size, nowMs)
+            audio.shedRecords += plan.size
+        }
+        return ChildQueueOffer.QUEUED
+    }
+
+    /** Audio-only: why this child should be withdrawn (rerouted), or null. */
+    fun audioVerdict(nowMs: Long): AudioLiveChildHealth.Reason? = lock.withLock {
+        audioLive?.health?.verdict(backlogAgeMsLocked(), nowMs)
+    }
+
+    /** Audio-only: records shed for this child so far. */
+    fun audioShedRecords(): Long = lock.withLock { audioLive?.shedRecords ?: 0L }
 
     /**
      * Experimental bounded media age: sheds stale queued video for this child. Returns null when the
@@ -238,6 +421,14 @@ class RelayChildQueue(
     private fun oldestVideoAgeMsLocked(bound: RelayMediaAgeBound, nowNs: Long): Long =
         packets.firstOrNull { bound.classify(it.envelope) != ShedClass.KEEP }
             ?.let { (nowNs - it.atNs).coerceAtLeast(0L) / 1_000_000L } ?: 0L
+
+    /** `BENCHMARK relay_time_queue` fields for this child's queue; null without a bounded-age queue. */
+    fun timeQueueSummary(): String? = lock.withLock {
+        mediaAgeBound?.timeQueueSummary(backlogAgeMsLocked())
+    }
+
+    /** Drain source and overload for the `relay_time_queue` change trigger; null without a bounded-age queue. */
+    fun timeQueueState(): Pair<String, Boolean>? = lock.withLock { mediaAgeBound?.timeQueueState() }
 
     /** Experimental bounded media age counters for this child (zeros when off). */
     fun mediaAgeSummary(): String = lock.withLock {
@@ -299,6 +490,7 @@ class RelayChildQueue(
     private fun removeFirst(): MeshEnvelope? = packets.removeFirstOrNull()?.let { queued ->
         val envelope = queued.envelope
         queuedBytes -= envelope.payload.size
+        mediaAgeBound?.timeSizer?.onTaken(envelope.payload.size, queued.atNs, nanoTime())
         if (!envelope.isAudio && !envelope.isControl && envelope.flags and MeshEnvelope.FLAG_CODEC_CONFIG == 0) {
             val nowNs = nanoTime()
             // Media age spent in this child queue (both arms; BENCHMARK media_age).
@@ -310,8 +502,26 @@ class RelayChildQueue(
 
     private companion object {
         const val RELAY_KEY_FRAME_GRACE_NS = 3_000_000_000L
+        /** A stream "has a base layer" while a discardable frame was offered this recently (layering can be turned off). */
+        const val BASE_LAYER_RECENT_NS = 3_000_000_000L
+        const val AUDIO_RECENT_NS = 3_000_000_000L
     }
 }
+
+/** Experimental relay child thinning: one child queue's counters for [RelayChildLayerPolicy] and the log. */
+data class RelayChildLayerStats(
+    val level: RelayChildLevel,
+    val offeredFullBytes: Long,
+    val offeredBaseBytes: Long,
+    val lastKeyFrameBytes: Int,
+    val hasBaseLayer: Boolean,
+    val hasAudio: Boolean,
+    val keyFrameGrace: Boolean,
+    val thinnedFrames: Long,
+    val pausedFrames: Long,
+    val shedEvents: Long,
+    val keyFrameRequests: Long,
+)
 
 data class AdmissionDecision(
     val admitted: Boolean,
@@ -462,6 +672,8 @@ class MeshRelayCore(
                 // Never produced here: this hidden diagnostic relay has no bounded media age.
                 ChildQueueOffer.SHED_WAITING_FOR_KEYFRAME -> lagging += child
                 ChildQueueOffer.SHED_DROPPED -> Unit
+                // Never produced here: this hidden diagnostic relay does not use relay child thinning.
+                ChildQueueOffer.LAYER_THINNED, ChildQueueOffer.LAYER_PAUSED -> Unit
             }
         }
         return RelayResult(forwarded, queued, lagging, null)

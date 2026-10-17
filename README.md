@@ -1,6 +1,6 @@
 # MeshLive
 
-**Decentralized, encrypted video calls and live streams over a Bluetooth mesh. No internet needed.**
+**Encrypted voice and video calls, live video and live audio between phones over a Bluetooth mesh. No internet needed.**
 
 <p align="center">
   <a href="https://github.com/MeshLive/meshlive-android/releases/latest/download/MeshLive.apk"><img alt="Download MeshLive for Android" src="https://img.shields.io/badge/Download-MeshLive%20for%20Android-000000?style=for-the-badge&logo=android&logoColor=white" height="56"></a>
@@ -16,27 +16,25 @@
 </p>
 
 <p>
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02-home.png" width="19%" alt="Home">
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/03-call.png" width="19%" alt="People nearby">
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/04-watch.png" width="19%" alt="Watch nearby">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02-live.png" width="19%" alt="Live nearby: a radio and a video stream">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/03-golive.png" width="19%" alt="Go live: video and audio, or audio only">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/04-calls.png" width="19%" alt="Calls: people nearby">
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/05-settings.png" width="19%" alt="Settings">
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/01-welcome.png" width="19%" alt="Welcome">
 </p>
 
-## What it does
+## What you can do
 
-- Make private **video and voice calls** with someone nearby.
-- **Stream live** from your camera. People around you can watch.
-- **Phones pass the signal along.** Each phone can relay to the next, so a call or stream reaches people who are out of range of the source. That chain of phones is the "mesh".
-- Everything is **end-to-end encrypted**. Only the people in the call or stream can see or hear it.
-- It needs **no internet, SIM card, account or server.**
-- It is **free and open source** (GPL-3.0).
+- **Call people nearby.** Voice or video, end-to-end encrypted, phone to phone.
+- **Go live.** Share your camera with everyone around you, or go **audio only**, like a local radio that keeps playing with the screen off.
+- **Reach further.** Phones in between pass calls and streams along, so you can reach people out of your own Bluetooth range.
+- **Stay private.** No internet, SIM card, account or server. Strangers see a random name; your contacts recognise you.
 
-It is built for blackouts, disasters, censorship, remote areas and crowded events.
+Built for blackouts, disasters, censorship, remote places and crowded events. Free and open source (GPL-3.0).
 
 ## How it works
 
-Your phone talks to nearby phones over Bluetooth, so the network is never involved. A phone that watches a stream can pass it on to other phones, and they can pass it on again. Each phone only deals with the phone it gets the stream from and the phones it sends to. Bluetooth is slow, so expect small, delayed video that gets weaker with each hop.
+Your phone talks to nearby phones over Bluetooth, about 10 to 30 metres, never through the internet. A phone that receives a stream can pass it on, and the next phone can pass it on again: that chain is the mesh. Bluetooth is slow, so video is small and gets a little more delayed with each hop; audio-only streams reach further.
 
 ```
  Source phone ))) Viewer phone ))) Viewer phone ))) ...
@@ -45,21 +43,11 @@ Your phone talks to nearby phones over Bluetooth, so the network is never involv
 
 ## Privacy
 
-Phones that are nearby can see that MeshLive is running. The app hides who you are:
+- The ID your phone broadcasts is random and changes every 15 minutes, so a listener cannot follow you.
+- Calls hide both phones' identities from anyone listening in. A stranger sees a throwaway identity until you answer.
+- Your name, if you set one, is never broadcast. A stream title is public, so everyone nearby can read it.
 
-- The ID your phone broadcasts is random and changes every 15 minutes, so a passive listener cannot follow you.
-- Calls hide both identities from anyone listening in.
-- A stranger sees a throwaway identity until you accept their call. Your contacts recognise you.
-
-The limits, stated plainly:
-
-- A live stream shows its source to everyone who watches.
-- On Android 13 and older, a phone that connects to yours can read its Bluetooth name.
-- Classic Bluetooth (an older, faster mode) shows a permanent hardware address.
-- Anyone whose call you accept learns who you are.
-- Nobody outside the project has audited the security.
-
-Details and measurements: [docs/PRIVACY.md](docs/PRIVACY.md).
+Limits, plainly: a live stream shows its source to everyone who watches; on Android 13 and older a phone that connects to yours can read its Bluetooth name; anyone whose call you accept learns who you are; there has been no independent security audit. Details: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Install
 
@@ -67,15 +55,15 @@ Details and measurements: [docs/PRIVACY.md](docs/PRIVACY.md).
 2. Open the file. If Android asks, allow your browser to **install unknown apps**, then tap **Install**.
 3. Open MeshLive and allow **Nearby devices**, **Camera** and **Microphone**.
 
-Both people need MeshLive. To get updates automatically, add the project in [Obtainium](https://github.com/ImranR98/Obtainium) with the button above. With no internet, a friend can send you the app: in MeshLive, Help, then **Share this app**. The app can also check for updates, but only if you say yes.
+Both people need MeshLive. To get updates automatically, add the project in [Obtainium](https://github.com/ImranR98/Obtainium) with the button above. With no internet, a friend can send you the app: in MeshLive, Settings, then **Share this app**. The app can also check for updates, but only if you say yes.
 
 To check a download is genuine, see [how to verify a release](docs/USER_GUIDE.md#verifying-a-release). Other install options, the file list, features and common questions are in the [user guide](docs/USER_GUIDE.md).
 
 ## Status
 
-MeshLive is in **beta**. It has been tested on seven phones from Samsung, Xiaomi, ASUS and OPPO, running Android 10 to 16. Results vary by phone pair, so see [docs/DEVICES.md](docs/DEVICES.md). Do not rely on it where your safety depends on it.
+MeshLive is in **beta**, tested on seven phones from Samsung, Xiaomi, ASUS and OPPO (Android 10 to 16) and with a first iPhone. Results vary by phone pair: see [docs/DEVICES.md](docs/DEVICES.md). Do not rely on it where your safety depends on it. An iPhone app is in development.
 
-**Please report your phone.** The [device report form](https://github.com/MeshLive/meshlive-android/issues/new?template=device-report.yml) takes two minutes. Reports where everything worked help as much as failures.
+**Please report your phone.** The [device report form](https://github.com/MeshLive/meshlive-android/issues/new?template=device-report.yml) takes two minutes; reports where everything worked help as much as failures.
 
 ## Build from source
 

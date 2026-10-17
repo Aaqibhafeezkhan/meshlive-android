@@ -15,7 +15,7 @@ import java.util.UUID
  */
 object CompactDiscoveryFeature {
     const val EXTRA = "test_ios_compact_discovery"
-    const val PREF = "experimental_ios_compact_discovery"
+    const val PREF = "experimental_ios_compact_discovery_v2" // new key 2026-10-17: no stored 0.2.0 "off" applies
 
     @Volatile var enabled = false
 
@@ -170,10 +170,13 @@ object CompactDiscoveryAnnouncement {
             }
             else -> {
                 val resolution = RESOLUTIONS.getOrNull((specific ushr 9) and 0x3)
+                // Experimental audio-only live (PROTOCOL): codec mask 0 with resolution index 3 and FPS index 3
+                // is the audio-only marker; mask 0 with any other geometry decodes as before (summary 0).
+                val audioOnly = codecs == 0 && ((specific ushr 9) and 0x3) == 3 && ((specific ushr 7) and 0x3) == 3
                 DiscoveryAnnouncement(
                     nodeIdPrefix = prefix,
                     flags = DiscoveryAnnouncement.FLAG_STREAM_AVAILABLE or transportFlags,
-                    capabilitySummary = codecs,
+                    capabilitySummary = if (audioOnly) DiscoveryAnnouncement.SUMMARY_AUDIO_ONLY else codecs,
                     streamToken = tokenField or Int.MIN_VALUE,
                     routeCost = routeCost,
                     sequence = (specific ushr 11) and 0xff,
@@ -200,8 +203,15 @@ object CompactDiscoveryAnnouncement {
         }
         val callOffer = flags and DiscoveryAnnouncement.FLAG_STREAM_AVAILABLE == 0 &&
             flags and DiscoveryAnnouncement.FLAG_PRIVATE_CALL_AVAILABLE != 0
+        val audioOnlyOffer = flags and DiscoveryAnnouncement.FLAG_STREAM_AVAILABLE != 0 &&
+            value.capabilitySummary == DiscoveryAnnouncement.SUMMARY_AUDIO_ONLY
         val representable = CODEC_FIELD_MASK or if (callOffer) CALL_RELAY_CONSENT_SUMMARY else 0
-        require(value.capabilitySummary and representable.inv() == 0) { "Only codec bits are representable" }
+        require(audioOnlyOffer || value.capabilitySummary and representable.inv() == 0) {
+            "Only codec bits are representable"
+        }
+        require(!audioOnlyOffer || (value.streamWidth == 0 && value.streamHeight == 0 && value.streamFps == 0)) {
+            "An audio-only offer has no video geometry"
+        }
         require(value.routeCost in 0..MAX_ROUTE_COST) { "Route cost above 15 is not representable" }
         val kind = when {
             flags and DiscoveryAnnouncement.FLAG_STREAM_AVAILABLE != 0 -> KIND_STREAM_OFFER
@@ -241,7 +251,7 @@ object CompactDiscoveryAnnouncement {
             (if (flags and DiscoveryAnnouncement.FLAG_GATT_TRANSPORT != 0) 1L shl 59 else 0L) or
             (if (flags and DiscoveryAnnouncement.FLAG_RELAY_CAPABLE != 0) 1L shl 58 else 0L) or
             (if (paused) 1L shl 57 else 0L) or
-            ((value.capabilitySummary and CODEC_FIELD_MASK).toLong() shl 54) or
+            ((if (audioOnlyOffer) 0 else value.capabilitySummary and CODEC_FIELD_MASK).toLong() shl 54) or
             (value.routeCost.toLong() shl 50) or
             ((value.streamToken.toLong() and TOKEN_FIELD_MASK) shl 19) or
             specific.toLong()

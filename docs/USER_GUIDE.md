@@ -14,10 +14,10 @@ The three-step install is in the [README](../README.md#install). This section co
 Obtainium checks the releases page for new versions and updates MeshLive for you.
 
 #### Updates inside the app (release-page builds)
- MeshLive can check for a newer version itself, but only after you say yes: the first time you open it, it asks "Check for updates when online?". Until you answer yes it makes no internet request at all. With yes it asks GitHub's release API (`api.github.com`) at most once a day while you are online; GitHub sees your phone's internet address and that you asked about MeshLive, and nothing else is sent (no account, no cookie, no device or version information, no tracker). It downloads nothing until you tap, and it installs a file only if all of these hold: it is signed with the MeshLive release key that is built into the app (the fingerprint under "Verifying a release" below), it is newer than your copy, it is for your phone type, and its SHA-256 equals the one the release publishes. Android then asks you to confirm; nothing is ever installed silently or downgraded. Settings > Features > Check for updates changes your answer (a "yes" restored from a backup onto another phone is dropped and asked again: the answer has a marker in the no-backup folder). While it is off, nothing on the Updates screen can contact GitHub. F-Droid builds contain none of this (F-Droid updates them) and do not ask for the install permission.
+ MeshLive can check for a newer version itself, but only after you say yes: the first time you open it, it asks "Check for updates when online?". Until you answer yes it makes no internet request at all. With yes it asks GitHub's release API (`api.github.com`) at most once a day while you are online; GitHub sees your phone's internet address and that you asked about MeshLive, and nothing else is sent (no account, no cookie, no device or version information, no tracker). It downloads nothing until you tap, and it installs a file only if all of these hold: it is signed with the MeshLive release key that is built into the app (the fingerprint under "Verifying a release" below), it is newer than your copy, it is for your phone type, and its SHA-256 equals the one the release publishes. Android then asks you to confirm; nothing is ever installed silently or downgraded. Settings > Check for updates changes your answer (a "yes" restored from a backup onto another phone is dropped and asked again: the answer has a marker in the no-backup folder). While it is off, nothing on the Updates screen can contact GitHub. F-Droid builds contain none of this (F-Droid updates them) and do not ask for the install permission.
 
 #### A friend has a newer version
- When two phones connect, each tells the other which MeshLive release it runs (in the signed greeting phones already exchange; never in what a phone broadcasts). If a phone this phone connected to (a call, a stream or a relay you started; a stranger who connects to you is not counted) says it runs a newer release you see a quiet note on the home screen. It is only that phone's claim: nothing is downloaded or checked until you pick a file yourself. It explains how to get the file from that phone (Help > Share app nearby on its screen, or any other way you like), and **Choose the file** checks it the same way before offering to install it. Settings > Features > Tell me about newer versions nearby turns this off, in both directions.
+ When two phones connect, each tells the other which MeshLive release it runs (in the signed greeting phones already exchange; never in what a phone broadcasts). If a phone this phone connected to (a call, a stream or a relay you started; a stranger who connects to you is not counted) says it runs a newer release you see a quiet note on the home screen. It is only that phone's claim: nothing is downloaded or checked until you pick a file yourself. It explains how to get the file from that phone (Settings > About and updates > Share this app on its screen, or any other way you like), and **Choose the file** checks it the same way before offering to install it. Settings > Tell me about newer versions nearby turns this off, in both directions.
 
 #### No internet at all
 
@@ -82,7 +82,7 @@ Signing certificate SHA-256 (also in each release's notes and `signing-cert.sha2
 - **Live video broadcast.** Stream your camera (VP9 or AV1 video, mono Opus audio) to nearby phones. Pause, resume
   and stop with authenticated state. Choose the encoder, rate, resolution, FPS and buffer in Settings; the app shows
   requested and effective values and never changes them silently.
-- **Relay chains.** A viewer can pass the stream to one more phone ("Help pass streams and calls to others nearby",
+- **Relay chains.** A viewer can pass the stream to one more phone ("Relay video for others",
   on by default, pauses itself on low battery or in Battery Saver). Each phone talks only to its parent and its direct
   children, and the receiver checks that the stream really comes from the original source.
 - **Private calls.** Voice or video calls between two phones, started from a list of people nearby. Both directions
@@ -93,8 +93,16 @@ Signing certificate SHA-256 (also in each release's notes and `signing-cert.sha2
 - **Authenticated and encrypted.** Every phone has its own signing key. Links use signed handshakes and ordered
   AES-256-GCM records, with a second end-to-end layer so a relay in the middle cannot read or alter your media.
   Compare a QR code or a safety code in person to verify a contact.
-- **Experimental: voice-only calls and push-to-talk** (an intercom mode), **store-and-forward messages** (text, voice
-  notes, photos between accepted contacts), **names and titles**, and **calls through up to four relays**.
+- **Voice calls** (hold Mute to talk, like an intercom), with a ringing tone, answer and decline from the
+  notification and over the lock screen, and the camera pausing while the phone is at your ear.
+- **Experimental: store-and-forward messages** (text, voice notes, photos between accepted contacts) and **calls
+  through up to four relays**.
+- **Names and titles.** An optional name (Settings > Your ID) and an optional stream title on Go live. Leave them
+  empty if you like. Your name is never broadcast: it goes, encrypted, only to people you call. A stream title is
+  public: everyone nearby can read it.
+- **Audio-only live (radio).** Go live with sound only: announcements, an event, a neighbourhood
+  channel. It uses a fraction of the Bluetooth capacity of video, reaches more phones, and keeps playing with the
+  screen off. Choose it from Go live.
 - **Privacy by default .** Rotating discovery IDs, an identity-hiding call handshake and throwaway
   identities for strangers are on; each has a switch in Settings.
 - **Offline app sharing.** Hand the installed APK to a nearby phone (see [No internet at all](#no-internet-at-all)).
@@ -109,14 +117,76 @@ Signing certificate SHA-256 (also in each release's notes and `signing-cert.sha2
 Install the same APK on the phones. Grant Camera, Microphone and Nearby devices through Android's prompts, and
 enable Bluetooth.
 
-- **Broadcast.** Choose a transport and profile in Settings, open Start broadcasting and tap the round camera
-  control. Viewers select the stream from Nearby broadcasts. Pause keeps the authenticated link alive; Resume
+- **Tabs.** The bottom bar has Live (the live streams near you, with Go live pinned at the bottom), Calls (Nearby:
+  everyone in range with voice and video buttons; Recent: your call history, tap to call back), Contacts (the people
+  you saved, with Add contact pinned at the bottom) and Settings (a short list: your name, Allow calls, Relay video for
+  others, Video quality, with pages for Video and Privacy, an Advanced label further down with five rows:
+  Connection, Manual video, Playback, Experiments and Help and feedback, each opening one page, then About and updates
+  (About this app, the update switches, Check now, Share this app) and a red Wipe everything at the bottom). The small status at the top right of every tab is a green dot when
+  all is well, or the one thing that needs you (Bluetooth off, permissions, Hidden, battery saver, phone hot); tap it
+  for details. Your code and ID are shown only on Add contact (Show my code).
+- **Keeping the app helping in the background.** On the first start a short step ("Keep helping in the background")
+  explains the cost and offers Android's one-tap "allow background running" dialog; "Not now" is fine and the same offer
+  comes back once, with the reason, when you switch on Relay video for others or Allow calls, and any time from
+  Settings. A phone that relays can lose battery noticeably faster and may get warm in a bag. Settings > Connection reliability shows only what
+  needs you: the battery allowance, the phone maker's own battery manager (with the steps for your brand), a recent phone
+  update that may have reset those settings, a Bluetooth search the phone maker is pausing, and a note when Bluetooth
+  itself looks stuck ("turn Bluetooth off and on"). A healthy phone shows "No background limits found".
+- **Android 10 and 11: turn Location on.** On those versions Android finds nearby phones over Bluetooth only while the
+  phone's Location switch is on, and delivers results in the background only through a notification of type "location".
+  MeshLive never reads or stores where you are; if Location is off, Settings says so and the status points to the switch.
+- **Video quality: Auto.** Auto chooses the picture size, frame rate and bitrate from how much the Bluetooth
+  link to the other phone can carry, starting at 360p for a typical link, and moves up or down while you stream
+  or talk; on a very weak link it keeps the audio and drops the video. (Experimental: the measured Auto ladder
+  is off in normal builds until its phone tests pass.) Manual video settings under Advanced stay exactly as you set
+  them, and the app warns when a size, frame rate and bitrate you picked are too far apart to look clear.
+- **Call and live controls.** One row of round buttons with the red End in the middle. A call: Mute, Camera, End, Flip,
+  Speaker (Flip works once the camera is on). Speaker switches between the earpiece and the loudspeaker; when a headset is plugged in
+  it opens a short list of where the sound can play. A video live: Mute, Camera, End, Flip, Pause. Mute stops your sound and the video
+  goes on; Camera off stops your picture and the sound goes on. Viewers see "Muted" or "Camera off" when you and they use a version
+  that supports it (Settings > Experiments > Show Muted and Camera off to viewers; off by default). An audio-only live has Mute, End and
+  Pause, and Switch to video ends the radio and starts a video live with the same title.
+- **Broadcast.** Tap Go live, then Go live again on the camera screen. Viewers see it under Live. Pause keeps the authenticated link alive; Resume
   continues media; Stop sends an authenticated End.
-- **Receive and forward.** Saved sender settings stay independent from reception. Settings "Help pass streams and
-  calls to others nearby" decides, at each join, whether a viewer offers one downstream child. It is on by default
+- **Audio only (radio).** Go live asks Video and audio
+  or Audio only (the last choice is remembered). Audio only has no camera: add an optional title, pick Voice, Low data
+  or Music, tap Start, and watch the level meter and the listener count. Mute keeps the microphone open and sends
+  silence, so Android's microphone indicator stays on; Pause stops the microphone; End stops the broadcast. The
+  first time, the app tells you that anyone nearby with MeshLive can listen, including phones that pass it on, and
+  that listeners can tell it is your phone. A reminder appears after 30 minutes without a listener or two hours on the
+  air, and the broadcast stops five minutes after an unanswered reminder. Listeners see the broadcast under Live with a
+  radio icon and "Audio only"; tapping it opens a listening screen (title, route, state, level meter, Mute, Stop,
+  Block this person) that keeps playing with the screen off. The volume is your phone's media volume; the app never
+  changes it. An older MeshLive shows the row as not supported.
+- **Receive and forward.** Saved sender settings stay independent from reception. Settings "Relay video for
+  others" decides, at each join, whether a viewer offers one downstream child. It is on by default
   for normal launches and pauses itself at that join below 20% battery (when not charging) or in Battery Saver.
 - **Private call.** Open the nearby-people browser on both phones, select the other identity and accept or decline on
   the callee. Capture starts after acceptance. Both endpoints send independently selected video and audio.
+- **Contacts and names.** Contacts > Add contact (or the lock in a call) checks someone in person by scanning
+  each other's QR code or comparing the safety code. When it matches, the app asks "Save contact as"; the name stays
+  on your phone, and leaving it empty keeps their ID. The Contacts tab lists the people you verified, shows each
+  full ID, renames or forgets them, and "Add contact" starts the same check. Everyone you have not verified keeps
+  showing as an ID or, for phones that change their ID, as a made-up two-word name such as "Gold Fox" (a name for picking a
+  phone out of a room, not proof of who it is). A name another person gave themselves shows with a tilde, "~Rahul"; the tilde
+  means they said it and nobody checked. Your own name for a contact always wins. 0.2.0-beta phones do not show these
+  names, cannot read the new verification code and do not take part in the names features.
+- **Messages (Experimental).** With Settings > Features > Messages v2 on, every person in Contacts is also a conversation: the row shows the
+  last message (or Photo, Voice note, File), its time, how many are unread and, for your own last message, a small mark for its state.
+  Tap a row to open the conversation. The top bar has Back, the name with the verified check, "Nearby" or "Not nearby", voice
+  and video call buttons, and a menu for the conversation (disappearing messages, read receipts, the contact's own options,
+  comparing safety numbers, delete). Yours are on the right, theirs on the left. A message you write while the other phone is away
+  waits and goes when you are near each other; the mark beside its time tells you where it is (a clock: waiting, an arrow: sending, one
+  check: delivered, two checks: downloaded, two bright checks: read) and a tap on it says so in words. A message that could not be
+  delivered says "Not sent" with Retry. The paperclip sends a photo or video (the picture is made smaller and loses its location unless you
+  switch on "Send original"; a JPEG original still loses its location) or any file up to 64 MB. Hold the microphone to record a voice note
+  (up to two minutes), slide left to cancel. A file you receive shows its name and size: tap Download for a big one, Show picture to see a
+  picture, Open for a document, audio or video your other apps can show, and Save for anything else (programs are never opened from
+  Messages). Nothing downloads or shows by itself unless you allow it: Settings > Privacy has Download files automatically (up to 8 MB
+  by default) and Read receipts (off; both of you must turn them on). A banner appears when something stops messages: a person who is not yet a
+  contact, a safety number you still need to compare, keys that changed (nothing is sent until you compare again or accept the new keys), or
+  an older app on their side. A new message gives one notification per conversation (channel "Messages" in the system settings, where you choose its sound); a locked phone shows only "New message" unless you allowed names on the lock screen, and the text appears only on an unlocked phone. Tap it to open that conversation; "Mark as read" appears when the notification showed the whole message. Android asks once for permission to show notifications. With the switch off, Contacts keeps its single contact sheet.
+- **Blocking calls.** Settings > Block unknown callers (off by default) declines, without ringing, every call from someone who is not a verified contact; it shows in Recent as "Blocked call", and the caller sees an ordinary decline. Settings > Blocked people lists everyone you blocked and unblocks them; block from a Recent row (press and hold), from a contact, or with "Decline and block" on an incoming call. A blocked person's calls are declined and their live streams hidden. A block follows the person's real ID, which a phone shows before ringing only to its verified contacts and to phones that do not hide their ID; a stranger calls under a one-time ID that changes every call, so for strangers use Block unknown callers.
 - **Transport and pairing.** LE GATT is the pairing-free default. Classic needs the two phones paired once in Android
   Bluetooth settings (a mutual bond: discovery is BLE, whose rotating private addresses only a bond can resolve, and
   Android hides a phone's own Classic address from apps), unless both phones turn on the experimental Classic without
@@ -159,6 +229,11 @@ Android 10 or newer.
 **What about battery?** Bluetooth LE is frugal, but live video keeps the camera, encoder and radio busy, so expect
 substantial drain while broadcasting. Forwarding pauses itself below 20% battery (when not charging) or in Battery
 Saver. We have not yet run matched unplugged endurance tests, so there is no battery-life figure to quote.
+
+**Why does the app ask to run in the background, and why is Location needed on Android 10 and 11?** Passing a call or
+video along with the screen off only works while Android lets the app keep running; the allowance is optional and can be
+undone in Android's battery settings. On Android 10 and 11 the system hides Bluetooth search results from apps unless
+Location is on, even though no location is used. Details: [PRIVACY.md](PRIVACY.md).
 
 **Which phones were tested?** The seven reference phones in [DEVICES.md](DEVICES.md): Samsung S24, S22, A55 and M31, a
 Redmi (Xiaomi), an ASUS and an OPPO A15s, running Android 10 to 16. Other phones may work or may hit Bluetooth-stack

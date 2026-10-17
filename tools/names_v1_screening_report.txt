@@ -1,0 +1,544 @@
+names-v1 screening report (Design G, review F23). Produced by tools/screen_names_v1.py on 2026-10-12.
+Inputs (not shipped): LDNOOBW lists en/es/fr/de/hi/ar (word and phrase lists, checked as words, as substrings of the
+concatenation across the word boundary, and as the phrase) and the CMU Pronouncing Dictionary (homophones and
+pronounceability; a word with no CMU entry is rejected). Rules enforced for every word: a-z, 3-7 letters, strictly sorted,
+no prefix of another, edit distance >= 2 from every other word of its list, no homophone in either list, not equal to a word
+of the other list, not on the cue / colour / animal ban list (authority, emergency and trust words; red, orange, saffron,
+green, black, white and their near shades; cow, pig, dog, donkey, monkey, rat and similar insult or sacred animals;
+military, ethnic and national cues). All 65,536 pairs were screened as phrase and as concatenation: 0 hits after the words
+listed under "dropped for pair screening" in the script output were replaced.
+Frozen SHA-256: adjectives-v1.txt 7d51bad8236ca9e8a910ceb3d2e749c49cae3f0e909107078893b1d5e9456131
+                nouns-v1.txt      d61dc92a1bf3a219ff62a119049b7e6aff8ce6a908dc39edd8b04a619bbcf995
+OPEN before the release that ships names-v1 to users: the reading by speakers of at least Hindi, Arabic, Spanish and French
+required by the record has NOT been done by a person; the machine screen above is not a substitute. Until a reviewer signs it
+off the list is a release-blocking item (DECISIONS Design G, F23).
+Rejected candidates and the reason for each follow.
+adjective rejects:
+olive banned
+jade banned
+mint banned
+ashen banned
+cool edit distance with wool
+bold edit distance with gold
+cheerful shape
+noble banned
+proud banned
+golden prefix of gold
+silvery prefix of silver
+woolly prefix of wool
+tiny edit distance with tidy
+slim banned
+polar edit distance with solar
+hidden banned
+gleaming shape
+sparkling shape
+shimmering shape
+tranquil shape
+pale banned
+dim banned
+wide edit distance with wise
+sheltered shape
+cold edit distance with gold
+wet banned
+stormy banned
+spicy ldnoobw substring
+bitter ldnoobw substring
+minty not in CMU (unknown pronunciation)
+lemony not in CMU (unknown pronunciation)
+nutty banned
+toasty not in CMU (unknown pronunciation)
+creamy prefix of cream
+buttery ldnoobw substring
+honeyed not in CMU (unknown pronunciation)
+velvety prefix of velvet
+silken prefix of silk
+lanky banned
+stout banned
+burly banned
+thick banned
+thin banned
+bent banned
+twisted banned
+knotted banned
+braided banned
+stitched shape
+sewn banned
+printed edit distance with painted
+carved edit distance with curved
+etched banned
+inked not in CMU (unknown pronunciation)
+dotted banned
+checked banned
+plaid edit distance with plain
+speckled shape
+dappled not in CMU (unknown pronunciation)
+tawny banned
+taupe not in CMU (unknown pronunciation)
+khaki banned
+ochre banned
+umber not in CMU (unknown pronunciation)
+maroon banned
+crimson banned
+scarlet banned
+navy banned
+sapphire shape
+emerald banned
+turquoise shape
+lavender shape
+peach banned
+apricot banned
+lime banned
+mango banned
+berry edit distance with merry
+chestnut shape
+cinnamon shape
+saffron banned
+alert banned
+ample banned
+blithe edit distance with lithe
+candid banned
+careful banned
+casual banned
+cautious shape
+civil banned
+courtly banned
+decent banned
+dear banned
+devout banned
+dutiful banned
+earnest banned
+easy banned
+fair banned
+faithful shape
+gallant banned
+gracious shape
+handy edit distance with sandy
+honest banned
+hospitable shape
+ideal banned
+laid banned
+lawful banned
+loyal banned
+mannered shape
+mature banned
+measured shape
+mighty banned
+nifty banned
+orderly banned
+perky banned
+pleasant shape
+poised banned
+prime banned
+prompt banned
+prudent banned
+punctual shape
+ready banned
+refined banned
+regal banned
+rosy edit distance with rose
+sage banned
+sane banned
+savvy banned
+secure banned
+sensible shape
+settled banned
+shrewd banned
+skilled banned
+solid banned
+sound banned
+spirited shape
+stable banned
+stately banned
+sterling shape
+strong banned
+sure banned
+tactful banned
+tenacious shape
+thrifty banned
+timely banned
+true banned
+trusty banned
+upright banned
+valiant banned
+versed banned
+zesty not in CMU (unknown pronunciation)
+wax banned
+flax edit distance with flat
+oat banned
+toffee edit distance with coffee
+butter ldnoobw substring
+grape ldnoobw substring
+apple banned
+genteel banned
+kindly prefix of kind
+friendly shape
+carefree shape
+cheery edit distance with cherry
+frisky banned
+sprightly shape
+plucky edit distance with lucky
+dandy edit distance with sandy
+sporty banned
+crispy prefix of crisp
+freckled shape
+feathered shape
+pebbly not in CMU (unknown pronunciation)
+stony edit distance with stone
+pearly prefix of pearl
+sunbaked shape
+windswept shape
+lazy edit distance with hazy
+gleamy not in CMU (unknown pronunciation)
+shimmery shape
+glittery shape
+twinkly ldnoobw substring
+dusky not in CMU (unknown pronunciation)
+sooty banned
+woolen prefix of wool
+leaden banned
+flaxen not in CMU (unknown pronunciation)
+oaken not in CMU (unknown pronunciation)
+brassy edit distance with grassy
+coppery prefix of copper
+steely prefix of steel
+ferny not in CMU (unknown pronunciation)
+pleated not in CMU (unknown pronunciation)
+curled edit distance with curved
+terraced shape
+paired banned
+twin banned
+triple banned
+double banned
+single banned
+sole banned
+lone banned
+only banned
+first banned
+second banned
+third banned
+fourth banned
+fifth banned
+sixth banned
+seventh banned
+eighth banned
+ninth banned
+tenth banned
+sweeter banned
+noun rejects:
+badger banned
+marmot not in CMU (unknown pronunciation)
+mole banned
+vole not in CMU (unknown pronunciation)
+stoat not in CMU (unknown pronunciation)
+weasel banned
+seal banned
+toad banned
+eagle banned
+hawk banned
+pigeon banned
+crab banned
+shrimp banned
+bee prefix of beetle
+bay edit distance with ray
+meteor banned
+star banned
+fern edit distance with tern
+orchid same or sounds like a word in the other list
+poppy banned
+clover edit distance with plover
+maple same or sounds like a word in the other list
+cedar same or sounds like a word in the other list
+pine edit distance with pike
+elm edit distance with elk
+lemon same or sounds like a word in the other list
+mango banned
+peach banned
+pear edit distance with peak
+plum same or sounds like a word in the other list
+olive banned
+cherry same or sounds like a word in the other list
+yak edit distance with oak
+okapi not in CMU (unknown pronunciation)
+tapir not in CMU (unknown pronunciation)
+sloth banned
+armadillo shape
+anteater shape
+kangaroo shape
+possum banned
+raccoon ldnoobw substring
+skunk banned
+tiger banned
+lion banned
+cougar banned
+caracal not in CMU (unknown pronunciation)
+serval not in CMU (unknown pronunciation)
+mongoose shape
+meerkat not in CMU (unknown pronunciation)
+lemming banned
+squirrel shape
+chipmunk shape
+dormouse shape
+hedgehog shape
+porcupine shape
+pangolin shape
+aardvark shape
+bandicoot shape
+numbat not in CMU (unknown pronunciation)
+quokka not in CMU (unknown pronunciation)
+dingo banned
+coyote banned
+fennec not in CMU (unknown pronunciation)
+corgi banned
+pony edit distance with pond
+mule banned
+burro banned
+bull banned
+ox shape
+stag banned
+buck banned
+fawn same or sounds like a word in the other list
+colt banned
+foal banned
+kid banned
+calf banned
+cub banned
+kit banned
+pup banned
+joey banned
+heifer banned
+lamb banned
+ewe banned
+ram banned
+martin edit distance with marten
+tanager not in CMU (unknown pronunciation)
+cardinal shape
+jay edit distance with ray
+nuthatch shape
+chickadee shape
+titmouse shape
+kestrel not in CMU (unknown pronunciation)
+harrier banned
+condor banned
+kiwi banned
+cassowary shape
+albatross shape
+petrel not in CMU (unknown pronunciation)
+gannet not in CMU (unknown pronunciation)
+cormorant shape
+booby banned
+frigate banned
+skua not in CMU (unknown pronunciation)
+auk not in CMU (unknown pronunciation)
+guillemot shape
+murre not in CMU (unknown pronunciation)
+dunlin not in CMU (unknown pronunciation)
+sandpiper shape
+curlew not in CMU (unknown pronunciation)
+godwit not in CMU (unknown pronunciation)
+woodcock shape
+flamingo shape
+spoonbill shape
+bittern banned
+rail banned
+coot banned
+moorhen not in CMU (unknown pronunciation)
+crake not in CMU (unknown pronunciation)
+loon edit distance with moon
+teal same or sounds like a word in the other list
+pintail not in CMU (unknown pronunciation)
+wigeon not in CMU (unknown pronunciation)
+eider not in CMU (unknown pronunciation)
+goose edit distance with moose
+gander banned
+koi not in CMU (unknown pronunciation)
+goby not in CMU (unknown pronunciation)
+wrasse not in CMU (unknown pronunciation)
+marlin edit distance with merlin
+sailfish shape
+swordfish shape
+mackerel shape
+sole banned
+plaice not in CMU (unknown pronunciation)
+flounder shape
+skate banned
+limpet not in CMU (unknown pronunciation)
+cowrie not in CMU (unknown pronunciation)
+nautilus shape
+cuttlefish shape
+starfish shape
+coral same or sounds like a word in the other list
+seahorse shape
+skink not in CMU (unknown pronunciation)
+anole not in CMU (unknown pronunciation)
+chameleon shape
+tortoise shape
+terrapin shape
+locust banned
+dragonfly shape
+damselfly shape
+mayfly not in CMU (unknown pronunciation)
+lacewing shape
+hornet banned
+wasp banned
+bumblebee shape
+sunflower shape
+marigold shape
+lavender shape
+jasmine banned
+violet same or sounds like a word in the other list
+reed edit distance with reef
+cattail not in CMU (unknown pronunciation)
+lotus banned
+fir prefix of firefly
+hazel same or sounds like a word in the other list
+sycamore shape
+chestnut shape
+walnut same or sounds like a word in the other list
+almond same or sounds like a word in the other list
+pistachio shape
+ginger same or sounds like a word in the other list
+sage banned
+mint banned
+clove edit distance with cove
+bog banned
+fen banned
+swamp banned
+gulf edit distance with gull
+beach edit distance with beech
+shoal not in CMU (unknown pronunciation)
+spit banned
+butte ldnoobw substring
+gully prefix of gull
+dell banned
+basin edit distance with basil
+waterfall shape
+rivulet not in CMU (unknown pronunciation)
+lane edit distance with lake
+twilight shape
+rainbow prefix of rain
+moonbeam shape
+stardust shape
+galaxy banned
+agave not in CMU (unknown pronunciation)
+bluebell shape
+buttercup shape
+foxglove shape
+primrose shape
+snowdrop shape
+iris edit distance with ibis
+camellia shape
+magnolia shape
+yarrow banned
+tansy banned
+fescue banned
+ledge edit distance with sedge
+tarn not in CMU (unknown pronunciation)
+tor banned
+kudu not in CMU (unknown pronunciation)
+nyala not in CMU (unknown pronunciation)
+topi not in CMU (unknown pronunciation)
+gnu banned
+addax not in CMU (unknown pronunciation)
+saiga not in CMU (unknown pronunciation)
+chamois not in CMU (unknown pronunciation)
+vicuna banned
+guanaco banned
+capybara shape
+agouti not in CMU (unknown pronunciation)
+coati not in CMU (unknown pronunciation)
+kinkajou shape
+margay not in CMU (unknown pronunciation)
+tayra not in CMU (unknown pronunciation)
+grison not in CMU (unknown pronunciation)
+pipit ldnoobw substring
+wagtail not in CMU (unknown pronunciation)
+starling shape
+bulbul not in CMU (unknown pronunciation)
+barbet not in CMU (unknown pronunciation)
+munia not in CMU (unknown pronunciation)
+weaver edit distance with beaver
+lapwing not in CMU (unknown pronunciation)
+shrike not in CMU (unknown pronunciation)
+pitta not in CMU (unknown pronunciation)
+drongo not in CMU (unknown pronunciation)
+hornbill shape
+lorikeet shape
+budgie not in CMU (unknown pronunciation)
+cockatoo shape
+toucan not in CMU (unknown pronunciation)
+pochard not in CMU (unknown pronunciation)
+smew not in CMU (unknown pronunciation)
+scoter not in CMU (unknown pronunciation)
+shelduck shape
+gadwall not in CMU (unknown pronunciation)
+garganey shape
+sturgeon shape
+tench banned
+chub not in CMU (unknown pronunciation)
+rudd banned
+dace banned
+barbel banned
+char banned
+shad banned
+gar banned
+tilapia not in CMU (unknown pronunciation)
+loach not in CMU (unknown pronunciation)
+hake banned
+opah not in CMU (unknown pronunciation)
+moray banned
+lamprey banned
+skimmer ldnoobw substring
+darner banned
+pinnacle shape
+reservoir shape
+cardamom shape
+saffron banned
+quince same or sounds like a word in the other list
+damson banned
+medlar banned
+sloe edit distance with slope
+elder edit distance with alder
+hawthorn shape
+hazelnut shape
+tamarind shape
+lychee not in CMU (unknown pronunciation)
+kumquat banned
+sapphire shape
+topaz same or sounds like a word in the other list
+beryl banned
+zircon banned
+onyx same or sounds like a word in the other list
+amethyst shape
+citrine banned
+peridot banned
+tourmaline shape
+gneiss same or sounds like a word in the other list
+shale edit distance with whale
+sandstone shape
+limestone shape
+gravel banned
+loam banned
+silt banned
+humus banned
+compost banned
+mulch edit distance with gulch
+petal banned
+bud banned
+sprout banned
+seedling shape
+sapling banned
+timber banned
+driftwood shape
+lantern banned
+kettle banned
+anchor banned
+compass banned
+lighthouse shape
+harbour edit distance with harbor
+pier banned
+jetty banned
+quay banned
+wharf banned
+buoy banned
+pair hits:
+

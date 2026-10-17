@@ -133,6 +133,35 @@ class StreamDiscoveryTest {
         assertFalse(streamOfferIsFresh(lastSeenMs, lastSeenMs + STREAM_OFFER_STALE_MS + 1L))
     }
 
+    @Test
+    fun relayedCopiesOfOneBroadcastShareOneRowLedByTheBestJoinableRoute() {
+        fun offer(logical: Int, prefix: Byte, cost: Int, full: Boolean = false): DiscoveryAnnouncement {
+            val nodePrefix = ByteArray(DiscoveryAnnouncement.NODE_PREFIX_BYTES) { prefix }
+            return announcement(DiscoveryAnnouncement.FLAG_STREAM_AVAILABLE, StreamRouteToken.forAdvertiser(logical, nodePrefix))
+                .copy(nodeIdPrefix = nodePrefix, routeCost = cost,
+                    sequence = if (full) DiscoveryAnnouncement.SEQUENCE_SOURCE_FULL else 0)
+        }
+        val relayFar = offer(7, 3, cost = 2)
+        val source = offer(7, 1, cost = 0)
+        val relayNear = offer(7, 2, cost = 1)
+        val other = offer(9, 4, cost = 0)
+
+        val groups = groupStreamRoutes(listOf(relayFar, other, source, relayNear), { it }, { !it.isFullStreamOffer() })
+        assertEquals(2, groups.size)
+        assertEquals(listOf(source, relayNear, relayFar), groups[0].routes)
+        assertEquals(other, groups[1].best)
+
+        // A full source yields to a relay of the same broadcast; it stays in the group.
+        val fullSource = offer(7, 1, cost = 0, full = true)
+        val fallback = groupStreamRoutes(listOf(fullSource, relayFar, relayNear), { it }, { !it.isFullStreamOffer() })
+        assertEquals(relayNear, fallback.single().best)
+        assertEquals(fullSource, fallback.single().routes.last())
+
+        // Routes whose establishment keeps failing rank after healthy ones at any cost.
+        val avoided = groupStreamRoutes(listOf(source, relayFar), { it }, { true }, { if (it === source) 1 else 0 })
+        assertEquals(relayFar, avoided.single().best)
+    }
+
     private fun announcement(flags: Int, token: Int) = DiscoveryAnnouncement(
         nodeIdPrefix = ByteArray(DiscoveryAnnouncement.NODE_PREFIX_BYTES),
         flags = flags,

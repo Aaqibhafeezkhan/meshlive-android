@@ -31,9 +31,12 @@ class BackgroundReliabilityTest {
     @Test
     fun cleanStockPhoneShowsOnlyItsMakerAdvice() {
         val result = issues(snapshot("Google"))
-        assertEquals(listOf("oem-stock-android"), result.map { it.id })
-        assertEquals(ReliabilitySeverity.ADVISORY, result.single().severity)
-        assertTrue(result.single().actions.last().action == android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+        // The system Bluetooth app note is information until something points at trouble (an always-on role, an update).
+        assertEquals(listOf("oem-stock-android", "system-bluetooth-app"), result.map { it.id })
+        val oem = result.first()
+        assertEquals(ReliabilitySeverity.ADVISORY, oem.severity)
+        assertEquals(ReliabilitySeverity.INFO, result.last().severity)
+        assertTrue(oem.actions.last().action == android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
     }
 
     @Test
@@ -47,10 +50,15 @@ class BackgroundReliabilityTest {
         assertEquals(ReliabilitySeverity.ACTION_NEEDED, result.getValue("background-restricted").severity)
         assertEquals(ReliabilitySeverity.ACTION_NEEDED, result.getValue("standby-bucket").severity)
         assertEquals(ReliabilitySeverity.ADVISORY, result.getValue("battery-optimization").severity)
+        // Q38: the one-tap prompt comes first, the list screen is the fallback.
         assertEquals(
-            android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS,
-            result.getValue("battery-optimization").actions.first().action,
+            listOf(
+                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS,
+            ),
+            result.getValue("battery-optimization").actions.take(2).map { it.action },
         )
+        assertTrue(result.getValue("battery-optimization").actions.first().withPackageUri)
         assertEquals(ReliabilitySeverity.ADVISORY, result.getValue("unused-app-restrictions").severity)
         assertEquals(ReliabilitySeverity.INFO, result.getValue("power-save-mode").severity)
         assertTrue(result.getValue("oem-xiaomi").steps.any { "Autostart" in it })
@@ -71,10 +79,11 @@ class BackgroundReliabilityTest {
 
     @Test
     fun unknownMakerGetsGenericAdviceAndOffSwitchesWork() {
-        val honor = issues(snapshot("HONOR"))
-        assertEquals(listOf("oem-generic"), honor.map { it.id })
+        val zte = issues(snapshot("ZTE"))
+        assertEquals(listOf("oem-generic", "system-bluetooth-app"), zte.map { it.id })
         val xiaomiOff = issues(snapshot("Xiaomi", ignoringBatteryOptimizations = false), setOf("bg-oem-xiaomi", "bg-battery-optimization"))
-        assertTrue(xiaomiOff.isEmpty())
+        assertEquals(listOf("system-bluetooth-app", "incoming-call-popup"), xiaomiOff.map { it.id })
+        assertTrue(issues(snapshot("Xiaomi", ignoringBatteryOptimizations = false), setOf("bg-oem-xiaomi", "bg-battery-optimization", "bg-system-bluetooth-app", "bg-incoming-call-popup")).isEmpty())
         assertTrue(issues(snapshot("Xiaomi"), setOf("all")).isEmpty())
     }
 
@@ -123,7 +132,7 @@ class BackgroundReliabilityTest {
         val s = snapshot("Xiaomi", ignoringBatteryOptimizations = false)
         val line = BackgroundReliability.statusLine(BackgroundReliabilityStatus(s, issues(s)))
         assertTrue(line, line.startsWith("Background reliability: sdk=34 | manufacturer=Xiaomi | ignoringBatteryOpt=0"))
-        assertTrue(line, line.endsWith("issues=battery-optimization:advisory,oem-xiaomi:advisory"))
+        assertTrue(line, line.endsWith("issues=battery-optimization:advisory,oem-xiaomi:advisory,system-bluetooth-app:info,incoming-call-popup:info"))
         assertFalse(line.contains("BENCHMARK"))
     }
 

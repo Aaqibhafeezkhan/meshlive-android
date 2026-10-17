@@ -1,18 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One Settings > Features row: a switch and its explanation (FeatureSettingsBlock inflates one per FeatureSpec). -->
+<!-- One settings row generated from the feature catalog (FeatureSettingsBlock): icon, a label that opens the
+     explanation (small info mark after the text), and the switch alone at the right edge so every switch in a card
+     lines up (2026-10-17 redesign). -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical">
+    android:gravity="center_vertical"
+    android:orientation="horizontal">
+
+    <ImageView
+        android:id="@+id/featureRowIcon"
+        style="@style/Widget.App.RowIcon"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <TextView
+            android:id="@+id/featureRowInfo"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="56dp"
+            android:gravity="center_vertical"
+            android:background="?attr/selectableItemBackground"
+            android:drawableEnd="@drawable/ic_info_small"
+            android:drawablePadding="6dp"
+            android:drawableTint="@color/text_secondary"
+            android:textAppearance="@style/TextAppearance.App.RowLabel" />
+    </LinearLayout>
 
     <com.google.android.material.materialswitch.MaterialSwitch
         android:id="@+id/featureRowSwitch"
-        android:layout_width="match_parent"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp" />
+        android:minHeight="56dp" />
 
     <TextView
         android:id="@+id/featureRowDescription"
-        style="@style/Widget.App.Description"
-        android:paddingStart="40dp" />
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone" />
 </LinearLayout>

@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Messaging v2 phase 1c: one conversation, drawn over the main screen (MainActivity keeps its discovery running, which is what
+     dials the thread link). Hidden until a Contacts row is tapped. Top bar (back, name + verified check, state line, voice, video, more), an optional
+     banner for the link state, the message list, a progress line, and the composer. Plain rows on black. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/threadRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/app_background"
+    android:clickable="true"
+    android:elevation="8dp"
+    android:focusable="true"
+    android:orientation="vertical"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:minHeight="64dp"
+        android:orientation="horizontal"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp">
+
+        <ImageButton
+            android:id="@+id/threadBack"
+            style="@style/Widget.App.TopIconButton"
+            android:contentDescription="@string/mv2_ui_back"
+            android:src="@drawable/ic_arrow_back" />
+
+        <LinearLayout
+            android:id="@+id/threadTitleBlock"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackground"
+            android:orientation="vertical"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/threadName"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:accessibilityHeading="true"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textAppearance="@style/TextAppearance.App.Title"
+                    tools:text="Asha" />
+
+                <ImageView
+                    android:id="@+id/threadVerified"
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:layout_marginStart="6dp"
+                    android:contentDescription="@string/verification_verified"
+                    android:src="@drawable/ic_check_circle"
+                    android:visibility="gone"
+                    app:tint="@color/success" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/threadState"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textAppearance="@style/TextAppearance.App.Body"
+                tools:text="Nearby" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/threadVoice"
+            style="@style/Widget.App.TopIconButton"
+            android:contentDescription="@string/mv2_ui_voice_call"
+            android:src="@drawable/ic_call" />
+
+        <ImageButton
+            android:id="@+id/threadVideo"
+            style="@style/Widget.App.TopIconButton"
+            android:contentDescription="@string/mv2_ui_video_call"
+            android:src="@drawable/ic_videocam" />
+
+        <ImageButton
+            android:id="@+id/threadMore"
+            style="@style/Widget.App.TopIconButton"
+            android:contentDescription="@string/mv2_ui_more"
+            android:src="@drawable/ic_more_vert" />
+    </LinearLayout>
+
+    <!-- Link-state banner: one line and at most three actions, only when something stands in the way. -->
+    <LinearLayout
+        android:id="@+id/threadBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="4dp"
+        android:layout_marginEnd="16dp"
+        android:background="@drawable/banner_surface"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/threadBannerText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:accessibilityLiveRegion="polite"
+            android:textAppearance="@style/TextAppearance.App.BodyLarge" />
+
+        <LinearLayout
+            android:id="@+id/threadBannerActions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:orientation="horizontal" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/threadList"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:scrollbars="none" />
+
+        <TextView
+            android:id="@+id/threadEmpty"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:paddingStart="40dp"
+            android:paddingEnd="40dp"
+            android:textAppearance="@style/TextAppearance.App.Body"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- A file being prepared, or a voice note being recorded. -->
+    <TextView
+        android:id="@+id/threadProgress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:accessibilityLiveRegion="polite"
+        android:paddingStart="20dp"
+        android:paddingTop="4dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="4dp"
+        android:textAppearance="@style/TextAppearance.App.Body"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="bottom"
+        android:orientation="horizontal"
+        android:paddingStart="8dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp">
+
+        <ImageButton
+            android:id="@+id/threadAttach"
+            style="@style/Widget.App.TopIconButton"
+            android:contentDescription="@string/mv2_ui_attach"
+            android:src="@drawable/ic_attach" />
+
+        <EditText
+            android:id="@+id/threadInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/composer_field"
+            android:hint="@string/mv2_ui_composer_hint"
+            android:imeOptions="flagNoPersonalizedLearning"
+            android:inputType="textMultiLine|textCapSentences"
+            android:maxLength="2000"
+            android:maxLines="5"
+            android:minHeight="48dp"
+            android:paddingStart="18dp"
+            android:paddingTop="12dp"
+            android:paddingEnd="18dp"
+            android:paddingBottom="12dp"
+            android:textAppearance="@style/TextAppearance.App.BodyLarge"
+            android:textColorHint="@color/text_disabled" />
+
+        <!-- Send when there is text; otherwise a microphone you hold to record a voice note. -->
+        <ImageButton
+            android:id="@+id/threadAction"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/icon_circle_white"
+            android:contentDescription="@string/mv2_ui_send"
+            android:padding="12dp"
+            android:src="@drawable/ic_mic"
+            app:tint="@color/on_accent" />
+    </LinearLayout>
+</LinearLayout>

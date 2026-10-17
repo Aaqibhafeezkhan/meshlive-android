@@ -41,6 +41,8 @@ import javax.crypto.SecretKey
  *         VERIFIED / UNVERIFIED / MISMATCH (possible impersonation, show it loudly) /
  *         STORE_UNREADABLE (offer resetVerifiedContacts())
  *     verifiedContacts(): List<VerifiedContact>
+ *     rename(fingerprint: IdentityFingerprint, displayName: String): RenameResult
+ *         label only; fingerprint, time and method stay (canonical person names only, never blank)
  *     forget(fingerprint: IdentityFingerprint): Boolean
  *     storeUnreadable(): Boolean / storeUnreadableCause(): StoreUnreadableCause? /
  *     resetVerifiedContacts(): Boolean                       recovery from a damaged store
@@ -266,6 +268,16 @@ enum class MarkVerifiedResult {
 
 enum class MismatchPolicy { REFUSE, WARN }
 
+enum class RenameResult {
+    RENAMED,
+    /** No verified contact has this fingerprint. */
+    NOT_FOUND,
+    /** Blank, too long or not a canonical person name (see [LabelText]); nothing changed. */
+    INVALID_NAME,
+    /** The store cannot be opened; it is never overwritten implicitly. Reset it first. */
+    STORE_UNREADABLE,
+}
+
 data class VerifiedContact(
     val fingerprint: IdentityFingerprint,
     val displayName: String,
@@ -292,10 +304,51 @@ enum class StoreUnreadableCause(val transient: Boolean) {
 class IdentityMismatchException(message: String) : SecurityException(message)
 
 /**
+ * What the app shows for the verified-contact store (design decision Q15, 2026-10-14: fail open with a banner and an automatic
+ * retry). Calls and streams always continue; the store being unreadable only means nobody shows as verified.
+ */
+enum class StoreBanner {
+    /** Readable: no banner. */
+    NONE,
+
+    /** A temporary Keystore or I/O error: "Verified contacts couldn't be loaded", retried automatically with backoff. */
+    RETRYING,
+
+    /** A corrupt file (kept untouched): the same text, with a "Reset verified contacts" action. */
+    RESET_REQUIRED,
+}
+
+/** The pure rules behind [StoreBanner] and the retry schedule of [VerifiedContactStore]. */
+object VerifiedStoreRecovery {
+    const val FIRST_RETRY_MS = 2_000L
+    const val MAX_RETRY_MS = 60_000L
+
+    /** Wait before the next load attempt after [consecutiveFailures] temporary failures: 2 s, 4 s, 8 s ... capped at 60 s. */
+    fun retryDelayMs(consecutiveFailures: Int): Long {
+        val doublings = (consecutiveFailures - 1).coerceIn(0, 16)
+        return minOf(MAX_RETRY_MS, FIRST_RETRY_MS shl doublings)
+    }
+
+    fun banner(cause: StoreUnreadableCause?): StoreBanner = when {
+        cause == null -> StoreBanner.NONE
+        cause.transient -> StoreBanner.RETRYING
+        else -> StoreBanner.RESET_REQUIRED
+    }
+
+    /**
+     * When the screen should look at the store again: after the store's own retry is due (plus a little, so the attempt has run),
+     * or never for a readable or corrupt store (a corrupt one changes only through the user's reset, which re-reads at once).
+     */
+    fun nextCheckInMs(banner: StoreBanner, retryDueInMs: Long?): Long? =
+        if (banner == StoreBanner.RETRYING) (retryDueInMs ?: 0L).coerceAtLeast(0L) + 250L else null
+}
+
+/**
  * Verified contacts, sealed at rest with [AtRestCipher]. The file is absent until the first
  * contact is verified, so an empty store needs no key access. A store that exists but cannot be
  * opened is reported as unreadable (never silently empty, never overwritten). A corrupt file stays
- * unreadable until [reset]; a Keystore or I/O failure is retried on the next access.
+ * unreadable until [reset]; a Keystore or I/O failure is retried with backoff ([VerifiedStoreRecovery.retryDelayMs]),
+ * and nothing touches the Keystore again until the backoff has passed.
  */
 class VerifiedContactStore(
     private val file: File,
@@ -307,6 +360,9 @@ class VerifiedContactStore(
     private var latched: StoreUnreadableCause? = null
     /** The most recent load failure, cleared by a successful load. */
     private var lastFailure: StoreUnreadableCause? = null
+    /** Consecutive temporary failures, and when the next attempt is allowed ([clock] time). */
+    private var transientFailures = 0
+    private var retryAtMs = 0L
 
     /** Called, with the store locked, when it becomes unreadable or the cause changes; keep it short. */
     @Volatile var unreadableListener: ((StoreUnreadableCause) -> Unit)? = null
@@ -328,6 +384,23 @@ class VerifiedContactStore(
     @Synchronized
     fun hasAny(): Boolean = cache?.isNotEmpty() ?: (latched != null || file.exists())
 
+    /** What to show for the store right now (attempts a load when a retry is due). */
+    @Synchronized
+    fun banner(): StoreBanner = VerifiedStoreRecovery.banner(unreadableCause())
+
+    private fun retryWaitMs(): Long {
+        val wait = retryAtMs - clock()
+        return if (wait in 1L..VerifiedStoreRecovery.MAX_RETRY_MS) wait else 0L
+    }
+
+    /** Milliseconds until the next automatic retry of a temporary failure, or null when none is pending. */
+    @Synchronized
+    fun retryDueInMs(): Long? {
+        val failure = lastFailure
+        if (latched != null || failure == null || !failure.transient) return null
+        return retryWaitMs()
+    }
+
     @Synchronized
     fun markVerified(
         authenticated: IdentityFingerprint?,
@@ -337,8 +410,14 @@ class VerifiedContactStore(
     ): MarkVerifiedResult {
         if (authenticated == null) return MarkVerifiedResult.NO_AUTHENTICATED_SESSION
         if (authenticated != confirmed) return MarkVerifiedResult.FINGERPRINT_MISMATCH
-        val name = IdentityQrCodec.normalizeName(displayName)
         val current = loadOrNull() ?: return MarkVerifiedResult.STORE_UNREADABLE
+        // A blank name keeps the label the user already gave this contact (re-verifying never erases it);
+        // such a contact shows by its handle until it is named.
+        val name = if (displayName.isBlank()) {
+            current.firstOrNull { it.fingerprint == confirmed }?.displayName.orEmpty()
+        } else {
+            IdentityQrCodec.normalizeName(displayName)
+        }
         if (current.any { it.fingerprint != confirmed && samePrefix(it.fingerprint, confirmed) }) {
             return MarkVerifiedResult.PREFIX_CONFLICT
         }
@@ -346,6 +425,22 @@ class VerifiedContactStore(
         if (others.size >= MAX_CONTACTS) return MarkVerifiedResult.STORE_FULL
         save(others + VerifiedContact(confirmed, name, clock(), method))
         return MarkVerifiedResult.VERIFIED
+    }
+
+    /**
+     * Gives a verified contact a new label. Only the label changes: the fingerprint, the verification
+     * time and the method stay. The label must already be a canonical person name ([LabelText]); a blank
+     * label is rejected (to drop a name, forget the contact and verify again).
+     */
+    @Synchronized
+    fun rename(fingerprint: IdentityFingerprint, displayName: String): RenameResult {
+        val name = runCatching { LabelText.normalize(LabelKind.PERSON_NAME, displayName) }
+            .getOrElse { return RenameResult.INVALID_NAME }
+        val current = loadOrNull() ?: return RenameResult.STORE_UNREADABLE
+        val contact = current.firstOrNull { it.fingerprint == fingerprint } ?: return RenameResult.NOT_FOUND
+        if (contact.displayName == name) return RenameResult.RENAMED
+        save(current.map { if (it.fingerprint == fingerprint) it.copy(displayName = name) else it })
+        return RenameResult.RENAMED
     }
 
     @Synchronized
@@ -364,6 +459,8 @@ class VerifiedContactStore(
         cache = null
         latched = null
         lastFailure = if (removed) null else StoreUnreadableCause.IO_ERROR
+        transientFailures = 0
+        retryAtMs = 0L
         return removed
     }
 
@@ -408,6 +505,8 @@ class VerifiedContactStore(
         cache = null
         latched = null
         lastFailure = null
+        transientFailures = 0
+        retryAtMs = 0L
     }
 
     private class LoadFailure(val reason: StoreUnreadableCause, error: Throwable) : Exception(error)
@@ -415,13 +514,23 @@ class VerifiedContactStore(
     private fun loadOrNull(): List<VerifiedContact>? {
         cache?.let { return it }
         if (latched != null) return null
+        // Backoff: after a temporary failure the Keystore is not asked again until the retry is due.
+        // (A wall clock that moved back by more than the longest backoff counts as due, so a retry can never be stuck.)
+        if (lastFailure?.transient == true && retryWaitMs() > 0L) return null
         return try {
             load().also {
                 cache = it
                 lastFailure = null
+                transientFailures = 0
+                retryAtMs = 0L
             }
         } catch (failure: LoadFailure) {
-            if (!failure.reason.transient) latched = failure.reason
+            if (!failure.reason.transient) {
+                latched = failure.reason
+            } else {
+                transientFailures++
+                retryAtMs = clock() + VerifiedStoreRecovery.retryDelayMs(transientFailures)
+            }
             if (lastFailure != failure.reason) {
                 lastFailure = failure.reason
                 runCatching {
@@ -429,7 +538,7 @@ class VerifiedContactStore(
                         "BluetoothVideo",
                         "SECURITY verified-contact store unreadable: cause=${failure.reason} | " +
                             "error=${failure.cause?.javaClass?.simpleName} | " +
-                            if (failure.reason.transient) "retried on next access" else "reset required",
+                            if (failure.reason.transient) "retried with backoff" else "reset required",
                     )
                 }
                 unreadableListener?.let { listener -> runCatching { listener(failure.reason) } }
@@ -502,6 +611,8 @@ class VerifiedContactStore(
         cache = contacts
         latched = null
         lastFailure = null
+        transientFailures = 0
+        retryAtMs = 0L
     }
 
     companion object {
@@ -660,7 +771,16 @@ class IdentityVerification internal constructor(
 
     fun verifiedContacts(): List<VerifiedContact> = store.all()
 
+    fun rename(fingerprint: IdentityFingerprint, displayName: String): RenameResult = store.rename(fingerprint, displayName)
+
+    /**
+     * Naming v2: called after a contact (non-null) or every contact (null) was forgotten, so the claims file
+     * ([ContactClaims]) drops the same entries. Set by [create]; never throws into the caller.
+     */
+    @Volatile internal var onContactsForgotten: ((IdentityFingerprint?) -> Unit)? = null
+
     fun forget(fingerprint: IdentityFingerprint): Boolean = store.forget(fingerprint).also { forgotten ->
+        if (forgotten) runCatching { onContactsForgotten?.invoke(fingerprint) }
         // Rotating IDs, phase 2: a forgotten contact stops being a lease holder and, if it received a lease,
         // this phone starts a new presence key (RD1). Inert while the experiment is off.
         if (forgotten && RotatingDiscoveryFeature.enabled) RotatingDiscovery.presenceVault()?.let { vault ->
@@ -673,6 +793,10 @@ class IdentityVerification internal constructor(
 
     fun storeUnreadableCause(): StoreUnreadableCause? = store.unreadableCause()
 
+    fun storeBanner(): StoreBanner = store.banner()
+
+    fun storeRetryDueInMs(): Long? = store.retryDueInMs()
+
     fun addStoreUnreadableListener(listener: (StoreUnreadableCause) -> Unit) =
         PeerIdentityGate.addStoreUnreadableListener(listener)
 
@@ -681,6 +805,7 @@ class IdentityVerification internal constructor(
 
     /** Deletes all verified contacts (the recovery for an unreadable store). False if the file stays. */
     fun resetVerifiedContacts(): Boolean = store.reset().also { removed ->
+        if (removed) runCatching { onContactsForgotten?.invoke(null) }
         if (removed && RotatingDiscoveryFeature.enabled) RotatingDiscovery.presenceVault()?.let { vault ->
             runCatching { vault.resetContacts() }
             RotatingDiscovery.requestRecognitionRebuild()
@@ -719,7 +844,11 @@ class IdentityVerification internal constructor(
             val file = File(File(context.noBackupFilesDir, DIRECTORY), FILE)
             val store = VerifiedContactStore(file, AesGcmAtRestCipher { verificationAtRestKey() })
             PeerIdentityGate.store = store
-            return IdentityVerification({ AndroidNodeIdentityStore().getOrCreate() }, store)
+            return IdentityVerification({ AndroidNodeIdentityStore().getOrCreate() }, store).also { verification ->
+                verification.onContactsForgotten = { fingerprint ->
+                    if (fingerprint == null) ContactClaims.store(context).reset() else ContactClaims.forget(context, fingerprint)
+                }
+            }
         }
 
         internal fun clearForWipe() {

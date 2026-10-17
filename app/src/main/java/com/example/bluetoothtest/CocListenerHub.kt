@@ -276,6 +276,7 @@ object CocListeners {
 
     @SuppressLint("MissingPermission")
     fun listen(adapter: BluetoothAdapter, role: String, owner: String = role): CocListenLease<BluetoothSocket> {
+        EncoderBenchGuard.check("CocListenerHub.listen")
         if (sharedEnabled()) {
             val shared = synchronized(roles) {
                 roles.getOrPut(role) {
@@ -286,18 +287,28 @@ object CocListeners {
                     )
                 }
             }
-            shared.acquire(owner)?.let { return it }
+            shared.acquire(owner)?.let { return echoGuarded(it, owner) }
         }
         val server = adapter.listenUsingInsecureL2capChannel()
         CocRegistrations.note("listen", "$owner-dedicated")
         CocListenerLedger.opened(owner, server)
-        return object : CocListenLease<BluetoothSocket> by DedicatedCocListener(server) {
-            override fun close() {
-                runCatching { server.close() }
-                CocListenerLedger.closed(owner, server)
-            }
-        }
+        return echoGuarded(
+            object : CocListenLease<BluetoothSocket> by DedicatedCocListener(server) {
+                override fun close() {
+                    runCatching { server.close() }
+                    CocListenerLedger.closed(owner, server)
+                }
+            },
+            owner,
+        )
     }
+
+    /**
+     * Experimental (`test_coc_echo_verify`): while the switch is on, every accepted connection answers the
+     * client's 1 KB echo before the session sees it. Off: the lease is returned unchanged.
+     */
+    private fun echoGuarded(lease: CocListenLease<BluetoothSocket>, owner: String): CocListenLease<BluetoothSocket> =
+        if (CocEchoVerify.enabled()) EchoRespondingLease.forSockets(lease, owner) { Log.i("BluetoothVideo", it) } else lease
 
     /** Adapter off/on: every stack listener is gone (and on Android 10 its leaked slots are freed). */
     fun resetAll(reason: String) {

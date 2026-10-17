@@ -54,9 +54,28 @@ class ReceiverNodeForwardingCore(
     private val thinDiscardable: Boolean = false,
     /** Experimental bounded media age (off by default): the child queue may shed stale video. */
     private val boundedMediaAge: Boolean = false,
+    /**
+     * Audio-only live stream (null: video). Non-null: a joining child gets the cached header and Opus
+     * configuration and starts at the next record, with no keyframe wait; its queue sheds stale audio when
+     * [AudioLiveRelayQueue.ageBound] and reports withdrawal verdicts.
+     */
+    private val audioLive: AudioLiveRelaySettings? = null,
+    /**
+     * Experimental relay child thinning (off by default; RelayChildLayerPolicy): the child queue accepts
+     * a level (full / base layer only / audio only). Off: no record is ever dropped for a layer.
+     */
+    private val layerThinning: Boolean = false,
+    /**
+     * Experimental time-based shed target (Q31; null = the earlier fixed budget). Applies only to a queue that
+     * sheds ([boundedMediaAge]); see [RelayTimeQueueSizer].
+     */
+    private val timeQueue: RelayTimeQueueConfig? = null,
+    /** The stream's frame interval, ms, for the time-based target's minimum cushion. */
+    private val frameIntervalMs: Long = 66L,
 ) {
     private val duplicates = DuplicateWindow()
     private val bootstrap = mutableListOf<MeshEnvelope>()
+    private val videoConfigBatch = VideoConfigBatch()
     private var latestControl: MeshEnvelope? = null
     private var childNodeId: NodeId? = null
     private var childQueue: RelayChildQueue? = null
@@ -89,6 +108,9 @@ class ReceiverNodeForwardingCore(
             ChildQueueOffer.SHED_WAITING_FOR_KEYFRAME ->
                 RelayResult(forwarded, emptySet(), setOf(child), null, keyFrameReRequest = true)
             ChildQueueOffer.SHED_DROPPED -> RelayResult(forwarded, emptySet(), emptySet(), null)
+            // Relay child thinning: the base layer stays decodable, and a paused child asks for nothing.
+            ChildQueueOffer.LAYER_THINNED, ChildQueueOffer.LAYER_PAUSED ->
+                RelayResult(forwarded, emptySet(), emptySet(), null)
         }
     }
 
@@ -97,9 +119,21 @@ class ReceiverNodeForwardingCore(
         require(child != localNodeId && child != upstreamPeerNodeId) { "Invalid downstream child" }
         require(childNodeId == null) { "A downstream child is already connected" }
         childNodeId = child
-        val bound = if (boundedMediaAge) RelayMediaAgeBound() else null
+        val bound = if (boundedMediaAge) {
+            RelayMediaAgeBound(
+                timeQueue?.let { RelayTimeQueueSizer(it, frameIntervalMs) },
+                sustainedDrain = DebugTunables.relayDrainSustained,
+            )
+        } else {
+            null
+        }
         childMediaAgeBound = bound
-        childQueue = RelayChildQueue(thinDiscardable, bound).also(RelayChildQueue::waitForKeyFrame)
+        childQueue = if (audioLive != null) {
+            // No keyframes in an audio-only stream: the child starts at the next record after the bootstrap list.
+            RelayChildQueue(audioLive = AudioLiveRelayQueue(audioLive.ageBound))
+        } else {
+            RelayChildQueue(thinDiscardable, bound, layerThinning = layerThinning).also(RelayChildQueue::waitForKeyFrame)
+        }
         return (bootstrap + listOfNotNull(latestControl))
             .distinctBy(MeshEnvelope::sequence)
             .sortedBy(MeshEnvelope::sequence)
@@ -134,6 +168,14 @@ class ReceiverNodeForwardingCore(
     fun thinnedFrames(child: NodeId): Long =
         if (childNodeId == child) childQueue?.thinnedFrameCount() ?: 0 else 0
 
+    /** Relay child thinning: moves [child] to [level]; false when nothing changed (or thinning is off). */
+    fun setChildLayerLevel(child: NodeId, level: RelayChildLevel): Boolean =
+        synchronized(this) { childQueue.takeIf { childNodeId == child } }?.setLayerLevel(level) ?: false
+
+    /** Relay child thinning: [child]'s queue counters, or null without that child. */
+    fun childLayerStats(child: NodeId): RelayChildLayerStats? =
+        synchronized(this) { childQueue.takeIf { childNodeId == child } }?.layerStats()
+
     fun hasQueuedAudio(child: NodeId): Boolean =
         synchronized(this) { childQueue.takeIf { childNodeId == child } }?.hasQueuedAudio() == true
 
@@ -144,11 +186,40 @@ class ReceiverNodeForwardingCore(
     @Synchronized
     fun hasChild(): Boolean = childNodeId != null
 
+    /** Audio-only: why [child] should be withdrawn now (more than 20% shed over 10 s, or a record older than 30 s). */
+    fun audioVerdict(child: NodeId, nowMs: Long): AudioLiveChildHealth.Reason? =
+        synchronized(this) { childQueue.takeIf { childNodeId == child } }?.audioVerdict(nowMs)
+
+    /** Audio-only: whole records shed for [child] so far. */
+    fun audioShedRecords(child: NodeId): Long =
+        synchronized(this) { childQueue.takeIf { childNodeId == child } }?.audioShedRecords() ?: 0L
+
     /** Hop-local: [child]'s reported added playout delay on this link, for bounded media age. */
     @Synchronized
     fun setChildAddedDelayMs(child: NodeId, delayMs: Int) {
         if (childNodeId == child) childMediaAgeBound?.childAddedDelayMs = delayMs
     }
+
+    /** Hop-local: [child]'s measured delivery rate on this link (its arrival report), the time-based target's drain. */
+    @Synchronized
+    fun setChildDrainKbps(child: NodeId, kbps: Int) {
+        if (childNodeId == child) childMediaAgeBound?.setDrainKbps(kbps)
+    }
+
+    /** Hop-local: this relay's own sustained delivery rate to [child] (0 clears it), the drain when the experimental switch is on. */
+    @Synchronized
+    fun setChildSustainedDrainKbps(child: NodeId, kbps: Int) {
+        if (childNodeId == child) childMediaAgeBound?.setSustainedDrainKbps(kbps)
+    }
+
+    /** Both arms: `BENCHMARK relay_time_queue` fields for [child] (null without a shedding queue). */
+    @Synchronized
+    fun timeQueueSummary(child: NodeId): String? =
+        childQueue.takeIf { childNodeId == child }?.timeQueueSummary()
+
+    @Synchronized
+    fun timeQueueState(child: NodeId): Pair<String, Boolean>? =
+        childQueue.takeIf { childNodeId == child }?.timeQueueState()
 
     /** Both arms: [child]'s media age in this relay queue and any bounded-age shedding. */
     @Synchronized
@@ -166,6 +237,11 @@ class ReceiverNodeForwardingCore(
                 bootstrap += envelope
             }
             type == EndToEndContentType.MEDIA_PACKET && envelope.flags and MeshEnvelope.FLAG_CODEC_CONFIG != 0 -> {
+                if (envelope.flags and MeshEnvelope.FLAG_AUDIO == 0 && videoConfigBatch.onConfig()) {
+                    // The source restarted its encoder (new rung, camera flip): a joining child gets only the
+                    // current encoder's video configuration, never csd of two picture sizes.
+                    bootstrap.removeAll { it.isVideoConfigRecord() }
+                }
                 bootstrap += envelope
                 while (bootstrap.count {
                         EndToEndContentProtocol.inspect(it.payload).type == EndToEndContentType.MEDIA_PACKET &&
@@ -179,9 +255,16 @@ class ReceiverNodeForwardingCore(
                     bootstrap.removeAt(index)
                 }
             }
+            type == EndToEndContentType.MEDIA_PACKET &&
+                envelope.flags and (MeshEnvelope.FLAG_AUDIO or StreamProtocol.FLAG_DISPLAY_ROTATION) == 0 ->
+                videoConfigBatch.onMedia()
             type == EndToEndContentType.STREAM_STATE -> latestControl = envelope
         }
     }
+
+    private fun MeshEnvelope.isVideoConfigRecord(): Boolean =
+        EndToEndContentProtocol.inspect(payload).type == EndToEndContentType.MEDIA_PACKET &&
+            flags and MeshEnvelope.FLAG_CODEC_CONFIG != 0 && flags and MeshEnvelope.FLAG_AUDIO == 0
 
     private fun rejected(reason: RelayRejection) = RelayResult(null, emptySet(), emptySet(), reason)
 

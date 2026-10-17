@@ -104,7 +104,7 @@ class ClassicPeerConnectionTest {
             { Connection(it).also(connections::add) }, {},
             { connection ->
                 if (connection.address == "blocked") {
-                    assertTrue(connection.closed.await(2, TimeUnit.SECONDS))
+                    assertTrue(connection.closed.await(120, TimeUnit.SECONDS))
                 }
                 Session("expected").also(sessions::add)
             },

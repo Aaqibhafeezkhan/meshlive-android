@@ -1,5 +1,8 @@
 package com.example.bluetoothtest
 
+import android.os.Build
+import java.util.Locale
+
 /**
  * Re-issues this central's connection-priority request when the stack reports that the resulting
  * LE connection update failed.
@@ -23,6 +26,31 @@ package com.example.bluetoothtest
  * ([LeConnectionParameterLog]). No report means no retry, so stacks that never call the hidden
  * callback behave as before. DEBUG launch extra `test_le_priority_retry=false` is the control arm.
  * Line: `BENCHMARK le_priority_retry`.
+ *
+ * What the priority API can and cannot do (aosp-bt-versions CONN-01/02/10, BACKLOG P-05; the numbers are
+ * [lePriorityParameters]):
+ *  - A request carries a SUPERVISION TIMEOUT of 5 s on Android 10+ (20 s on Android 8-9), slave latency 0
+ *    (2 for LOW_POWER) and connection-event length 0/0. A link silent for 5 s is dropped with HCI 0x08, so
+ *    every request is logged with the timeout it sets (`BENCHMARK le_priority_request`, entry
+ *    `le-priority-request-supervision-log`) and a 0x08 after 5.0 s of silence reads as this timeout.
+ *  - An app cannot set an arbitrary interval, the supervision timeout, the event length or subrating:
+ *    `requestLeConnectionUpdate` and `requestSubrateMode` are @hide (privileged on Android 16) and there is no
+ *    public interval API in Android 14, 15 or 16 apart from DCK (API 34).
+ *  - The stack adjusts the numbers (global floor sysprop on 14+, a 20 ms floor while a hearing aid is bonded) and
+ *    drops a request issued while another update is pending or while service discovery runs; the later request
+ *    replaces the earlier one in the single slot.
+ *
+ * Interval drift (Experimental `test_priority_reassert`, default off; Nordic Android-BLE-Library #537/#558): the
+ * interval silently reverts toward 45 ms after discovery or when the peer asks for its own parameters. A SUCCESSFUL
+ * update that reports an interval above the requested priority's maximum is always logged
+ * (`BENCHMARK le_priority_drift`, at most three lines per request); with the switch on, the same priority is
+ * requested again after [REASSERT_DELAYS_MS], at most twice per request, never while a relay re-anchor is changing
+ * the priority on purpose ([RelayReanchor.inProgress]), and not when the second report shows the same interval
+ * (a floor, not a revert).
+ *
+ * Serialisation (Experimental `test_ll_gate`): when a [gate] is given and enabled, every request, including a retry,
+ * enters it, so a priority update never overlaps a PHY or MTU request (BACKLOG P-01); the gate is also told the
+ * outcome ([LlProcedureGate.onConnectionUpdated]). Without a gate, or with the gate off, requests go straight out.
  */
 internal class LeConnectionPriorityKeeper(
     private val link: String,
@@ -31,30 +59,63 @@ internal class LeConnectionPriorityKeeper(
     private val active: () -> Boolean,
     private val log: (String) -> Unit,
     private val enabled: () -> Boolean = { DebugTunables.lePriorityRetry },
+    private val gate: LlProcedureGate? = null,
+    private val reassertEnabled: () -> Boolean = { PhySwitches.priorityReassert },
+    private val reassertSuppressed: () -> Boolean = { RelayReanchor.inProgress },
+    private val sdkInt: Int = Build.VERSION.SDK_INT,
+    private val requestLogEnabled: () -> Boolean = {
+        PhyLinkPolicy.prioritySupervisionLogActive(DeviceFamilyPolicy.switchedOff)
+    },
 ) {
     private var priority: BleConnectionPriority? = null
     private var retries = 0
     private var generation = 0
+    private var reasserts = 0
+    private var driftLogs = 0
+    private var lastDriftUnits = -1
 
     /** The app (re)requested [priority]; a later failure is retried toward it. */
     @Synchronized
     fun requested(priority: BleConnectionPriority) {
         this.priority = priority
         retries = 0
+        reasserts = 0
+        driftLogs = 0
+        lastDriftUnits = -1
         generation++
     }
 
     /** Requests [priority] now and remembers it for retries. */
     fun request(priority: BleConnectionPriority): Boolean {
         requested(priority)
-        return sendRequest(priority)
+        if (requestLogEnabled()) log(lePriorityParameters(priority, sdkInt).line(link, priority, sdkInt))
+        return dispatch(priority)
     }
 
-    /** The stack reported an LE connection update with [status] (0 = success). */
+    private fun dispatch(target: BleConnectionPriority): Boolean {
+        val gate = gate ?: return sendRequest(target)
+        return when (gate.submit(LlProcedure.CONNECTION_PARAMS, "priority_${target.label}") { sendRequest(target) }) {
+            GateAdmission.IMMEDIATE_OK, GateAdmission.QUEUED -> true
+            GateAdmission.IMMEDIATE_FAILED, GateAdmission.DROPPED_STUCK, GateAdmission.DROPPED_CLOSED -> false
+        }
+    }
+
+    /**
+     * The stack reported an LE connection update with [status] (0 = success) and, when known, the new
+     * [intervalUnits] (1.25 ms units; -1 when the caller has none).
+     */
+    fun onConnectionUpdated(status: Int, intervalUnits: Int = -1) {
+        gate?.onConnectionUpdated(status, intervalUnits)
+        handleUpdate(status, intervalUnits)
+    }
+
     @Synchronized
-    fun onConnectionUpdated(status: Int) {
+    private fun handleUpdate(status: Int, intervalUnits: Int) {
         val target = priority ?: return
-        if (status == 0) return
+        if (status == 0) {
+            checkDrift(target, intervalUnits)
+            return
+        }
         if (!enabled()) {
             log("BENCHMARK le_priority_retry: link=$link | priority=${target.label} | status=$status | action=none (control arm)")
             return
@@ -73,15 +134,59 @@ internal class LeConnectionPriorityKeeper(
         schedule(delayMs) { retryIfCurrent(target, expected) }
     }
 
+    /** Caller holds the monitor. */
+    private fun checkDrift(target: BleConnectionPriority, intervalUnits: Int) {
+        if (intervalUnits <= 0) return
+        val params = lePriorityParameters(target, sdkInt)
+        if (intervalUnits <= params.maxIntervalUnits) return
+        val sameAsBefore = reasserts > 0 && lastDriftUnits == intervalUnits
+        lastDriftUnits = intervalUnits
+        val action = when {
+            !reassertEnabled() -> "none (experiment off)"
+            reassertSuppressed() -> "none (relay re-anchor in progress)"
+            sameAsBefore -> "none (floor: unchanged after reassert)"
+            reasserts >= REASSERT_DELAYS_MS.size -> "gave_up"
+            else -> "reassert"
+        }
+        if (driftLogs < MAX_DRIFT_LOGS) {
+            driftLogs++
+            log(
+                String.format(
+                    Locale.ROOT,
+                    "BENCHMARK le_priority_drift: link=%s | priority=%s | requestedMaxMs=%.2f | reportedMs=%.2f | " +
+                        "action=%s | attempt=%d",
+                    link, target.label, params.maxIntervalMs, intervalUnits * 1.25, action, reasserts + 1,
+                ),
+            )
+        }
+        if (action != "reassert") return
+        val delayMs = REASSERT_DELAYS_MS[reasserts]
+        reasserts++
+        val expected = generation
+        schedule(delayMs) { reassertIfCurrent(target, expected) }
+    }
+
     private fun retryIfCurrent(target: BleConnectionPriority, expected: Int) {
         val current = synchronized(this) { generation == expected && priority == target }
         if (!current || !active()) return
-        val queued = sendRequest(target)
+        val queued = dispatch(target)
         log("BENCHMARK le_priority_retry: link=$link | priority=${target.label} | action=requested | queued=$queued")
+    }
+
+    private fun reassertIfCurrent(target: BleConnectionPriority, expected: Int) {
+        val current = synchronized(this) { generation == expected && priority == target }
+        if (!current || !active() || reassertSuppressed()) return
+        val queued = dispatch(target)
+        log("BENCHMARK le_priority_drift: link=$link | priority=${target.label} | action=requested | queued=$queued")
     }
 
     companion object {
         /** Long enough for a colliding PHY update or the peer's GATT discovery to finish. */
         val RETRY_DELAYS_MS = longArrayOf(500L, 1_500L, 4_000L)
+
+        /** After discovery ends the stack applies the queued request; one more look 1 s and 3 s later. */
+        val REASSERT_DELAYS_MS = longArrayOf(1_000L, 3_000L)
+
+        const val MAX_DRIFT_LOGS = 3
     }
 }

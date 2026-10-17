@@ -97,6 +97,35 @@ internal fun streamRouteRank(
     announcement.nodeIdPrefix.joinToString("") { "%02x".format(it) },
 )
 
+/** One broadcast in the Watch list: every advertiser of it, best route first. */
+internal data class StreamRouteGroup<T>(val routes: List<T>) {
+    val best: T get() = routes.first()
+}
+
+/**
+ * Viewers that relay a broadcast advertise it again under the same logical token, so a phone near
+ * the source and three relays would otherwise list one broadcast four times. Groups by
+ * [LogicalStreamTarget] and orders each group like reconnection does: joinable routes first, then
+ * routes whose establishment has not been failing, then fewest relays, then node prefix.
+ * Groups keep the order of their first route in [routes].
+ */
+internal fun <T> groupStreamRoutes(
+    routes: List<T>,
+    announcement: (T) -> DiscoveryAnnouncement,
+    joinable: (T) -> Boolean,
+    establishmentRank: (T) -> Int = { 0 },
+): List<StreamRouteGroup<T>> =
+    routes.groupBy { LogicalStreamTarget.from(announcement(it)) }.values.map { group ->
+        StreamRouteGroup(
+            group.sortedWith(
+                compareBy<T> { if (joinable(it)) 0 else 1 }
+                    .thenBy(establishmentRank)
+                    .thenBy { streamRouteRank(announcement(it), null).first }
+                    .thenBy { streamRouteRank(announcement(it), null).third },
+            ),
+        )
+    }
+
 object StreamTokenGenerator {
     private val random = SecureRandom()
 

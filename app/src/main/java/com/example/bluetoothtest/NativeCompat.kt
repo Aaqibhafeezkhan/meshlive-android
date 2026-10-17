@@ -151,7 +151,10 @@ internal object NativeCompatEntries {
             area = PolicyArea.NATIVE,
             validation = PolicyValidation.UPSTREAM_DOCUMENTED,
             fallback = "AOM_SIMD_CAPS / AOM_SIMD_CAPS_MASK environment variables force a feature set (debugging only)",
-            legacySwitches = listOf("none at app level; AOM_SIMD_CAPS_MASK=0 in the process environment for debugging"),
+            legacySwitches = listOf(
+                "none at app level; AOM_SIMD_CAPS_MASK=0 in the process environment for debugging",
+                "Experimental native-simd-safe-mode (test_native_simd_safe_mode=true) sets AOM_SIMD_CAPS_MASK=0x3 after a native crash at encoder start",
+            ),
         ),
         DevicePolicyEntry(
             id = "native-armeabi-v7a-optional-build",

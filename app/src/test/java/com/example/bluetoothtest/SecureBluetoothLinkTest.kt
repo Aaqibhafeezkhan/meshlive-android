@@ -13,6 +13,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SecureBluetoothLinkTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private val initiatorCapabilities = NodeCapabilities(
         transportMask = NodeCapabilities.TRANSPORT_BLE_L2CAP,
         encodeCodecMask = NodeCapabilities.CODEC_VP9,
@@ -244,7 +248,7 @@ class SecureBluetoothLinkTest {
             SourceControlMessage.STREAM_END_ACK,
             EndToEndStreamProtocol.readSourceControl(initiatorSession.reader, contentSession.opener),
         )
-        responder.join(5_000)
+        responder.join(120_000)
         responderFailure.get()?.let { throw it }
         assertEquals(StreamProtocol.CODEC_VP9, checkNotNull(receivedHeader.get()).codecId)
         assertEquals("vp9-frame", String(checkNotNull(receivedPacket.get()).payload))

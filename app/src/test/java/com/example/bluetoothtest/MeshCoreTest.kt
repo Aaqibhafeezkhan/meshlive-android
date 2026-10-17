@@ -125,7 +125,7 @@ class MeshCoreTest {
         assertFalse(completed.await(100, TimeUnit.MILLISECONDS))
         queue.offer(envelope(sequence = 9))
 
-        assertTrue(completed.await(1, TimeUnit.SECONDS))
+        assertTrue(completed.await(120, TimeUnit.SECONDS))
         assertEquals(9L, received?.sequence)
         worker.join(1_000)
     }

@@ -23,6 +23,8 @@ import android.util.Log
  * and with the requested and effective transports logged, when
  *  - a CoC listen (call availability) fails,
  *  - an outgoing CoC connect fails,
+ *  - a CoC writer made no acknowledged progress from the first second ([CocCreditStall]; the caller
+ *    that sees it reports [CocFallbackReason.CREDIT_STALL] through onCocFailure),
  *  - the CoC registration count of this Bluetooth-adapter session reached the threshold, or
  *  - the peer being called advertises GATT (a phone that already fell back).
  * A GATT or Classic request is never changed.
@@ -33,6 +35,9 @@ enum class CocFallbackReason(val label: String) {
     AVAILABILITY_FAILED("availability_failed"),
     CONNECT_FAILED("connect_failed"),
     PEER_GATT("peer_advertises_gatt"),
+
+    /** A CoC writer got no acknowledged progress from the first second ([CocCreditStall]): possible receiver credit stall. */
+    CREDIT_STALL("credit_stall"),
 }
 
 /**
@@ -137,6 +142,7 @@ data class CocTransportChoice(
                 "Using BLE GATT: this phone's Bluetooth has used $registrations of $threshold L2CAP " +
                     "connections. Turning Bluetooth off and on restores L2CAP"
             reason == CocFallbackReason.PEER_GATT -> "Using BLE GATT: the other phone uses GATT"
+            reason == CocFallbackReason.CREDIT_STALL -> "Using BLE GATT: the L2CAP link carried no data"
             else -> "Using BLE GATT: L2CAP unavailable. Turning Bluetooth off and on may restore it"
         }
 
@@ -190,7 +196,10 @@ class CocAutoGattSession(private val ledger: CocRegistrationLedger) {
         settings: CocAutoGattSettings,
         reason: CocFallbackReason,
     ): CocTransportChoice? {
-        require(reason == CocFallbackReason.AVAILABILITY_FAILED || reason == CocFallbackReason.CONNECT_FAILED)
+        require(
+            reason == CocFallbackReason.AVAILABILITY_FAILED || reason == CocFallbackReason.CONNECT_FAILED ||
+                reason == CocFallbackReason.CREDIT_STALL,
+        )
         return force(requested, settings, reason)
     }
 
@@ -216,6 +225,17 @@ class CocAutoGattSession(private val ledger: CocRegistrationLedger) {
         if (choose(requested, settings).effective != BluetoothTransportOption.BLE_L2CAP) return null
         forced = reason
         forcedGeneration = ledger.generation
+        return choose(requested, settings)
+    }
+
+    /**
+     * The GATT choice this adapter session already forced (a listen, connect or credit-stall failure), or null.
+     * Read-only: a stream receiver uses it to join an L2CAP offer over GATT straight away (Design SG, stage 1).
+     */
+    @Synchronized
+    fun forcedFor(requested: BluetoothTransportOption, settings: CocAutoGattSettings): CocTransportChoice? {
+        if (!settings.enabled || requested != BluetoothTransportOption.BLE_L2CAP) return null
+        if (forced == null || forcedGeneration != ledger.generation) return null
         return choose(requested, settings)
     }
 

@@ -64,6 +64,8 @@ internal interface SecurityUi {
         fingerprintHex: String?,
         displayName: String,
         viaQr: Boolean,
+        /** A BVMID2 scan the user confirmed ("Is this ...'s screen you scanned?"): always the scanned (shield) method. */
+        bvmid2Scan: Boolean = false,
     ): MarkVerifiedOutcome
 
     /**
@@ -79,11 +81,23 @@ internal interface SecurityUi {
      */
     fun contactNames(context: Context): Map<String, String>
 
+    /** Every verified contact, for the Contacts screen. Empty when the store cannot be read. Off the main thread. */
+    fun contacts(context: Context): List<ContactEntry>
+
+    /** Gives the verified contact with [fingerprintHex] your own label (a canonical person name, never blank). */
+    fun renameContact(context: Context, fingerprintHex: String, name: String): RenameOutcome
+
+    /** Forgets one verified contact; the person must be verified again in person. False when nothing changed. */
+    fun forgetContact(context: Context, fingerprintHex: String): Boolean
+
     /** Current verified-contact store problem, or null when it reads normally. Poll on resume. */
     fun storeProblem(context: Context): StoreProblem?
 
     /** Forgets every verified contact so a corrupt store can be used again. */
     fun resetVerifiedContacts(context: Context): Boolean
+
+    /** Milliseconds until the store retries a temporary failure by itself, or null when no retry is pending. */
+    fun storeRetryDueInMs(context: Context): Long?
 
     /**
      * [onProblem] is called (possibly on another thread, possibly under a store lock) when the store
@@ -151,13 +165,21 @@ internal object CoreSecurityUi : SecurityUi {
         fingerprintHex: String?,
         displayName: String,
         viaQr: Boolean,
+        bvmid2Scan: Boolean,
     ): MarkVerifiedOutcome {
         val id = nodeId(peerNodeIdHex) ?: return MarkVerifiedOutcome.NO_AUTHENTICATED_SESSION
         val core = core(context)
         val confirmed = fingerprintHex?.let { runCatching { IdentityFingerprint.fromHex(it) }.getOrNull() }
             ?: core.authenticatedPeerFingerprint(id)
             ?: return MarkVerifiedOutcome.NO_AUTHENTICATED_SESSION
-        val method = if (viaQr) VerificationMethod.QR_SCAN else VerificationMethod.SAFETY_CODE_CONFIRMED
+        // Naming v2: with `bvmid2` on, a static BVMID1 scan records only "Checked by code" unless `bvmid1_compat` is on.
+        val method = if (bvmid2Scan) {
+            VerificationMethod.QR_SCAN
+        } else if (viaQr) {
+            Bvmid1Policy.methodForScan(NamingFeatures.bvmid2On(), NamingFeatures.bvmid1CompatOn())
+        } else {
+            VerificationMethod.SAFETY_CODE_CONFIRMED
+        }
         val name = runCatching { IdentityQrCodec.normalizeName(displayName) }.getOrDefault("")
         return when (core.markVerified(id, confirmed, name, method)) {
             MarkVerifiedResult.VERIFIED -> MarkVerifiedOutcome.VERIFIED
@@ -190,6 +212,34 @@ internal object CoreSecurityUi : SecurityUi {
                 .associate { it.fingerprint.nodePrefixHex to it.displayName }
         }.getOrDefault(emptyMap())
 
+    override fun contacts(context: Context): List<ContactEntry> =
+        runCatching {
+            core(context).verifiedContacts().map {
+                ContactEntry(it.fingerprint.hex, it.displayName, it.verifiedAtMs, it.method == VerificationMethod.QR_SCAN)
+            }
+        }.getOrDefault(emptyList())
+
+    override fun renameContact(context: Context, fingerprintHex: String, name: String): RenameOutcome {
+        val fingerprint = runCatching { IdentityFingerprint.fromHex(fingerprintHex) }.getOrNull()
+            ?: return RenameOutcome.NOT_FOUND
+        return runCatching {
+            // Naming v2: contact labels are unique (case- and look-alike-insensitive), so two contacts never read alike.
+            val others = core(context).verifiedContacts().filter { it.fingerprint != fingerprint }.map { it.displayName }
+            if (ContactLabelUniqueness.conflict(name, others) != null) return@runCatching RenameOutcome.NAME_TAKEN
+            when (core(context).rename(fingerprint, name)) {
+                RenameResult.RENAMED -> RenameOutcome.RENAMED
+                RenameResult.NOT_FOUND -> RenameOutcome.NOT_FOUND
+                RenameResult.INVALID_NAME -> RenameOutcome.INVALID_NAME
+                RenameResult.STORE_UNREADABLE -> RenameOutcome.STORE_UNREADABLE
+            }
+        }.getOrDefault(RenameOutcome.UNAVAILABLE)
+    }
+
+    override fun forgetContact(context: Context, fingerprintHex: String): Boolean {
+        val fingerprint = runCatching { IdentityFingerprint.fromHex(fingerprintHex) }.getOrNull() ?: return false
+        return runCatching { core(context).forget(fingerprint) }.getOrDefault(false)
+    }
+
     override fun storeProblem(context: Context): StoreProblem? =
         when (val cause = core(context).storeUnreadableCause()) {
             null -> null
@@ -197,6 +247,8 @@ internal object CoreSecurityUi : SecurityUi {
         }
 
     override fun resetVerifiedContacts(context: Context): Boolean = core(context).resetVerifiedContacts()
+
+    override fun storeRetryDueInMs(context: Context): Long? = core(context).storeRetryDueInMs()
 
     override fun watchStoreProblems(context: Context, onProblem: () -> Unit): () -> Unit {
         val core = core(context)

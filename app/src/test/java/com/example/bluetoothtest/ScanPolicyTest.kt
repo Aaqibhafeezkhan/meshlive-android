@@ -1,0 +1,195 @@
+package com.example.bluetoothtest
+
+import java.io.File
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ScanPolicyTest {
+    @After
+    fun reset() {
+        ScanSwitches.reset()
+        DebugTunables.devicePolicyOff = emptySet()
+    }
+
+    private fun traits(sdk: Int, manufacturer: String = "") = DeviceTraits("qcom", "board", sdk, manufacturer = manufacturer)
+
+    @Test
+    fun everyEntryCarriesTheRequiredMetadata() {
+        val ids = ScanPolicy.entries.map { it.id }
+        assertEquals(ids.size, ids.toSet().size)
+        for (entry in ScanPolicy.entries) {
+            assertTrue(entry.id, entry.id.matches(Regex("[a-z0-9]+(-[a-z0-9]+)*")))
+            assertTrue(entry.id, entry.reviewed.matches(Regex("\\d{4}-\\d{2}-\\d{2}")))
+            assertTrue(entry.id, entry.evidence.isNotEmpty())
+            assertTrue(entry.id, entry.behaviour.isNotBlank() && entry.title.isNotBlank() && entry.origin.isNotBlank())
+            assertTrue(entry.id, entry.confidenceNote.isNotBlank() && entry.fallback.isNotBlank())
+            assertEquals("test_device_policy_off=${entry.id}", entry.offSwitch)
+            assertTrue("${entry.id} needs a source", entry.sources.isNotEmpty())
+            entry.sources.forEach { source ->
+                assertTrue("${entry.id}: ${source.reference}", source.reference.startsWith("https://") && source.note.isNotBlank())
+            }
+            assertTrue(entry.id, entry.effects.isNotEmpty())
+            if (entry.sourceStatus == PolicySourceStatus.EVIDENCE_ONLY) {
+                assertTrue(entry.id, entry.confidence != PolicyConfidence.HIGH)
+            }
+            if (entry.validation == PolicyValidation.LOCALLY_REPRODUCED) {
+                assertTrue(entry.id, entry.evidence.any { it.startsWith("benchmarks/") || it.startsWith("docs/") })
+            }
+        }
+    }
+
+    @Test
+    fun eachIdIsListedExactlyOnceInTheRegistry() {
+        val registry = DevicePolicyRegistry.entries.map { it.id }
+        for (entry in ScanPolicy.entries) assertEquals(entry.id, 1, registry.count { it == entry.id })
+    }
+
+    @Test
+    fun experimentalArmsAreProposedSoTheRegistryNeverReportsThemActive() {
+        val proposed = ScanPolicy.entries.filter { it.proposed }.map { it.id }.toSet()
+        for (id in listOf("le-scan-timeout-renewal", "scan-hardware-filter-fallback", "scan-pause-during-connect",
+            "hyperos-deepdoze-scan-block", "oem-screenoff-scan-pause-vivo-poco-oppo")) {
+            assertTrue(id, id in proposed)
+        }
+        // The default-on behaviours are implemented entries.
+        val active = ScanPolicy.entries.filterNot { it.proposed }.map { it.id }.toSet()
+        assertEquals(setOf("android10-11-location-switch-scan-gate", "scan-silence-watchdog", "android10-scanner-leak-on-process-death"), active)
+        // Experimental entries never claim local validation.
+        ScanPolicy.entries.filter { it.proposed && it.id.startsWith("le-") }.forEach {
+            assertEquals(PolicyValidation.EXPERIMENTAL, it.validation)
+        }
+    }
+
+    @Test
+    fun matchersFollowTheBacklog() {
+        val byId = ScanPolicy.entries.associateBy { it.id }
+        val location = byId.getValue("android10-11-location-switch-scan-gate").matcher
+        assertTrue(location.matches(traits(29)) && location.matches(traits(30)))
+        assertFalse(location.matches(traits(31)) || location.matches(traits(34)))
+        val leak = byId.getValue("android10-scanner-leak-on-process-death").matcher
+        assertTrue(leak.matches(traits(29)))
+        assertTrue("lane11 ASUS dumpsys: Android 11 leaked scanner registrations of force-killed processes", leak.matches(traits(30)))
+        assertFalse(leak.matches(traits(31)))
+        assertTrue(byId.getValue("scan-silence-watchdog").matcher.universal)
+        val hyperos = byId.getValue("hyperos-deepdoze-scan-block").matcher
+        assertTrue(hyperos.matches(traits(34, "Xiaomi")))
+        assertFalse(hyperos.matches(traits(34, "samsung")))
+        val screenOff = byId.getValue("oem-screenoff-scan-pause-vivo-poco-oppo").matcher
+        assertTrue(screenOff.matches(traits(35, "vivo")))
+        assertFalse(screenOff.matches(traits(35, "samsung")))
+    }
+
+    @Test
+    fun theOffSwitchWorksWhetherOrNotTheRootHasAddedTheEntries() {
+        assertTrue(ScanPolicy.enabled("scan-silence-watchdog"))
+        DebugTunables.devicePolicyOff = setOf("scan-silence-watchdog")
+        assertFalse(ScanPolicy.enabled("scan-silence-watchdog"))
+        assertTrue(ScanPolicy.enabled("bluetooth-process-restart-recovery"))
+        DebugTunables.devicePolicyOff = setOf("all")
+        assertFalse(ScanPolicy.enabled("bluetooth-process-restart-recovery"))
+        assertTrue(ScanPolicy.isOff("x", setOf("x")))
+        assertFalse(ScanPolicy.isOff("x", setOf("y")))
+    }
+
+    @Test
+    fun everyExperimentalSwitchIsOffByDefaultAndReadsItsExtra() {
+        ScanSwitches.reset()
+        assertFalse(ScanSwitches.renewalLegacy)
+        assertFalse(ScanSwitches.renewalAll)
+        assertFalse(ScanSwitches.staleRestart)
+        assertFalse(ScanSwitches.softwareFilterFallback)
+        assertFalse(ScanSwitches.pauseDuringConnect)
+        assertFalse(ScanSwitches.probeUngated) // the quota fix is the shipped behaviour; ungated is the control arm
+        val asked = ArrayList<String>()
+        ScanSwitches.apply { key, _ -> asked += key; true }
+        assertEquals(
+            listOf(
+                "test_scan_renewal_legacy", "test_scan_renewal_all", "test_scan_stale_restart",
+                "test_scan_sw_filter_fallback", "test_scan_pause_during_connect", "test_scan_probe_ungated",
+            ),
+            asked,
+        )
+        assertTrue(ScanSwitches.renewalAll && ScanSwitches.staleRestart && ScanSwitches.pauseDuringConnect)
+        ScanSwitches.applyLaunchExtras(null) // a launch without extras restores every default
+        assertFalse(ScanSwitches.renewalAll || ScanSwitches.staleRestart || ScanSwitches.softwareFilterFallback)
+    }
+
+    // ---- S-05: scan sites keep a non-empty filter and never LOW_POWER on discovery ----
+
+    private fun source(name: String): String {
+        val candidates = listOf(
+            File("src/main/java/com/example/bluetoothtest/$name"),
+            File("app/src/main/java/com/example/bluetoothtest/$name"),
+        )
+        return candidates.first { it.exists() }.readText().replace("\r\n", "\n")
+    }
+
+    @Test
+    fun everyScanSiteHandsTheStackANonEmptyServiceFilter() {
+        // Discovery: the only empty list is the Experimental software-filter stage (S-06), behind softwareFiltering().
+        val control = source("BleL2capControl.kt")
+        assertTrue(control.contains("ScanFilter.Builder().setServiceUuid(ParcelUuid(BleL2capControlProtocol.SERVICE_UUID)).build()"))
+        val filters = control.substringAfter("private fun scanFilters()").substringBefore("private fun scanSettings")
+        assertEquals("only the S-06 stage may return an empty filter list", 1, Regex("emptyList\\(\\)").findAll(filters).count())
+        assertTrue(filters.indexOf("softwareFiltering()") in 0 until filters.indexOf("emptyList()"))
+        // Every discovery start passes scanFilters(); no call passes null.
+        val discoveryStarts = Regex("\\.startScan\\(([^,]+),").findAll(control).map { it.groupValues[1].trim() }.toList()
+        assertTrue(discoveryStarts.isNotEmpty())
+        assertTrue(discoveryStarts.toString(), discoveryStarts.all { it == "scanFilters()" })
+        // The probes filter on the service UUID too.
+        val gap = source("GapNameProbe.kt")
+        assertTrue(gap.contains("scanner.startScan(\n            listOf(ScanFilter.Builder().setServiceUuid("))
+        val inbound = source("InboundProbe.kt")
+        assertTrue(inbound.contains("scanner.startScan(listOf(filter), settings, scanCallback)"))
+        assertTrue(inbound.contains("ScanFilter.Builder().setServiceUuid(ParcelUuid(InboundProbe.SERVICE_UUID)).build()"))
+    }
+
+    @Test
+    fun noDiscoveryScanUsesLowPowerExceptTheIdleRelayHelper() {
+        assertFalse(source("GapNameProbe.kt").contains("SCAN_MODE_LOW_POWER"))
+        assertFalse(source("InboundProbe.kt").contains("SCAN_MODE_LOW_POWER"))
+        val control = source("BleL2capControl.kt")
+        assertEquals(1, Regex("SCAN_MODE_LOW_POWER").findAll(control).count())
+        // That one use is the `lowPower` branch, taken only by the idle relay helper (RelayedCallsController).
+        assertTrue(control.contains("} else if (lowPower) {\n            ScanSettings.SCAN_MODE_LOW_POWER"))
+        val sites = listOf(
+            "AndroidPrivateVideoCall.kt", "MainActivity.kt", "ReceiverStreamForwarder.kt", "RelayedCallsController.kt",
+        ).filter { name ->
+            Regex("lowPower\\s*=\\s*[^\\n]*").findAll(source(name)).any { !it.value.contains("false") }
+        }
+        assertEquals(listOf("RelayedCallsController.kt"), sites)
+    }
+
+    @Test
+    fun theDebugProbesTakeAGateSlotUnlessTheControlArmIsOn() {
+        // The stack drops a 6th start in 30 s silently, so a probe scan that skipped the gate could silence discovery.
+        val gap = source("GapNameProbe.kt")
+        assertTrue(gap.contains("ScanSwitches.probeUngated"))
+        assertTrue(gap.contains("ScanStartGate.shared.reserve("))
+        val inbound = source("InboundProbe.kt")
+        assertTrue(inbound.contains("ScanSwitches.probeUngated"))
+        assertTrue(inbound.contains("ScanPolicy.reserveBlocking(ScanStartGate.shared"))
+        // Every other scanner starts through BleL2capDiscovery, which reserves before each start.
+        val control = source("BleL2capControl.kt")
+        assertTrue(control.contains("ScanStartGate.shared.reserve(scanBudget)"))
+        assertTrue(control.contains("ScanStartGate.shared.tryReserve(scanBudget)"))
+    }
+
+    @Test
+    fun theQuotaIsDocumentedAsSilentNotAsAnOnScanFailedCode() {
+        val control = source("BleL2capControl.kt")
+        assertFalse(control.contains("AOSP refuses a 6th scan start"))
+        assertTrue(control.contains("never delivers it through onScanFailed"))
+    }
+
+    @Test
+    fun theRelayHelperRestartIsNoLongerTwentyMinutes() {
+        val relay = source("RelayedCallsController.kt")
+        assertFalse(relay.contains("SCAN_RESTART_MS"))
+        assertFalse(relay.contains("AOSP downgrades a filtered scan after 30 minutes"))
+        assertTrue(relay.contains("ScanRenewalPolicy.intervalMs"))
+    }
+}

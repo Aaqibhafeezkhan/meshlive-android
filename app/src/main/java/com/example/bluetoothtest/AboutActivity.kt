@@ -33,7 +33,13 @@ class AboutActivity : AppCompatActivity() {
         )
         val fingerprints = signingCertificateSha256()
         val shown = fingerprints.joinToString("\n\n").ifEmpty { getString(R.string.about_signing_unknown) }
-        findViewById<TextView>(R.id.aboutSigningText).text = shown
+        // Short form first (2026-10-17 redesign); a tap shows the full fingerprint, Copy always copies it in full.
+        val short = fingerprints.joinToString("\n") { CertificateText.short(it) }.ifEmpty { shown }
+        findViewById<TextView>(R.id.aboutSigningText).apply {
+            text = short
+            var full = false
+            setOnClickListener { full = !full; text = if (full) shown else short }
+        }
         findViewById<View>(R.id.aboutCopyButton).apply {
             isEnabled = fingerprints.isNotEmpty()
             setOnClickListener {

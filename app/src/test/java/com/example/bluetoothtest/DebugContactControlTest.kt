@@ -172,23 +172,33 @@ class DebugContactControlTest {
     @Test
     fun dayOffsetIsDebugOnlyBoundedForwardAndShiftsOnlyTheDiscoveryClock() {
         val day = 86_400_000L
-        fun shift() = DiscoveryWallClock.nowMs() - System.currentTimeMillis()
+        // The shifted clock is read between two reads of the system clock, so the check is exact whatever a loaded host does
+        // between the reads (comparing it with a later system read only holds if no millisecond passes).
+        fun assertShiftedBy(offsetMs: Long) {
+            val before = System.currentTimeMillis()
+            val shifted = DiscoveryWallClock.nowMs()
+            val after = System.currentTimeMillis()
+            assertTrue("shifted=$shifted before=$before after=$after offset=$offsetMs", shifted in (before + offsetMs)..(after + offsetMs))
+        }
 
         assertFalse(DiscoveryWallClock.setDayOffset(3, buildDebug = false, debuggable = true))
         assertFalse(DiscoveryWallClock.setDayOffset(3, buildDebug = true, debuggable = false))
         assertFalse(DiscoveryWallClock.setDayOffset(-1, buildDebug = true, debuggable = true))
         assertFalse(DiscoveryWallClock.setDayOffset(DiscoveryWallClock.MAX_DAYS + 1, buildDebug = true, debuggable = true))
-        assertTrue(shift() in 0..1_000L)
+        assertShiftedBy(0L)
 
         assertTrue(DiscoveryWallClock.setDayOffset(2, buildDebug = true, debuggable = true))
         assertEquals(2, DiscoveryWallClock.dayOffset)
-        assertTrue(shift() - 2 * day in 0..1_000L)
+        assertShiftedBy(2 * day)
         // The selection check, the recognition clock and the presence vault read the shifted clock.
-        assertTrue(DiscoverySelectionCheck.systemUnixSeconds() * 1000L - System.currentTimeMillis() - 2 * day in -1_000L..2_000L)
+        val secondsBefore = Math.floorDiv(System.currentTimeMillis() + 2 * day, 1000L)
+        val seconds = DiscoverySelectionCheck.systemUnixSeconds()
+        val secondsAfter = Math.floorDiv(System.currentTimeMillis() + 2 * day, 1000L)
+        assertTrue("seconds=$seconds", seconds in secondsBefore..secondsAfter)
         // An out-of-range request after a valid one does not change it.
         assertFalse(DiscoveryWallClock.setDayOffset(99, buildDebug = true, debuggable = true))
         assertEquals(2, DiscoveryWallClock.dayOffset)
         assertTrue(DiscoveryWallClock.setDayOffset(0, buildDebug = true, debuggable = true))
-        assertTrue(shift() in 0..1_000L)
+        assertShiftedBy(0L)
     }
 }

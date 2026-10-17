@@ -321,6 +321,11 @@ TUNABLES = {
     "link_pacing": ("test_link_pacing", bool),
     # Default-on BLE scan-failure recovery (2026-10-10); false restores stop-and-report on any failure.
     "scan_recovery": ("test_scan_recovery", bool),
+    # Default-on Bluetooth ON recovery (2026-10-17): scanners started during a toggle, the live stream offer and the idle call
+    # listener are rebuilt when Bluetooth is back; false is the control arm (only the paused scanners resume).
+    "bluetooth_on_recovery": ("test_bluetooth_on_recovery", bool),
+    # Q29 (2026-10-14): incoming-handshake deadline on every call endpoint; false restores dual-endpoint-only.
+    "call_handshake_deadline_all": ("test_call_handshake_deadline_all", bool),
     # Lock-screen notification privacy (2026-10-10): true shows the caller's name (user opt-in).
     "lock_screen_peer_names": ("test_lock_screen_peer_names", bool),
     # Always reachable for calls (2026-10-10): app default on for normal launches, off for every
@@ -354,9 +359,17 @@ TUNABLES = {
     # CoC SDUs sized to one 251-octet PDU.
     "adaptive_phy": ("test_adaptive_phy", bool),
     "adaptive_phy_memory": ("test_adaptive_phy_memory", bool),
+    # Experimental (default off): where the adaptive PHY would move a GATT link 2M -> 1M, move only the peripheral -> central
+    # direction to 1M first (setPreferredPhy tx2M/rx1M); the _dir tunable picks the mirror tx1m-rx2m (docs/SWITCHES.md).
+    "adaptive_phy_split": ("test_adaptive_phy_split", bool),
+    "adaptive_phy_split_dir": ("test_adaptive_phy_split_dir", str),
     # Default-on (2026-10-10) call 2M setup-stall guard: a first 2M call link without hop authentication
     # 3 s after it opened is closed and the 1M retry rescans a direct callee; false = control arm.
     "phy_setup_stall": ("test_phy_setup_stall", bool),
+    # Default-on (2026-10-13) message-exchange dial 2M protections (stall guard, 1M retry, bad-2M memory); false = control arm.
+    "message_adaptive_phy": ("test_message_adaptive_phy", bool),
+    # Default-on (2026-10-13) progress-aware total limit of a plain Messaging v2 exchange; false = the fixed 120 s.
+    "mv2_progress_total": ("test_mv2_progress_total", bool),
     "relay_phy_guard": ("test_relay_phy_guard", bool),
     "relay_one_pdu_move": ("test_relay_one_pdu_move", bool),
     "relay_reanchor": ("test_relay_reanchor", bool),
@@ -381,10 +394,25 @@ TUNABLES = {
     # any-audio-queued test, which left a backlog unpaced); the lead cap is an experiment (app default off).
     "relay_pace_head": ("test_relay_pace_head", bool),
     "relay_pace_lead_cap": ("test_relay_pace_lead_cap", bool),
+    # Experimental time-based sizing (Q31, app default off): relay child queue shed target in ms of media from the
+    # child's drain rate and jitter; viewer playout grown to the measured arrival jitter; shared latency budget
+    # (300-5000 ms) and relay queue floor (100-1000 ms).
+    "relay_time_queue": ("test_relay_time_queue", bool),
+    # Experimental (app default off): the relay's own sustained delivery to its child feeds the drain rate when
+    # the child's arrival trains report none (slow GATT hops); logged as drainSource in relay_time_queue.
+    "relay_drain_sustained": ("test_relay_drain_sustained", bool),
+    "playout_time_target": ("test_playout_time_target", bool),
+    "time_queue_budget_ms": ("test_time_queue_budget_ms", int),
+    "time_queue_floor_ms": ("test_time_queue_floor_ms", int),
     # Default-on relay child stall guard (false = control arm: wait for the 5 s supervision timeout); the
     # upstream DCK priority for a relay-capable child is an experiment (app default off, Android 14+ centrals).
     "relay_child_stall_guard": ("test_relay_child_stall_guard", bool),
     "relay_upstream_dck": ("test_relay_upstream_dck", bool),
+    # Default-on viewer decoder size-change handling (false = control arm: one decoder at the header size,
+    # a size change only logged, recovery re-queues the stream-start csd).
+    "decoder_size_rebuild": ("test_decoder_size_rebuild", bool),
+    # Experimental relay establishment budget (app default off): retry fast 0x3E/133 child connects in place for 12 s.
+    "relay_establish_budget": ("test_relay_establish_budget", bool),
     # Experimental calls (app default off): authenticated 2 KB video fragments with audio between them,
     # and speech-led call playout (late video may grow the shared call delay by at most 150 ms).
     "call_video_fragments": ("test_call_video_fragments", bool),
@@ -434,6 +462,22 @@ TUNABLES = {
     "delivery_reports": ("test_delivery_reports", bool),
     # Experimental stream delivery reports (app default off; every phone in the stream on this build).
     "stream_delivery_reports": ("test_stream_delivery_reports", bool),
+    "on_time_reports": ("test_on_time_reports", bool),
+    # On-time seed raise (app default on since 2026-10-16); false is the control arm.
+    "on_time_seed_raise": ("test_on_time_seed_raise", bool),
+    # Experimental relay child-detach guard against the node's own pre-child p95 (app default off).
+    "receiver_node_baseline_p95": ("test_receiver_node_baseline_p95", bool),
+    # Experimental join probe seed (app default off, 2026-10-17): seed a fresh link's pacer from a short measured
+    # burst at join instead of the cautious prior. Set on every phone in the stream (the child times the burst).
+    "join_probe_seed": ("test_join_probe_seed", bool),
+    # Experimental seed-raise drain guard (app default off, 2026-10-17): no raise while the queue is not draining
+    # and writes are blocking (link-limited).
+    "seed_raise_drain_guard": ("test_seed_raise_drain_guard", bool),
+    # Experimental relay establishment keeps 2M (app default off): a child setup that failed before any connection
+    # existed no longer pins that child to 1M for the session.
+    "relay_establish_keep_2m": ("test_relay_establish_keep_2m", bool),
+    # Experimental relay child thinning (app default off): source temporal layers + per-child full/base/audio.
+    "relay_child_thinning": ("test_relay_child_thinning", bool),
     # A/B arms: clear the 24 h learned start rates at launch (the launch log records them either way).
     "reset_learned_rates": ("test_reset_learned_rates", bool),
     # DEBUG: clear learned relay/fan-out ceilings, sustained rates and bad-2M marks before the launch.
@@ -487,6 +531,10 @@ TUNABLES = {
     # start so three boundaries take minutes; give EVERY phone of the run the same value (unequal lengths fail the
     # two-epoch check by design) and pass the same value to rotid_tracker.py --epoch-s. Presence-lease days stay real.
     "rotid_epoch_s": ("test_rotid_epoch_s", int),
+    # Experimental measured Auto quality ladder (app default off, DEBUG only; docs/SWITCHES.md): set it on
+    # every participant of the run; the class override is strong|standard|weak (control matrix only).
+    "auto_ladder": ("test_auto_ladder", bool),
+    "auto_ladder_class": ("test_auto_ladder_class", str),
 }
 
 
@@ -597,6 +645,29 @@ class Runner:
                 "thermal_at_start": self.adb(phone, "shell", "dumpsys", "thermalservice"),
                 "bluetooth_controller": "UNMEASURED - SoC is not proof of controller identity"}
 
+    def prepare_app_files_dir(self, phone):
+        """Create the app's external files folder as the app before pushing inputs into it.
+
+        On a fresh install the folder does not exist and the first `adb push` creates it owned by
+        `shell`; on Android 16 (A55, 2026-10-16) the app then read a full pushed raw fixture as 0 bytes
+        and refused setup. `run-as` (debug builds) makes the folder with the app's uid; an existing
+        shell-owned folder is reported for its owner to remove rather than deleted here. Where run-as cannot
+        write /sdcard (HyperOS), one app launch creates the folder (DEBUG builds call getExternalFilesDir at startup)."""
+        directory = f"/sdcard/Android/data/{PACKAGE}/files"
+        try:
+            owner = self.adb(phone, "shell", f"run-as {PACKAGE} mkdir -p {directory}; stat -c %U {directory}")
+        except RuntimeError:
+            # HyperOS (Xiaomi, Android 15) denies run-as on /sdcard; a DEBUG build creates its own folder at startup.
+            self.adb(phone, "shell", "am", "start", "-W", "-n", COMPONENT)
+            self.adb(phone, "shell", "am", "force-stop", PACKAGE)
+            owner = self.adb(phone, "shell", f"stat -c %U {directory}")
+            self.events.append({"device": phone, "action": "app_files_dir_created_by_launch"})
+        owner = owner.splitlines()[-1].strip() if owner else ""
+        if owner == "shell":
+            raise RuntimeError(f"{phone}: {directory} is owned by shell (created by adb before the app), so the "
+                               "app cannot read pushed inputs; remove the folder and rerun")
+        self.events.append({"device": phone, "action": "app_files_dir_ready", "owner": owner or None})
+
     def stage_raw_fixture(self, phone):
         digest = self.raw_fixture["sha256"]
         remote = f"/sdcard/Android/data/{PACKAGE}/files/benchmark-raw-{digest}.yuv"
@@ -611,10 +682,13 @@ class Runner:
                             "time": self.phone_time(phone), "sha256": digest, "remote": remote})
         return remote
 
+    def verify_replay_unchanged(self):
+        if replay_fixture_metadata(self.case)["sha256"] != self.replay_fixture["sha256"]:
+            raise RuntimeError("Replay input changed after the execution was frozen")
+
     def stage_replay_fixture(self, phone):
         entry = self.replay_fixture
-        if replay_fixture_metadata(self.case)["sha256"] != entry["sha256"]:
-            raise RuntimeError("Replay input changed after the execution was frozen")
+        self.verify_replay_unchanged()
         remote = f"/sdcard/Android/data/{PACKAGE}/files/benchmark-replay-{entry['sha256']}.ivf"
         entry["staging"] = {"device": phone, "remote": remote, "status": "PENDING"}
         self.adb(phone, "push", entry["path"], remote, timeout=180)
@@ -753,6 +827,11 @@ class Runner:
 
     def launch(self, phone, source=False):
         self.check_cancelled()
+        if source and self.replay_fixture:
+            self.verify_replay_unchanged()
+        if source and (self.replay_fixture or self.case.get("raw_fixture_file") or self.reference_audio
+                       or self.media_impairment):
+            self.prepare_app_files_dir(phone)
         replay_remote = self.stage_replay_fixture(phone) if source and self.replay_fixture else None
         self.adb(phone, "shell", "am", "force-stop", PACKAGE)
         try:
@@ -795,6 +874,10 @@ class Runner:
                 extras["test_replay_ivf"] = replay_remote
             if self.case.get("raw_fixture_file"):
                 extras["test_raw_yuv"] = self.stage_raw_fixture(phone)
+                # The fixture's declared geometry (validated against the file size above): the app reads
+                # frames at this size only and refuses an encoder that runs at another.
+                extras["test_raw_width"] = profile["width"]
+                extras["test_raw_height"] = profile["height"]
             if self.reference_audio:
                 entry = self.reference_audio
                 remote = f"/sdcard/Android/data/{PACKAGE}/files/benchmark-audio-{entry['sha256']}.wav"

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The status indicator in a tab's title bar: a small dot and one word (Ready, Bluetooth off, ...).
+     MainActivity.updateStatusIndicators fills it; a tap opens the status sheet (or fixes the problem). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:background="?attr/selectableItemBackgroundBorderless"
+    android:clickable="true"
+    android:focusable="true"
+    android:gravity="center"
+    android:minHeight="48dp"
+    android:minWidth="48dp"
+    android:orientation="horizontal"
+    android:paddingStart="8dp"
+    android:paddingEnd="4dp">
+
+    <View
+        android:id="@+id/statusChipDot"
+        android:layout_width="8dp"
+        android:layout_height="8dp"
+        android:background="@drawable/status_dot"
+        android:importantForAccessibility="no" />
+
+    <TextView
+        android:id="@+id/statusChipLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:ellipsize="end"
+        android:maxLines="2"
+        android:maxWidth="180dp"
+        android:text="@string/status_ready"
+        android:textAppearance="@style/TextAppearance.App.Label"
+        android:textColor="@color/text_primary"
+        android:textSize="14sp" />
+</LinearLayout>

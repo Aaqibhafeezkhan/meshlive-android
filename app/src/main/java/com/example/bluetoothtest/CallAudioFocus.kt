@@ -1,11 +1,14 @@
 package com.example.bluetoothtest
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
+import android.telephony.TelephonyManager
 import android.util.Log
 
 /**
@@ -20,6 +23,16 @@ import android.util.Log
  * muted on the existing mute path, so the peer gets the ordinary Microphone muted signal (9), and
  * the regained focus restores the user's own mute choice (signal 10 when unmuted). A permanent loss
  * (the user started other audio) and duckable losses are only logged.
+ *
+ * Refusal handling (2026-10-14, batch U, registry entry [CALL_FOCUS_ENTRY_ID]): a refused request used to be
+ * taken for a cellular call and held the call. A failed request never produces a later callback, so a wrong
+ * hold lasted for the whole call. Since Android 15 (targetSdk 35+) the platform also refuses focus to an app
+ * that is neither the top app nor holding a foreground service
+ * (developer.android.com/about/versions/15/behavior-changes-15#audio-focus), which is not a call. The refusal is
+ * now classified by [CallFocusRefusalPolicy]: only a call audio mode or a non-idle telephony state holds; any
+ * other refusal is logged as `focus=failed_not_foreground`, does not hold, and is retried once when the call's
+ * foreground service holds ([CallAudioFocus.onForegroundHeld]) or after [CallFocusArbiter.RETRY_DELAY_MS].
+ * A delayed request ([AudioManager.AUDIOFOCUS_REQUEST_DELAYED]) is accepted and waits for the gain callback.
  */
 internal enum class FocusAction { HOLD, RESUME, NONE }
 
@@ -75,17 +88,20 @@ internal class CallFocusHold {
     }
 }
 
+
 /** Requests and abandons the call's audio focus; [onAction] runs on the main thread. */
 internal class CallAudioFocus(
-    context: Context,
+    private val context: Context,
     private val onAction: (FocusAction) -> Unit,
 ) {
     private val audioManager = context.getSystemService(AudioManager::class.java)
+    private val handler = Handler(Looper.getMainLooper())
     private val listener = AudioManager.OnAudioFocusChangeListener { change ->
         val action = CallAudioFocusPolicy.actionFor(change)
         log("change", "change=${CallAudioFocusPolicy.label(change)} | action=${action.name}")
         onAction(action)
     }
+    private val classify = AudioSwitches.policyActive(CALL_FOCUS_ENTRY_ID)
     private val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
         .setAudioAttributes(
             AudioAttributes.Builder()
@@ -93,23 +109,54 @@ internal class CallAudioFocus(
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build(),
         )
-        .setAcceptsDelayedFocusGain(false)
+        // Delayed gain: while a call locks focus the request waits and the gain callback releases the hold.
+        // Off with the registry entry (the former FAILED-and-hold behaviour).
+        .setAcceptsDelayedFocusGain(classify)
         .setWillPauseWhenDucked(false)
-        .setOnAudioFocusChangeListener(listener, Handler(Looper.getMainLooper()))
+        .setOnAudioFocusChangeListener(listener, handler)
         .build()
     private var requested = false
 
-    /** Returns true when focus was granted. A refusal (the phone is in a cellular call) holds. */
+    private val api = object : CallFocusApi {
+        override fun requestFocus(): Int? = runCatching { audioManager?.requestAudioFocus(request) }.getOrNull()
+
+        override fun audioMode(): Int? = runCatching { audioManager?.mode }.getOrNull()
+
+        @Suppress("DEPRECATION")
+        override fun telephonyCallState(): Int? = runCatching {
+            if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+                null
+            } else {
+                context.getSystemService(TelephonyManager::class.java)?.callState
+            }
+        }.getOrNull()
+
+        override fun foregroundServiceHeld(): Boolean = ActiveVideoSessionService.heldTypes != 0
+
+        override fun postDelayed(delayMs: Long, block: () -> Unit): () -> Unit {
+            val task = Runnable(block)
+            handler.postDelayed(task, delayMs)
+            return { handler.removeCallbacks(task) }
+        }
+
+        override fun log(event: String, detail: String) = this@CallAudioFocus.log(event, detail)
+    }
+    private val arbiter = CallFocusArbiter(api, classify, onAction)
+
+    /**
+     * Returns true when focus was granted. A refusal holds only when it is a cellular call; any other refusal is
+     * retried once, and [onForegroundHeld] retries it as soon as the call's foreground service holds.
+     */
     fun request(): Boolean {
-        val result = runCatching { audioManager?.requestAudioFocus(request) }.getOrNull()
         requested = true
-        val granted = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        log("request", "result=${result ?: "error"} | granted=$granted")
-        if (result == AudioManager.AUDIOFOCUS_REQUEST_FAILED) onAction(FocusAction.HOLD)
-        return granted
+        return arbiter.request()
     }
 
+    /** Root hook: call when [ActiveVideoSessionService.heldTypes] becomes non-zero while the call is open. */
+    fun onForegroundHeld() = arbiter.onForegroundHeld()
+
     fun abandon() {
+        arbiter.cancel()
         if (!requested) return
         requested = false
         val result = runCatching { audioManager?.abandonAudioFocusRequest(request) }.getOrNull()

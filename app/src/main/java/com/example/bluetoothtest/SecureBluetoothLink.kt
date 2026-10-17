@@ -92,11 +92,28 @@ class SecureRecordReader internal constructor(
     /** Set only by the experimental relayed-call path for the setup exchange it owns (hop type 12). */
     @Volatile var acceptRelaySetup = false
 
+    /**
+     * Largest ciphertext this reader allocates for one record; checked after the 17-byte header and before the
+     * body is read. Unlimited (default) except on an audio-only live stream, where the end-to-end reader sets it
+     * (PROTOCOL "Ingress budgets").
+     */
+    @Volatile var maxCiphertextBytes = Int.MAX_VALUE
+
     /** This link's recently delivered capacity, measured from large incoming records (kbps). */
     fun arrivalCapacityKbps(): Int? = arrival.estimateKbps()
 
     val measuredTrains: Long
         get() = arrival.trains
+
+    /** Trains long enough to time on their own; unlike [measuredTrains] it excludes a join burst sample. */
+    val genuineTrains: Long
+        get() = arrival.genuineTrains
+
+    /** Experimental (DebugTunables.joinProbeSeed): time this link's first back-to-back records as one burst, see [ArrivalTrainMeter.enableJoinBurst]. */
+    fun enableJoinBurstMeasure() = arrival.enableJoinBurst()
+
+    /** A report carried the join burst sample; later reports leave it out. */
+    fun joinBurstReported() = arrival.joinReported()
 
     @Synchronized
     fun read(): SecureRecord {
@@ -105,6 +122,9 @@ class SecureRecordReader internal constructor(
         val decoded = SecureRecordProtocol.decodeHeader(header, acceptStoreForward, acceptDiscoveryOpening, acceptRelaySetup)
         require(decoded.sequence == nextSequence) {
             "Unexpected secure record sequence ${decoded.sequence}; expected $nextSequence"
+        }
+        require(decoded.ciphertextBytes <= maxCiphertextBytes) {
+            "Secure record of ${decoded.ciphertextBytes} bytes exceeds this stream's limit $maxCiphertextBytes"
         }
         val ciphertext = ByteArray(decoded.ciphertextBytes).also(input::readFully)
         arrival.endRecord()
@@ -182,6 +202,8 @@ data class SecureBluetoothSession(
     val peerPseudonymous: Boolean = false,
     /** BMH3 pseudonyms: this phone presented a throwaway key in this handshake. */
     val ownPseudonymous: Boolean = false,
+    /** BVMID2 (responder): msg1's tag was the displayed verification code's, so this link is verify-only ([QrSessionScope]). */
+    val qrTagMatched: Boolean = false,
 ) : Closeable {
     override fun close() {
         reader.close()

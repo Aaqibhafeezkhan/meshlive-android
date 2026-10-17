@@ -28,7 +28,7 @@ cannot follow it. Older versions of the app put a fixed prefix in the payload, s
 prefixes could link all of those changing addresses to the same phone, across places and days. Every advertising
 set of the app (call-ready presence, stream offer, waiting viewer request, forwarder offer, title pages) stops at each
 UTC quarter hour, stays silent for a random 1 to 8 seconds and restarts on a new address with a new ID. A call or
-stream already connected keeps its link. In normal use the setting **Reachable for calls** is on, which means the
+stream already connected keeps its link. In normal use the setting **Allow calls** is on, which means the
 phone advertises that it can take a call while the app is open and, through its session service, in the background;
 turning it off stops that, at the cost that others cannot call you unless your Call screen is open. Rotating IDs are
 one switch (Settings > Advanced > Rotating discovery IDs); the identity-hiding handshake and the throwaway identities
@@ -75,11 +75,54 @@ phones (experimental) work only with verified contacts while pseudonyms are on.
 - **Other Bluetooth radios.** Android's own beacons (Find My Device, offline finding, Fast Pair), the phone's
   connection-request addresses, and the size and timing of encrypted data on a link are outside the app's control; they
   show that a call or stream is happening, and roughly of what kind.
-- Optional names and stream titles (experimental) are public while they are enabled.
+- A stream title is public: anyone nearby can read it. Your optional name is sent only inside the encrypted session, to the people Settings > Your ID > Who sees my name allows.
 
-To reduce exposure further: switch Bluetooth off when you do not need it, switch **Reachable for calls** off when you are
-not expecting calls, leave names and titles off, use the neutral Bluetooth name option on Android 13 and older, and
+To reduce exposure further: switch Bluetooth off when you do not need it, switch **Allow calls** off when you are
+not expecting calls, leave your name and stream titles empty, use the neutral Bluetooth name option on Android 13 and older, and
 verify the people you call often (QR code or safety code).
+
+## Audio-only live streams
+
+Go live > Audio only. A radio broadcast is encrypted between phones like a video
+stream, but it is for anyone: every phone that completes the handshake can listen, and a phone that passes the stream
+on hears it too.
+
+- **Who learns what.** A listener (and a relay) learns the broadcaster's long-term identity key, because streams do
+  not yet use a throwaway identity: broadcasts from different days can be linked to one phone, and a verified contact
+  is recognised. The broadcaster sees how many listeners are connected, and a relay sees its one child; neither sees
+  more of the chain. Titles from people you have not verified show as unconfirmed.
+- **Signed audio.** The broadcaster signs every audio record with a key that is certified by its identity key, so a
+  phone that passes the stream on cannot alter or forge the audio. It can still stop passing it on, or present
+  itself as the source.
+- **Announcements.** An audio-only offer carries a marker and no video size, so a scanner can tell a radio from a
+  video stream. Nothing else about the content is visible.
+- **The microphone.** Mute keeps the microphone open (Android's indicator stays on) and sends silence; nothing
+  recorded before the tap is sent afterwards. Pause releases the microphone. The app never records a broadcast.
+- **The lock screen.** The notification of a broadcast or a listening session says only "Broadcasting audio" or
+  "Listening to a live broadcast", never a name or a title. The media controls carry no title either.
+
+## Staying reliable in the background: permissions and what the app keeps on the phone
+
+None of this is sent anywhere. These are the extra permissions and local records that keep calls and relaying working
+when the screen is off, and what each one can and cannot reveal.
+
+- **"Always run in the background" prompt.** The app declares `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` so it can open
+  Android's own one-tap dialog, in onboarding, in Settings and when you switch on relaying or "Reachable for calls".
+  It only opens the system dialog; nothing changes without your tap. It affects battery use, not what is shared.
+- **Location type on Android 10 and 11 only.** Those versions deliver Bluetooth search results to an app in the
+  background only if its foreground service declares the location type, so the app declares `FOREGROUND_SERVICE_LOCATION`
+  and uses the type on Android 10-11, and only while the phone's Location switch is on. MeshLive never reads,
+  stores or sends your location, and it requests no background-location permission. On those versions Android also needs
+  the Location switch on for Bluetooth searches at all; Settings says so when it is off.
+- **Start after a restart.** `RECEIVE_BOOT_COMPLETED` is declared for an opt-in "resume relaying after a restart".
+  The receiver is disabled in the manifest and stays inert unless you turn that option on (it is not offered in Settings yet).
+- **Why the app stopped.** At each start the app reads Android's own record of why the previous process ended (for
+  example the system freed memory, the phone maker's battery manager stopped it, or you swiped it away) and keeps the newest
+  timestamp and the last unexpected reason on the phone, in its private storage and its local log, to explain a missed
+  call in plain words. It is never uploaded, and an emergency wipe or clearing the app's data removes it.
+- **Phone-update stamp.** To say "your phone was updated recently; re-check its background settings", the app stores the
+  phone's build fingerprint, security-patch date and boot count locally (the same values any app can read). The stamp
+  stays on the phone and is removed by a wipe.
 
 ## Measurements
 
@@ -128,6 +171,12 @@ problem privately, read [SECURITY.md](../SECURITY.md).
   forwards is an admitted viewer and can decrypt its own copy.
 - Store-and-forward message content is sealed to the recipient and stored encrypted at rest. The in-app emergency wipe
   deletes the keys first.
+- **No cloud or device-to-device backup.** The app opts out of Android backup (`allowBackup="false"`). Its keys live in
+  the hardware-backed Keystore and cannot be restored on another phone, so a backup would be useless, and nothing
+  about your calls, contacts or messages (for example call history by peer prefix) is sent to Google's backup.
+- **Names on the lock screen.** Call and stream notifications show the other person's name only while the phone is
+  unlocked; a locked screen shows just the app name and "Active" or "Incoming call". Settings > Features "Show caller
+  names on the lock screen" is an opt-in that also shows the caller's name there.
 
 **What is not hidden.**
 
@@ -148,8 +197,8 @@ problem privately, read [SECURITY.md](../SECURITY.md).
   contact whose key changes is refused by default.
 - **Relays can disrupt.** A malicious relay or advertiser can drop, delay or refuse a stream or call, attract it to a
   longer route or report a false hop count, but it cannot impersonate an endpoint or open the media.
-- **Names and titles** (experimental) are signed and sent inside the encrypted session, but a stream title is also
-  advertised publicly while the option is on.
+- **Names and titles** are signed and sent inside the encrypted session, but a stream title is also
+  advertised publicly to everyone nearby. Leave it empty to advertise nothing.
 
 **Not done yet.**
 

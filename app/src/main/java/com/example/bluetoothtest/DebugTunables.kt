@@ -124,6 +124,27 @@ object DebugTunables {
         }
 
     /**
+     * Bluetooth ON recovery (on by default, 2026-10-17; BluetoothOnRecovery.kt). After Bluetooth is switched off and on, the
+     * scanners started during the toggle are restarted, a live broadcast offers its stream again instead of disarming, and an
+     * idle call listener reopens its GATT server / CoC control server / advertising. DEBUG `test_bluetooth_on_recovery=false`
+     * (benchmark tunable `bluetooth_on_recovery`) is the control arm: only the scanners the off callback paused are resumed.
+     */
+    @Volatile var bluetoothOnRecovery: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Q29 (2026-10-14): the 20 s incoming-handshake deadline closes a silent stranger on every CoC and GATT call
+     * endpoint, not only dual ones (CallSetupDeadlines.incomingDeadlineApplies). DEBUG launch extra
+     * `test_call_handshake_deadline_all=false` is the control arm: only dual endpoints keep the deadline, as before.
+     */
+    @Volatile var callHandshakeDeadlineAll: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
      * Experimental (off): private calls on socket transports (Classic RFCOMM, LE CoC) pace their
      * writes with [LinkPacer] at the peer-measured arrival rate, seeded like a stream child, and the
      * peer's call reports also teach this phone's learned single-link capacity (today only stream
@@ -189,6 +210,90 @@ object DebugTunables {
     @Volatile var deliveryReports: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * On-time reports (on by default since 2026-10-16). A stream viewer that has not measured its
+     * parent link yet (no large-record train) sends a full link report every 2 s while media keeps
+     * arriving and its playout is not pinned late; the parent (or relay) holds its seeded pace while
+     * such reports say the link is on time. Without them a viewer sent nothing until its delay moved,
+     * so the parent halved the seed after 4 s of silence down to 150 kbps and starved streams whose
+     * records never formed a train (lane12 s6-threshold-360p: 640x360 at 300-500 kbps fell to about
+     * 157 kbps with a 65 s queue). DEBUG A/B runs can turn them off (`test_on_time_reports=false`,
+     * benchmark tunable `on_time_reports`); read when a stream link starts.
+     */
+    @Volatile var onTimeReports: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * On-time seed raise (on by default since 2026-10-16, design decision Q12; see LinkPacer.holdSeed).
+     * While an unmeasured child reports media on time and this side's own queue is at least 500 ms
+     * old, the held pacer seed grows 25% per report (cap 1500 kbps) instead of staying at the cold
+     * prior: a fresh-install A55 seeded at 350 kbps held a 400 kbps stream below its offered load and
+     * froze 56-87% (lane15 pairB2/pairE, a55m31-seedraise). DEBUG A/B runs can turn it off
+     * (`test_on_time_seed_raise=false`, benchmark tunable `on_time_seed_raise`); read when a stream
+     * link starts.
+     */
+    @Volatile var onTimeSeedRaise: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (off by default, 2026-10-17; ReceiverNodeHealthPolicy): a forwarding viewer's child-detach guard
+     * also allows 1.35x the node's own pre-child p95, so a relay whose cadence was already ~2 frame periods (S22 relay,
+     * p95 ~133 ms at 15 FPS, lane15 chain5) does not detach a child that made nothing worse. DEBUG
+     * `test_receiver_node_baseline_p95=true` (benchmark tunable `receiver_node_baseline_p95`); read when a stream starts.
+     */
+    @Volatile var receiverNodeBaselineP95: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental join probe seed (off by default, 2026-10-17, design decision Q12 option C; see
+     * LinkPacer.beginJoinProbe). A stream link with no measurement starts from a cautious prior (GATT
+     * 350 kbps) and the on-time seed raise needs seconds to climb from it. With this on, the sender (and a
+     * relay's child link) lets the writer run unpaced for a bounded window (1.5 s or 32 KiB), the child
+     * times the back-to-back records it receives in its first 3 s as one burst (ArrivalTrainMeter
+     * join burst) and reports it in the ordinary link report, and the first rate within 3 s seeds the
+     * pacer (the measured link rate when the sender was backlogged, else the higher of prior and burst);
+     * with no report the prior stands. No wire change; both ends should run it for a seed to arrive
+     * (an older or switched-off child never reports a burst and the prior stands). DEBUG
+     * `test_join_probe_seed=true` (benchmark tunable `join_probe_seed`); read when a stream link starts.
+     */
+    @Volatile var joinProbeSeed: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental seed raise drain guard (off by default, 2026-10-17; see LinkPacer.holdSeed). The
+     * on-time raise keeps climbing on a link-limited path (M31 -> A55 at 1200 kbps carried 800-950 while the
+     * raise went on, queue 14-31 s, frozen 49-65%). With this on a raise is skipped while the sender's
+     * queue age is not falling between consecutive reports and its writes are blocking (link-limited, not
+     * pacer-limited). Only meaningful with the raise on. DEBUG `test_seed_raise_drain_guard=true`
+     * (benchmark tunable `seed_raise_drain_guard`); read when a stream link starts.
+     */
+    @Volatile var seedRaiseDrainGuard: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental relay establishment keeps 2M (off by default, 2026-10-16; see relayChildSetupPhyDecision).
+     * A relay child setup that failed before any connection existed (status 133 / HCI 0x3E on connect, state 0
+     * at the connection callback) no longer pins that child to 1M for the session: connection establishment
+     * runs on the advertising PHY, so 1M would not have changed it, and the pin cost the child 2M for the whole
+     * stream (lane15 chain2: relay TX 136-171 kbps instead of 350-374, child frozen 70-77%). A failure after the
+     * link existed (2M PHY update requested or in flight) still pins 1M. DEBUG `test_relay_establish_keep_2m=true`
+     * (benchmark tunable `relay_establish_keep_2m`); read when a relay dials a child.
+     */
+    @Volatile var relayEstablishKeep2M: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
         }
 
     /**
@@ -316,11 +421,92 @@ object DebugTunables {
         }
 
     /**
-     * Experimental (default off): a central whose just-authenticated child can relay (`maxChildren > 0`)
-     * requests the Android 14+ DCK connection priority (30 ms by the AOSP default) on that link instead of
-     * HIGH (11.25-15 ms), so the relay's own HIGH child link has two events per parent event
-     * ([relayUpstreamPriority]). DEBUG launch extra `test_relay_upstream_dck=true` turns it on; an explicit
-     * `test_source_gatt_priority` still wins.
+     * Default on: after the stall guard closed a child link, dials to that child within [RelayStallHoldoff.HOLDOFF_MS] are skipped
+     * and not counted as establishment failures (the child is still tearing down its dead link and receiver). DEBUG launch extra
+     * `test_relay_stall_holdoff=false` is the control arm.
+     */
+    @Volatile var relayStallHoldoff: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Default on: a guard-detected hop-stage stall (the dead-anchor signature) is counted apart from refusals, needs 3 within
+     * 2 minutes, and marks the child for 30 s (60, 120, 300 s on consecutive marks) instead of 5 minutes
+     * ([EstablishmentFailureTracker.onStall]). Refusals (status 133/62) keep 2 failures and the 5-minute mark. DEBUG launch extra
+     * `test_relay_stall_separate=false` is the control arm (a stall counts as a refusal, as before).
+     */
+    @Volatile var relayStallSeparate: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Default on: a relay's refusal marks (GATT status 133/62 to a child, [EstablishmentFailureTracker.onFailure]) escalate 30, 60,
+     * 120, 300 s on consecutive marks instead of a flat 5 minutes, and a refusal round holds the relay's next dial to that child off
+     * for [RelayStallHoldoff.HOLDOFF_MS] so the two failures are not spent in 3 s. The 5-minute mark withdrew the offer from a child
+     * that kept asking and had no other parent (b5-audio-chain-cb548fc5 music r1/r3). DEBUG launch extra
+     * `test_relay_refusal_escalation=false` is the control arm (flat 5 minutes, no hold-off).
+     */
+    @Volatile var relayRefusalEscalation: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (off): a sighting of a child that the relay will not dial (marked by [EstablishmentFailureTracker] or inside
+     * [RelayStallHoldoff]) is dropped in the discovery callback before `stopPresence()`, so the offer and the scan are not stopped
+     * and restarted for nothing ([RelayChildDialGate]). b6-q31-c1-reset 06-A3: 51 Discovery advertising-set starts and 27 deferred
+     * scan starts in 5 minutes, which left the relay blind for 29 s at a time. DEBUG launch extra `test_relay_hold_in_place=true`;
+     * off restores the restart-per-sighting behaviour exactly.
+     */
+    @Volatile var relayHoldInPlace: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Default on: when a GATT video receiver's input pipe fails (overflow, bad chunk header, reordering), it cancels the connection
+     * so the sender sees the loss instead of writing into a dead input while heartbeats continue. DEBUG launch extra
+     * `test_gatt_input_failure_ends_link=false` is the control arm.
+     */
+    @Volatile var gattInputFailureEndsLink: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Default on: at a PHY move (`stalled_one_way`, `one_pdu_per_event`) a live stream sender drops queued media older than
+     * [PhyMoveSkip.FLOOD_STALE_MS] once (video codec-safely, audio older than the viewer's playout) instead of flooding it into
+     * the viewer ([PhyMoveSkip.floodGuard]). Calls and audio-only live never. DEBUG launch extra `test_phy_move_flood_guard=false`
+     * is the control arm.
+     */
+    @Volatile var phyMoveFloodGuard: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Viewer decoder size-change handling (default on; VideoStreamDecoder, DecoderFormatTracker): a keyframe
+     * whose coded size or codec configuration differs from the running decoder's gets a re-created decoder
+     * (a rung change of the Auto ladder or a call's resolution ladder, an encoder restart with new csd),
+     * recovery re-queues the newest csd, and KEY_MAX_WIDTH/HEIGHT is set where adaptive playback is
+     * supported. DEBUG launch extra `test_decoder_size_rebuild=false` is the control arm (one decoder at
+     * the header size, a size change only logged, recovery re-queues the stream-start csd).
+     */
+    @Volatile var decoderSizeChangeRebuild: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Default OFF again since 2026-10-15 afternoon (held: the full-chain A/B with a child, lane 11 block E, looked worse
+     * with DCK; low-battery S24, n=3, so it is re-tested before any promotion). A central whose
+     * just-authenticated child can relay (`maxChildren > 0`) requests the Android 14+ DCK connection priority
+     * (30 ms by the AOSP default) on that link instead of HIGH (11.25-15 ms), so the relay's own HIGH child link
+     * has two events per parent event ([relayUpstreamPriority]). DEBUG launch extra
+     * `test_relay_upstream_dck=true` enables it (Experimental arm); an explicit `test_source_gatt_priority`
+     * still wins.
      */
     @Volatile var relayUpstreamDck: Boolean = false
         set(value) {
@@ -375,6 +561,61 @@ object DebugTunables {
             field = value && BuildConfig.DEBUG
         }
 
+    /**
+     * Experimental (off, Q31): a relay's child queue sheds at a target sized in milliseconds of media from the
+     * child's measured drain rate and the drain's own jitter, inside the latency budget
+     * [timeQueueBudgetMs], instead of the fixed "stream budget minus the child's playout" (RelayTimeQueueSizer).
+     * Needs the relay-child media age ([experimentalRelayChildMediaAge], on by default). DEBUG launch extra
+     * `test_relay_time_queue=true` (benchmark tunable `relay_time_queue`); read when a child connects.
+     */
+    @Volatile var relayTimeQueue: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (off, Q31 follow-up): a relay's drain rate for a child is its own sustained delivery to that child
+     * (bytes written over the seconds media waited for the link, [SustainedDeliveryMeter]) instead of only the
+     * child's arrival-train report, which is 0 on slow GATT hops. The train report remains the fallback and the
+     * control; `BENCHMARK relay_time_queue` logs `drainSource`. DEBUG launch extra `test_relay_drain_sustained=true`
+     * (benchmark tunable `relay_drain_sustained`); read when a child connects. No wire field.
+     */
+    @Volatile var relayDrainSustained: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (off, Q31): a stream viewer's playout grows to the arrival jitter it measured (99th
+     * percentile of the relative arrival delay over 60 s) before a frame is late, inside the latency budget
+     * [timeQueueBudgetMs]; the earlier lateness rule still applies (PlayoutJitterTarget). DEBUG launch
+     * extra `test_playout_time_target=true` (benchmark tunable `playout_time_target`); read when a stream
+     * starts. Calls are unaffected.
+     */
+    @Volatile var playoutTimeTarget: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Latency budget of both time-based arms, ms (300-5000). A relay queue never holds more than this and a
+     * viewer pays at most this much delay in advance; beyond it the earlier behaviour applies. DEBUG launch
+     * extra `test_time_queue_budget_ms` (benchmark tunable `time_queue_budget_ms`).
+     */
+    @Volatile var timeQueueBudgetMs: Long = TimeBasedSizing.DEFAULT_LATENCY_BUDGET_MS
+        set(value) {
+            field = if (BuildConfig.DEBUG) value.coerceIn(300L, 5_000L) else TimeBasedSizing.DEFAULT_LATENCY_BUDGET_MS
+        }
+
+    /**
+     * Shortest relay queue target of the time-based arm, ms (100-1000). DEBUG launch extra
+     * `test_time_queue_floor_ms` (benchmark tunable `time_queue_floor_ms`).
+     */
+    @Volatile var timeQueueFloorMs: Long = TimeBasedSizing.DEFAULT_FLOOR_MS
+        set(value) {
+            field = if (BuildConfig.DEBUG) value.coerceIn(100L, 1_000L) else TimeBasedSizing.DEFAULT_FLOOR_MS
+        }
+
     @Volatile var callCloseWaitsForPeer: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
@@ -408,6 +649,16 @@ object DebugTunables {
      * (cover follows the decoder flag one to one; the old browser line).
      */
     @Volatile var receiverUiStability: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Watch list grouping (groupStreamRoutes): one row per broadcast, joined through its best route,
+     * instead of one row per advertiser (the source and every relaying viewer). DEBUG launch extra
+     * `test_stream_row_grouping=false` is the control arm (one row per advertiser, as before).
+     */
+    @Volatile var streamRowGrouping: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
         }
@@ -508,6 +759,21 @@ object DebugTunables {
             field = value && BuildConfig.DEBUG
         }
 
+    /**
+     * Experimental (off, DEBUG only): the inbound-child probe of DECISIONS "Design RR" measurement 7
+     * ([InboundProbe]). `test_inbound_probe=server` hosts a connectable GATT sink; `=dial` redials it under load.
+     * `test_inbound_probe_dials` (15), `_hold_ms` (20000), `_gap_ms` (2000), `_kbps` (60). No media, no hop records.
+     */
+    @Volatile var inboundProbe: String? = null
+        set(value) {
+            field = value.takeIf { BuildConfig.DEBUG }
+        }
+
+    @Volatile var inboundProbeDials: Int? = null
+    @Volatile var inboundProbeHoldMs: Int? = null
+    @Volatile var inboundProbeGapMs: Int? = null
+    @Volatile var inboundProbeKbps: Int? = null
+
     @Volatile var relayPhyGuard: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
@@ -545,6 +811,20 @@ object DebugTunables {
     @Volatile var relayEstablishFallback: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default off): relay establishment budget ([RelayEstablishBudget]). A relay's child
+     * connect retries fast establishment failures (GATT 133 / HCI 0x3E) in place with 300-900 ms spacing
+     * for up to 12 s from the first connect (a 5 s create-connection timeout at most once), counts ONE
+     * failure per exhausted budget, escalates the child mark 30/60/120/300 s and skips the useless
+     * 2M -> 1M swap after such a failure. DEBUG launch extra `test_relay_establish_budget=true` turns it
+     * on; off keeps 2 attempts per cycle, one failure per cycle and the flat 5-minute mark.
+     * Line: `BENCHMARK relay_child_connect`.
+     */
+    @Volatile var relayEstablishBudget: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
         }
 
     @Volatile var relayColdStart: Boolean = true
@@ -598,6 +878,107 @@ object DebugTunables {
      * `test_phy_setup_stall=false` is the control arm (retry only after the link dies, to the old address).
      */
     @Volatile var phySetupStallGuard: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default on; a protection that already guards calls): the adaptive-PHY protections of a call dial also guard
+     * a store-and-forward message-exchange dial ([MessageDialPhy]): the first 2M link is closed when its hop authentication
+     * stalls, one bounded 1M retry follows, and a peer that needed it (or whose 2M exchange died early with no answer) starts
+     * on 1M next time. Needs [adaptivePhy] and [adaptivePhyMemory] for the retry and the memory, [phySetupStallGuard] for the
+     * stall. DEBUG launch extra `test_message_adaptive_phy=false` is the control arm (one attempt on the endpoint PHY).
+     */
+    @Volatile var messageAdaptivePhy: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default on; the call and message-dial protection applied to the stream source): a direct GATT stream whose 2M
+     * link went silent (connection timeout or heartbeat timeout) within [AdaptivePhyMemory.EARLY_LOSS_MS] of hop authentication marks
+     * the authenticated hop peer bad on 2M, so the next stream link to it starts on 1M ([StreamPhyLoss]). Needs [adaptivePhy] and
+     * [adaptivePhyMemory]. DEBUG launch extra `test_stream_adaptive_phy=false` is the control arm (the source redials on 2M).
+     */
+    @Volatile var streamAdaptivePhy: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default on): a call dial whose 2M setup stalled (hop authentication unfinished after the stall guard) remembers
+     * the direct callee's advertised node as bad on 2M at the stall itself, not only after a successful 1M retry. Before, a retry
+     * that could not find the callee again (the A15s calling the ASUS: no new advertisement within 8 s, then a 12 s connect to the
+     * old address) left no memory and every later call repeated the stall. Needs [adaptivePhy], [adaptivePhyMemory] and
+     * [phySetupStallGuard]. DEBUG launch extra `test_stall_remembers_2m=false` is the control arm (memory only after a 1M success).
+     */
+    @Volatile var stallRemembersTwoM: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental, default 8000 (= the earlier behaviour, [StallRediscover]): total scan time, ms, for the callee's new advertisement
+     * in the 1M retry after a CallSetupStalledException. Above 8000 (the A/B arm is 20000) the scan is not clamped by the early-loss
+     * window and a found fresh address is dialed at once; the stale address is dialed only when nothing was found. DEBUG launch
+     * extra `test_stall_rediscover_ms`; release builds always use 8000.
+     */
+    @Volatile var stallRediscoverMs: Long = StallRediscover.DEFAULT_MS
+        set(value) {
+            field = if (BuildConfig.DEBUG) StallRediscover.normalize(value) else StallRediscover.DEFAULT_MS
+        }
+
+    /**
+     * Experimental, default off (A/B for the A15s-central to ASUS-peripheral pair): the GATT client asks for different PHYs per
+     * direction instead of the same one ([GattPhySplit]); `tx2m-rx1m` keeps the central -> peripheral media direction on 2M and
+     * moves the peripheral -> central direction, the one that went silent, to 1M. DEBUG launch extra `test_gatt_phy_split`.
+     */
+    @Volatile var experimentalPhySplit: GattPhySplit? = null
+
+    /**
+     * Experimental, default off (A/B for the ASUS <-> A15s pair, which the static [experimentalPhySplit] fixes at a cost on healthy
+     * pairs): links start on the normal 2M preference and, where the adaptive PHY would move a GATT link from 2M to 1M
+     * (`one_pdu_per_event`, `stalled_one_way`), only one direction moves ([adaptiveSplitFor]); a link that still fails then moves to
+     * full 1M as before. Non-null is the split to request: `test_adaptive_phy_split=true` selects `tx2m-rx1m`, and
+     * `test_adaptive_phy_split_dir=tx1m-rx2m` the mirror. Needs `test_adaptive_phy`.
+     */
+    @Volatile var adaptivePhySplit: GattPhySplit? = null
+
+    /**
+     * Experimental, default off (A/B for the A15s-central to ASUS-peripheral pair and for rotating discovery IDs): the stream
+     * source's GATT link opens on 1M and asks for 2M only after the hop peer authenticated, unless the authenticated node is
+     * remembered bad on 2M ([phyAfterAuth]). The hop handshake then never runs on a 2M link, and the memory is read by the
+     * authenticated node, which a rotating advertised prefix cannot be matched to. DEBUG launch extra `test_phy_after_auth`.
+     */
+    @Volatile var phyAfterAuth: Boolean = false
+
+    /**
+     * Default on: a single GATT link whose backlogged writer carries under a quarter of one PDU per event on 2M while the peer is
+     * still heard moves to 1M and the peer is remembered bad on 2M ([AdaptivePhyLink], reason `stalled_one_way`). Before, such a
+     * link was `kept` on 2M forever. DEBUG launch extra `test_stalled_2m_move=false` is the control arm.
+     */
+    @Volatile var stalledTwoMMove: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Control for the backlog skip at a PHY move (design decision Q-SKIP1, 2026-10-14). null (the default, and always in a release build)
+     * follows [PhyMoveSkip.enabled]: on for a live stream with a fixed (manual) bitrate, off with Auto quality, calls and audio. DEBUG
+     * launch extra `test_phy_move_skip_backlog=false` is the control arm; `=true` forces it on. At a PHY move queued video older than
+     * twice the viewer's playout (at least 4 s) is dropped once, codec-safely, and a keyframe is requested ([PhyMoveSkip]).
+     */
+    @Volatile var phyMoveSkipBacklog: Boolean? = null
+        set(value) {
+            field = value.takeIf { BuildConfig.DEBUG }
+        }
+
+    /**
+     * Messaging v2 progress-aware total limit (default on): a non-chat exchange's 120 s total limit is extended while chunks keep
+     * flowing, up to [StoreForwardLimits.sessionHardCapMs] ([SessionDeadlines]); the 10 s liveness and progress deadlines stay strict.
+     * DEBUG launch extra `test_mv2_progress_total=false` is the control arm (a fixed 120 s total, resumed in later sessions).
+     */
+    @Volatile var messageProgressTotal: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
         }
@@ -794,6 +1175,24 @@ object DebugTunables {
         }
 
     /**
+     * Experimental relay child thinning (P2 of the adaptive-scaling review; off by default, DEBUG only).
+     * On: the source encodes two temporal layers (every other frame is verified discardable; libaom
+     * always, MediaCodec AV1, MediaCodec VP9 only with [hardwareTemporalLayers]); each relay decides per
+     * direct child, from that child's queue age, delivery and lateness report, whether to forward all
+     * frames, only the base layer (half the frame rate, no re-encode, no keyframe) or audio only (video
+     * paused for that child until its link recovers, with "Video paused: weak link" on the child); the
+     * viewer shows that notice when audio keeps arriving but video does not. Hop-local: no state of any
+     * phone beyond the next hop is used, and the wire is unchanged (whole records are dropped; the
+     * end-to-end sequence check accepts gaps). Off: no layer control reaches the encoder, nothing is
+     * dropped for a layer and no notice is shown. Launch extra `test_relay_child_thinning` (benchmark
+     * tunable `relay_child_thinning`); read when a stream or forwarder starts.
+     */
+    @Volatile var relayChildThinning: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
      * Experimental call video fragments (off by default; see CallVideoFragments). On at both
      * endpoints of a direct call: video frames above 3 KB travel as authenticated 2 KB fragments and
      * queued call audio is written between them instead of waiting behind the whole frame (GATT
@@ -959,7 +1358,7 @@ object DebugTunables {
         }
 
     /**
-     * Native libopus call audio (README register "Native libopus call audio"; promoted to Settings >
+     * Native libopus call audio (docs/SWITCHES.md register "Native libopus call audio"; promoted to Settings >
      * Features on 2026-10-11, default [ConnectivityFeatureDefaults.NATIVE_OPUS] until phone test T10):
      * calls encode with OPUS_APPLICATION_VOIP and in-band FEC, and decode with libopus PLC on a gap
      * plus FEC recovery from the next packet, instead of MediaCodec (c2.android.opus has neither).

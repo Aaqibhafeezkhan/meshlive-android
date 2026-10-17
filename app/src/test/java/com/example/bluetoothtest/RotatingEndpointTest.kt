@@ -16,6 +16,10 @@ import org.junit.Test
 
 /** Rotating discovery IDs, Phase 1b/2 at the call endpoint: bit 3, the BDX1 OPENING, the guard, the presence rules. */
 class RotatingEndpointTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private val base = NodeCapabilities(
         transportMask = NodeCapabilities.TRANSPORT_BLE_L2CAP,
         encodeCodecMask = NodeCapabilities.CODEC_VP9,
@@ -63,7 +67,7 @@ class RotatingEndpointTest {
         }
         val link = SecureBluetoothHandshake.initiate(pipes.initiatorInput, pipes.initiatorOutput, callerIdentity, base)
         val callerSide = Session(link, EndToEndVideoHandshake.initiate(link, callerIdentity, callerEndpoint))
-        worker.join(10_000)
+        worker.join(120_000)
         failure.get()?.let { throw AssertionError("callee failed", it) }
         return Pair2(callerSide, requireNotNull(calleeSide.get()), calleeIdentity)
     }

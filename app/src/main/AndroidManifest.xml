@@ -44,6 +44,24 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Audio-only live (Design AL): background listening runs under a media-playback foreground service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!--
+        Android 10-11 only in use (design decision Q37): the session service adds the location type so background Bluetooth scan
+        results are delivered there. The permission exists from Android 14 and is never exercised there. No background-location
+        permission is requested. A Play build needs the location foreground-service declaration (demo video).
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!--
+        Onboarding / Settings offer the system's one-tap "always run in the background" prompt (design decision Q38). It only opens
+        Android's own dialog; nothing changes without the user's tap. Check Play review risk before any Play build keeps it.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!--
+        Experimental, off by default (Q-N2, BootResume): the receiver below is disabled in this manifest and is enabled only
+        while the user's opt-in is on, so nothing runs at boot on a default install.
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="true" />
@@ -55,6 +73,13 @@
         hides other packages unless named here; nothing is launched or changed.
     -->
     <queries>
+        <!-- The battery-optimisation prompt and list screens (Android 11+ hides which activity can handle an implicit intent). -->
+        <intent>
+            <action android:name="android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS" />
+        </intent>
         <package android:name="com.huawei.powergenie" />
         <package android:name="com.huawei.android.hwaps" />
         <package android:name="com.mediatek.duraspeed" />
@@ -62,12 +87,16 @@
         <package android:name="com.motorola.batterycare" />
         <package android:name="com.evenwell.powersaving.g3" />
         <package android:name="com.evenwell.emm" />
+        <!-- Phone-maker killer and system-Bluetooth packages read for guidance (BackgroundOem, DeviceTraitsProbe). -->
+        <package android:name="com.hihonor.powergenie" />
+        <package android:name="com.transsion.phonemaster" />
+        <package android:name="com.hihonor.bluetooth" />
+        <package android:name="com.android.bluetooth" />
+        <package android:name="com.google.android.bluetooth" />
     </queries>
 
     <application
-        android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -98,6 +127,10 @@
             android:name=".AboutActivity"
             android:exported="false"
             android:screenOrientation="portrait" />
+        <activity
+            android:name=".BlockedPeopleActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
         <!-- QR scanner (zxing-android-embedded): portrait like the rest of the app. -->
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"
@@ -119,10 +152,35 @@
             android:exported="false"
             android:label="Messages"
             android:screenOrientation="portrait" />
+        <!-- "Stop now" of the Visible-by-name notification; not exported. -->
+        <receiver
+            android:name=".NameWindowStopReceiver"
+            android:exported="false" />
+        <!-- Messaging v2 (experimental, test_messaging_v2): "Mark as read" of a conversation notification. Not exported; the
+             PendingIntent is immutable and explicit. -->
+        <receiver
+            android:name=".MessageNotificationReceiver"
+            android:exported="false" />
         <service
             android:name=".ActiveVideoSessionService"
             android:exported="false"
-            android:foregroundServiceType="camera|microphone|connectedDevice" />
+            android:foregroundServiceType="camera|microphone|connectedDevice|mediaPlayback|location" />
+        <!--
+            Experimental boot resume (BootResume, default off): disabled until the user opts in; starts only the connectedDevice
+            service. QUICKBOOT_POWERON is the phone makers' fast-boot broadcast. Not exported: the system sends these by
+            package.
+        -->
+        <receiver
+            android:name=".BootResumeReceiver"
+            android:enabled="false"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
         <!--
             Offline app sharing (AppShare): not exported; grants a temporary read of one copied APK in
             cache/app-share/ to the share target the user picks. Nothing else is exposed.
@@ -136,6 +194,29 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/app_share_paths" />
         </provider>
+        <!--
+            Messaging v2 phase 1b (experimental, master switch test_messaging_v2): "Open" of a received file. Not exported; an
+            app gets a one-file read grant for a random-token URI and every byte is decrypted on demand from the file vault
+            (openProxyFileDescriptor), so no plaintext file exists. Grants end when the thread is left or after 5 minutes.
+        -->
+        <provider
+            android:name=".MessagingV2OpenProvider"
+            android:authorities="${applicationId}.v2open"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+        <!--
+            Messaging v2 phase 1b: tap-to-decode of a received picture in an isolated process (own uid, no permissions, no
+            access to our files), destroyed after the decode. No picture is ever decoded without a tap.
+        -->
+        <service
+            android:name=".MessagingV2ImageService"
+            android:exported="false"
+            android:isolatedProcess="true" />
+        <!-- DEBUG-only harness for the attachment pipeline until the conversation UI (phase 1c) exists; finishes at once in a release build. -->
+        <activity
+            android:name=".MessagingV2AttachActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
     </application>
 
 </manifest>

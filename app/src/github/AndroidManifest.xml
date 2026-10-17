@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
-        The github flavour only (README "Updates"). Installing an update through PackageInstaller needs this
+        The github flavour only (docs/SWITCHES.md "Check for updates"). Installing an update through PackageInstaller needs this
         permission and the user's per-app "Install unknown apps" choice (Settings, opened by the update
         screen). The F-Droid flavour declares none of it. Nothing installs without Android's own
         confirmation screen (USER_ACTION_REQUIRED).

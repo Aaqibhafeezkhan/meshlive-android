@@ -62,7 +62,7 @@ class Bmh3VectorTest {
 
     @Test
     fun everyVectorReplaysInBothRolesByteForByte() {
-        assertEquals(4, Bmh3Vectors.all.size)
+        assertEquals(5, Bmh3Vectors.all.size)
         for (vector in Bmh3Vectors.all) {
             val purpose = purposeOf(vector.purpose)
             val inputs = vector.inputs

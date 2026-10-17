@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Audio-only live stream ("radio"), Design AL. Sentence case, short; long explanations are dialogs. -->
+<resources>
+    <!-- Settings > Features (off until the phone tests pass) -->
+    <string name="feat_audio_live">Audio-only live</string>
+    <string name="feat_audio_live_description">Go live with sound only, and listen to others who do. Audio uses far less Bluetooth capacity than video, reaches more phones and keeps playing with the screen off. Anyone nearby with MeshLive can listen, including phones that pass it on.</string>
+
+    <!-- Go live choice -->
+    <string name="go_live_choice_title">Go live</string>
+    <string name="go_live_choice_video">Video and audio</string>
+    <string name="go_live_choice_audio">Audio only</string>
+    <string name="go_live_choice_hint">Audio only reaches further and keeps playing with the screen off.</string>
+
+    <!-- Broadcast screen -->
+    <string name="audio_live_screen_title">Audio only</string>
+    <string name="audio_live_back">Back</string>
+    <string name="audio_live_timer_zero">0:00</string>
+    <string name="audio_live_title_label">Title</string>
+    <string name="audio_live_title_hint">Optional. Anyone nearby can read it</string>
+    <string name="audio_live_quality_label">Quality</string>
+    <string name="audio_live_quality_voice">Voice</string>
+    <string name="audio_live_quality_low">Low data</string>
+    <string name="audio_live_quality_music">Music</string>
+    <string name="audio_live_quality_detail">%1$s: about %2$d kbps over the air</string>
+    <string name="audio_live_meter_description">Microphone level</string>
+    <string name="audio_live_mic_note">Mute keeps the microphone open and sends silence, so Android\'s microphone indicator stays on. Pause stops the microphone. Audio that was already sent may still play on other phones.</string>
+    <string name="audio_live_start">Start</string>
+    <string name="audio_live_mute">Mute</string>
+    <string name="audio_live_unmute">Unmute</string>
+    <string name="audio_live_status_ready">Ready. Nobody is listening yet</string>
+    <string name="audio_live_status_waiting">Live. Waiting for listeners</string>
+    <string name="audio_live_status_listeners">Live. %1$d listening</string>
+    <string name="audio_live_status_paused">Paused. The microphone is off</string>
+    <string name="audio_live_status_muted">Muted. Sending silence</string>
+    <string name="audio_live_status_starting">Starting…</string>
+    <string name="audio_live_stopped_title">Audio broadcast stopped</string>
+    <string name="audio_live_ok">OK</string>
+    <string name="audio_live_permission_needed">Allow the microphone to broadcast audio.</string>
+
+    <!-- Listening screen and Watch rows -->
+    <string name="audio_live_listen_title">Radio</string>
+    <string name="audio_live_listen_meter_description">Sound level</string>
+    <string name="audio_live_listen_info">Anyone nearby with MeshLive can listen, including phones that pass it on. Titles from people you have not verified are unconfirmed. Volume is your phone\'s media volume.</string>
+    <string name="audio_live_listen_mute">Mute</string>
+    <string name="audio_live_listen_unmute">Unmute</string>
+    <string name="audio_live_listen_stop">Stop</string>
+    <string name="audio_live_listen_block">Block this person</string>
+    <string name="audio_live_listen_blocked">Blocked. Their broadcasts are hidden.</string>
+    <string name="audio_live_route_direct">Direct</string>
+    <string name="audio_live_route_via_one">Via 1 phone</string>
+    <string name="audio_live_route_via">Via %1$d phones</string>
+    <string name="audio_live_listen_state_connecting">Connecting…</string>
+    <string name="audio_live_listen_state_live">Live</string>
+    <string name="audio_live_listen_state_reconnecting">Reconnecting…</string>
+    <string name="audio_live_listen_state_paused">Paused by broadcaster</string>
+    <string name="audio_live_listen_state_ended">Ended</string>
+    <string name="audio_live_listen_state_muted">Live. Muted</string>
+    <string name="audio_live_listen_name_default">Radio nearby</string>
+    <string name="audio_live_row_audio_only">Audio only</string>
+    <string name="audio_live_row_from_further">Radio from further away</string>
+    <string name="audio_live_row_nearby">Radio nearby</string>
+    <string name="audio_live_row_from_seen">Radio from %1$s</string>
+    <string name="audio_live_row_from_name">Radio from %1$s</string>
+    <string name="audio_live_row_someone">Someone nearby is on the radio</string>
+
+    <!-- Disclosure shown before the first broadcast -->
+    <string name="audio_live_disclosure_title">Before you go live</string>
+    <string name="audio_live_disclosure_message">Anyone nearby with MeshLive can listen, including phones that pass it on. Titles from people you have not verified show as unconfirmed.\n\nListeners can tell it is your phone: until streams use a throwaway identity, everyone who joins learns your phone\'s long-term identity key and can link broadcasts from different days to it.</string>
+    <string name="audio_live_disclosure_confirm">Go live with audio</string>
+
+    <!-- Notification (broadcaster; lock-screen text stays neutral) -->
+    <string name="audio_live_notification_broadcasting">Broadcasting audio</string>
+    <string name="audio_live_notification_listening">Listening to a live broadcast</string>
+    <string name="audio_live_notification_mute">Mute</string>
+    <string name="audio_live_notification_stop">Stop</string>
+    <string name="audio_live_reminder_title">Still broadcasting</string>
+    <string name="audio_live_reminder_stopped">Audio broadcast stopped: nobody answered the reminder.</string>
+    <string name="audio_live_reminder_text">Your audio broadcast is still on. Tap to open it, or stop it.</string>
+    <string name="audio_live_switch_to_video">Switch to video</string>
+</resources>

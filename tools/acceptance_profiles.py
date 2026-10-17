@@ -34,7 +34,11 @@ USER_THRESHOLDS = {
     "max_stall_ms_call": 500,
     "max_stall_ms_stream": 1000,
     "max_frozen_time_share_percent": 1.0,
+    # Cadence (Q6, 2026-10-14): a clean report interval is "below" when its visible FPS is under this fraction of the
+    # FPS in force; the gate passes when the below intervals are at most the share of scored time. The slowest-window
+    # rule (every interval at or above the fraction) stays computable as the labelled legacy comparison field.
     "effective_fps_fraction": 0.95,
+    "effective_fps_below_share_percent": 5.0,
     # Provisional (root, 2026-10-09), matching the bounded media-age experiment's budgets; revisit
     # with A/B and acoustic evidence (DECISIONS "Product direction").
     "max_media_age_p95_ms_call": 400,

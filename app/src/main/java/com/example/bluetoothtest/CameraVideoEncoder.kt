@@ -8,7 +8,10 @@ import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
 import android.media.ImageReader
 import android.media.MediaCodec
@@ -55,12 +58,29 @@ class CameraVideoEncoder(
     private val onFailure: (Throwable) -> Unit = {},
     private val debugRawInputFile: File? = null,
     /**
+     * The raw fixture's declared geometry (DEBUG): frames are read at this size only, and the encoder must
+     * run at it ([RawFixtureGeometry]). Null falls back to the encoder size, which is still checked for
+     * whole frames.
+     */
+    private val rawGeometry: Pair<Int, Int>? = null,
+    /**
      * Experimental call encoder fit (CallEncoderFit; null for streams and while off): told once,
      * with this geometry's speed key, when the native encoder stays over its frame budget at its
      * fastest preset with the fast tool profile for CallEncoderFit.OVERLOAD_WINDOWS windows.
      */
     private val onNativeOverloadAtFastest: ((key: String) -> Unit)? = null,
+    /**
+     * GPU scale ladder (GpuScaleFeature; null while off or not applicable): the camera belongs to a
+     * shared [GpuScaleCapture] and this encoder's own size is drawn into its input surface, so a rung
+     * change rebuilds only the encoder. Ignored for software (YUV input) encoders and raw fixtures.
+     */
+    private val gpuScale: GpuScaleRequest? = null,
+    /** DEBUG encoder bench (EncoderBenchSpec): per-run overrides; null in every product path. */
+    private val bench: EncoderBenchOverrides? = null,
 ) : Closeable {
+    /** The coded size this encoder produces; a restart that changes it marks its first keyframe (RestartDiscontinuityMarker). */
+    val outputResolution: VideoResolution
+        get() = settings.resolution
     private var cameraInputWidth = settings.resolution.width
     private var cameraInputHeight = settings.resolution.height
     private val cameraManager = context.getSystemService(CameraManager::class.java)
@@ -92,7 +112,7 @@ class CameraVideoEncoder(
      * Experimental temporal layering (off by default, DebugTunables.experimentalTemporalLayers):
      * every other frame refreshes nothing and is discardable. Fixed for this encoder's lifetime.
      */
-    private val experimentalTemporalLayers = DebugTunables.experimentalTemporalLayers
+    private val experimentalTemporalLayers = DebugTunables.experimentalTemporalLayers || DebugTunables.relayChildThinning
     private var nativeTemporalLayers = false
     private var nativeLayerFrameIndex = 0L
     /** LayeringPolicy: produce droppable frames only while a link needs them. */
@@ -108,6 +128,12 @@ class CameraVideoEncoder(
     private var lastNativeKeyFramePtsUs = Long.MIN_VALUE
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
+    private val gpuActive = gpuScale != null && videoCodec.usesSurfaceInput && debugRawInputFile == null &&
+        referenceFrameLimit == 0
+    private var gpuCapture: GpuScaleCapture? = null
+    private var gpuStartedNs = 0L
+    private var gpuResetMs = -1.0
+    @Volatile private var retainGpuCaptureOnClose = false
     private var previewSurface: Surface? = null
     private var viewfinderSurface: CameraViewfinderSurface? = null
     private var encoderSurface: Surface? = null
@@ -129,6 +155,91 @@ class CameraVideoEncoder(
     private var targetFpsRange: Range<Int>? = null
     private var captureTargets = emptyList<Surface>()
     private var captureSessionGeneration = 0
+    /** The encoder component in use: the requested one unless the init fallback chain moved to another (V-09). */
+    @Volatile private var activeEncoderName = videoCodec.encoderName
+    private val deviceTraits = DeviceTraits.current()
+    private var openedCameraId: String? = null
+    private var hardwareLevel: Int? = null
+    private var rotateAndCropNoneSupported = false
+    /** Repeating-request template; the Experimental frame-stall response switches it to TEMPLATE_PREVIEW once. */
+    private var captureTemplate = CameraDevice.TEMPLATE_RECORD
+    private val rebuildMode = CameraRebuildPolicy.modeFor(deviceTraits)
+    private var closingSession: CameraCaptureSession? = null
+    private var activePlan = CameraStreamPlan("full", false, false)
+    private val openRetry = CameraOpenRetryState { SystemClock.elapsedRealtime() }
+    private val rebuildHost: CameraRebuildHost = object : CameraRebuildHost {
+        override fun hasSession(): Boolean = session != null
+
+        override fun closeSession() {
+            val old = session
+            session = null
+            captureSessionGeneration++
+            closingSession = old
+            runCatching { old?.close() }
+        }
+
+        override fun closeDevice() {
+            val old = camera
+            camera = null
+            if (old == null) {
+                worker.post { rebuilder.onDeviceClosed() }
+            } else {
+                runCatching { old.close() }
+            }
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun openDevice() {
+            val id = openedCameraId
+            if (id == null) {
+                rebuildFailed("Camera id unknown; cannot reopen.")
+                return
+            }
+            runCatching { cameraManager.openCamera(id, cameraCallback, worker) }
+                .exceptionOrNull()
+                ?.let { error -> rebuildFailed("Camera could not reopen: ${error.message}") }
+        }
+
+        override fun createSession() {
+            configureCaptureSession()
+        }
+
+        override fun log(message: String) {
+            Log.i("BluetoothVideo", "BENCHMARK camera_rebuild: mode=$rebuildMode | $message")
+        }
+
+        override fun rebuildFailed(message: String) {
+            notifyFailure(message)
+        }
+    }
+    private val rebuilder: CameraSessionRebuilder = CameraSessionRebuilder(
+        rebuildHost,
+        object : CameraRebuildScheduler {
+            override fun postDelayed(delayMs: Long, action: Runnable) {
+                worker.postDelayed(action, delayMs)
+            }
+
+            override fun remove(action: Runnable) {
+                worker.removeCallbacks(action)
+            }
+        },
+        { SystemClock.elapsedRealtime() },
+    )
+    /** Encoded (non-config) frames out of the encoder; the frame-stall watchdog reads it. */
+    private val framesEncoded = java.util.concurrent.atomic.AtomicLong(0L)
+    private val stallLadder = FrameStallLadder(CameraSwitches.starvationFallback, DebugTunables.benchmarkLaunch)
+    private val stallChecks = mutableListOf<Runnable>()
+    private var stallReportedGeneration = -1
+    private val captureIntervals = CaptureIntervalMonitor()
+    private var rotateAndCropLogged = false
+    private val bitrateProbe = DynamicBitrateProbe()
+    private var qpScaleLogged = false
+    private var tailClampLogged = false
+    private val blackFrameDetector = BlackFrameDetector()
+    private var lastHealthSampleNs = 0L
+    private var firstFramesChecked = 0
+    private val privacyNoticeOn = CameraPolicy.isOn("camera-privacy-toggle-notice", deviceTraits)
+    private var privacyNoticeShown = false
     private var continuousAutoFocusAvailable = false
     @Volatile private var activeBitrate = settings.bitRate
     /** Bitrate last handed to the hardware encoder (worker thread). */
@@ -277,23 +388,35 @@ class CameraVideoEncoder(
     private var rawNextFrameNs = 0L
     private var rawInputFps = settings.fps
     private var rawInputDrops = 0L
+    /** The key-frame interval in seconds: the app's own unless the DEBUG encoder bench overrides it. */
+    private val keyFrameIntervalSeconds = bench?.keyFrameIntervalSeconds ?: settings.keyFrameIntervalSeconds
+    /** The MediaCodec output format last reported (encoder bench read-back). */
+    @Volatile private var lastOutputFormat: MediaFormat? = null
     val benchmarkRawClock: RawReferenceClock? get() =
         if (BuildConfig.DEBUG && rawStartedUs > 0L) RawReferenceClock(rawStartedUs, rawStartedNs) else null
 
     @SuppressLint("MissingPermission")
     fun start() {
         check(debugRawInputFile == null || BuildConfig.DEBUG) { "Raw fixture input is debug-only" }
-        val selectedCameraId = if (debugRawInputFile == null) {
+        gpuStartedNs = System.nanoTime()
+        val selectedCameraId = if (RawInputGuard.cameraMayStart(debugRawInputFile != null)) {
             cameraManager.cameraIdFor(cameraLens)
                 ?: error("${cameraLens.displayName} camera is unavailable")
         } else null
+        openedCameraId = selectedCameraId
         val cameraCharacteristics = selectedCameraId?.let(cameraManager::getCameraCharacteristics)
-        cameraTimestampSource = cameraCharacteristics?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
+        cameraTimestampSource = cameraCharacteristics?.let {
+            safeCameraRead("SENSOR_INFO_TIMESTAMP_SOURCE") { it.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) }
+        }
+        hardwareLevel = cameraCharacteristics?.let {
+            safeCameraRead("INFO_SUPPORTED_HARDWARE_LEVEL") { it.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL) }
+        }
         if (!videoCodec.usesSurfaceInput && cameraCharacteristics != null) {
-            val yuvSizes = cameraCharacteristics
-                .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-                ?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
-                .orEmpty()
+            val yuvSizes = safeCameraRead("SCALER_STREAM_CONFIGURATION_MAP") {
+                cameraCharacteristics
+                    .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    ?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
+            }.orEmpty()
             (yuvSizes.firstOrNull { size ->
                 size.width == settings.resolution.width && size.height == settings.resolution.height
             } ?: yuvSizes.filter { size ->
@@ -308,14 +431,22 @@ class CameraVideoEncoder(
         if (cameraCharacteristics != null) {
             Log.i("BluetoothVideo", "Camera clock: id=$selectedCameraId, timestamp source=$cameraTimestampSource (0=UNKNOWN, 1=REALTIME), input=${cameraInputWidth}x$cameraInputHeight")
         }
-        availableFpsRanges = cameraCharacteristics
-            ?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-            .orEmpty()
-            .toList()
+        availableFpsRanges = cameraCharacteristics?.let {
+            safeCameraRead("CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES") {
+                it.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            }
+        }.orEmpty().toList()
         targetFpsRange = selectFpsRange(settings.fps)
-        continuousAutoFocusAvailable = cameraCharacteristics
-            ?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
-            ?.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) == true
+        continuousAutoFocusAvailable = cameraCharacteristics?.let {
+            safeCameraRead("CONTROL_AF_AVAILABLE_MODES") { it.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) }
+        }?.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) == true
+        if (cameraCharacteristics != null) {
+            rotateAndCropNoneSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                safeCameraRead("SCALER_AVAILABLE_ROTATE_AND_CROP_MODES") {
+                    cameraCharacteristics.get(CameraCharacteristics.SCALER_AVAILABLE_ROTATE_AND_CROP_MODES)
+                }?.contains(CameraMetadata.SCALER_ROTATE_AND_CROP_NONE) == true
+            logCameraGeometry(selectedCameraId, cameraCharacteristics)
+        }
 
         reusableViewfinderSurface?.let { (surface, owner) ->
             previewSurface = surface
@@ -330,7 +461,7 @@ class CameraVideoEncoder(
             val learner = NativeEncoderSpeedLearner(defaultCpuUsed, nativeUsesFastToolProfile(settings), remembered)
             nativeSpeedLearner = learner
             nativeFastTools = learner.fastTools
-            val cpuUsed = learner.startCpuUsed
+            val cpuUsed = bench?.libaomCpuUsed ?: learner.startCpuUsed
             val frameBytes = YuvPlaneCopy.i420Bytes(settings.resolution.width, settings.resolution.height)
             // A slow frame waits in a buffer (adds latency) instead of losing the next camera frame.
             nativeInputBuffers = ArrayBlockingQueue<ByteBuffer>(NATIVE_INPUT_BUFFERS).apply {
@@ -350,100 +481,7 @@ class CameraVideoEncoder(
                     "threads=$threadCount, lag=0, AQ=cyclic-refresh, WebRTC real-time tools",
             )
         } else {
-            val format = MediaFormat.createVideoFormat(
-                videoCodec.mimeType,
-                settings.resolution.width,
-                settings.resolution.height,
-            ).apply {
-                setInteger(
-                    MediaFormat.KEY_COLOR_FORMAT,
-                    if (videoCodec.usesSurfaceInput && debugRawInputFile == null) {
-                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
-                    } else {
-                        MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
-                    },
-                )
-                val startupShaping = keyFrameShapingFraction()
-                setInteger(
-                    MediaFormat.KEY_BIT_RATE,
-                    startupShaping?.let { (activeBitrate * it).toInt() } ?: activeBitrate,
-                )
-                if (startupShaping != null) shapedKeyFramePending = true
-                setInteger(MediaFormat.KEY_FRAME_RATE, settings.fps)
-                setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, settings.fps.toFloat())
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, settings.keyFrameIntervalSeconds)
-                setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-                setInteger(MediaFormat.KEY_PRIORITY, 0)
-                activeBitrateMode?.let { setInteger(MediaFormat.KEY_BITRATE_MODE, it) }
-                activeComplexity?.let { setInteger(MediaFormat.KEY_COMPLEXITY, it) }
-                // Experimental (off): cyclic intra refresh instead of periodic keyframes, where the
-                // encoder supports it; the applied period is read back from the output format.
-                DebugTunables.intraRefreshFrames?.let { setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, it) }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    DebugTunables.hardwareQpMin?.let { qp ->
-                        setInteger(MediaFormat.KEY_VIDEO_QP_I_MIN, qp)
-                        setInteger(MediaFormat.KEY_VIDEO_QP_P_MIN, qp)
-                    }
-                    DebugTunables.hardwareQpMax?.let { qp ->
-                        setInteger(MediaFormat.KEY_VIDEO_QP_I_MAX, qp)
-                        setInteger(MediaFormat.KEY_VIDEO_QP_P_MAX, qp)
-                    }
-                }
-                encodingStatisticsEnabled = supportsEncodingStatistics()
-                if (encodingStatisticsEnabled) {
-                    setInteger(
-                        MediaFormat.KEY_VIDEO_ENCODING_STATISTICS_LEVEL,
-                        MediaFormat.VIDEO_ENCODING_STATISTICS_LEVEL_1,
-                    )
-                }
-                // Experimental temporal layering: two layers are requested from the hardware
-                // encoder only with the extra DEBUG switch (error-resilient layered VP9 cost ~11 VMAF
-                // on the M31); output frames are only marked droppable after their bitstream proves it.
-                temporalLayeringRequested = experimentalTemporalLayers && DebugTunables.hardwareTemporalLayers
-                if (temporalLayeringRequested) {
-                    setString(MediaFormat.KEY_TEMPORAL_LAYERING, TEMPORAL_LAYERING_SCHEMA)
-                }
-            }
-            // Experimental bounded media age also verifies AV1 frames an encoder makes droppable on
-            // its own (no layering is requested), so call queues can skip proven non-reference frames.
-            // VP9 is excluded (see BoundedMediaAge.nonReferenceSkipAllowed).
-            if (experimentalTemporalLayers ||
-                DebugTunables.experimentalBoundedMediaAge && videoCodec.mimeType == MediaFormat.MIMETYPE_VIDEO_AV1
-            ) {
-                bitstreamDroppability = BitstreamDroppability(videoCodec.mimeType)
-            }
-
-            codec = MediaCodec.createByCodecName(videoCodec.encoderName)
-            var configured = false
-            if (temporalLayeringRequested) {
-                try {
-                    checkNotNull(codec).setCallback(codecCallback, worker)
-                    checkNotNull(codec).configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                    configured = true
-                } catch (error: Exception) {
-                    // An encoder may reject the schema outright; encode single-layer instead.
-                    Log.w(
-                        "BluetoothVideo",
-                        "${videoCodec.encoderName} rejected temporal layering: ${error.message}; " +
-                            "encoding a single layer",
-                    )
-                    codec?.release()
-                    temporalLayeringRequested = false
-                    format.removeKey(MediaFormat.KEY_TEMPORAL_LAYERING)
-                    codec = MediaCodec.createByCodecName(videoCodec.encoderName)
-                }
-            }
-            checkNotNull(codec).let { encoder ->
-                if (!configured) {
-                    encoder.setCallback(codecCallback, worker)
-                    encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                }
-                if (videoCodec.usesSurfaceInput && debugRawInputFile == null) {
-                    encoderSurface = encoder.createInputSurface()
-                }
-                logEncoderCapabilities(encoder)
-                encoder.start()
-            }
+            startMediaCodecEncoder()
         }
         debugMediaTrace = DebugMediaTrace.startIfRequested(
             context,
@@ -453,14 +491,18 @@ class CameraVideoEncoder(
             settings.resolution.width,
             settings.resolution.height,
             settings.fps,
-            videoCodec.encoderName,
+            activeEncoderName,
         )
         Log.i(
             "BluetoothVideo",
             "Encoder statistics ${if (encodingStatisticsEnabled) "enabled" else "unavailable"} " +
-                "for ${videoCodec.encoderName}",
+                "for ${activeEncoderName}",
         )
 
+        if (gpuActive) {
+            startGpuCapture()
+            return
+        }
         if (debugRawInputFile != null) {
             startRawInput(debugRawInputFile)
             return
@@ -526,14 +568,374 @@ class CameraVideoEncoder(
         }
     }
 
+    // ---- MediaCodec encoder initialisation (V-09, V-11, V-12, V-14, V-16) ----------------------------
+
+    /** Other MediaCodec encoders for the same codec and input mode, best first (init fallback candidates). */
+    private fun alternateEncoderNames(): List<String> {
+        if (videoCodec.backend != VideoEncoderBackend.MEDIA_CODEC) return emptyList()
+        return runCatching {
+            VideoCodec.allMediaCodecEncoders().filter { other ->
+                other.protocolId == videoCodec.protocolId &&
+                    other.usesSurfaceInput == videoCodec.usesSurfaceInput &&
+                    other.encoderName != videoCodec.encoderName &&
+                    (activeBitrateMode == null || activeBitrateMode in other.supportedBitrateModes)
+            }.map { it.encoderName }.take(MAX_ALTERNATE_ENCODERS)
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * The MediaCodec encoder is created, configured, given its input surface and started. User sessions go
+     * through the encoder-init-fallback chain; benchmark launches, the DEBUG encoder bench and a switched-off
+     * entry keep the former single attempt (plus the temporal-layering retry).
+     */
+    private fun startMediaCodecEncoder() {
+        // Experimental bounded media age also verifies AV1 frames an encoder makes droppable on
+        // its own (no layering is requested), so call queues can skip proven non-reference frames.
+        // VP9 is excluded (see BoundedMediaAge.nonReferenceSkipAllowed).
+        if (experimentalTemporalLayers ||
+            DebugTunables.experimentalBoundedMediaAge && videoCodec.mimeType == MediaFormat.MIMETYPE_VIDEO_AV1
+        ) {
+            bitstreamDroppability = BitstreamDroppability(videoCodec.mimeType)
+        }
+        if (CameraPolicy.encoderInitFallbackEnabled(deviceTraits, bench = bench != null)) {
+            startWithInitFallback()
+        } else {
+            startSingleAttempt()
+        }
+    }
+
+    /**
+     * The MediaFormat for one attempt. [dropped] optional key groups are left out ([EncoderOptionalKey] order is
+     * the drop order); [lowPriority] sets KEY_PRIORITY 1 (only after resource errors). Returns the format and
+     * the optional key groups it carries. Required keys never change.
+     */
+    private fun buildEncoderFormat(
+        dropped: Set<EncoderOptionalKey>,
+        lowPriority: Boolean,
+    ): Pair<MediaFormat, List<EncoderOptionalKey>> {
+        val applied = mutableListOf<EncoderOptionalKey>()
+        val format = MediaFormat.createVideoFormat(
+            videoCodec.mimeType,
+            settings.resolution.width,
+            settings.resolution.height,
+        ).apply {
+            setInteger(
+                MediaFormat.KEY_COLOR_FORMAT,
+                if (videoCodec.usesSurfaceInput && debugRawInputFile == null) {
+                    MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                } else {
+                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
+                },
+            )
+            val startupShaping = keyFrameShapingFraction()
+            setInteger(
+                MediaFormat.KEY_BIT_RATE,
+                startupShaping?.let { (activeBitrate * it).toInt() } ?: activeBitrate,
+            )
+            if (startupShaping != null) shapedKeyFramePending = true
+            setInteger(MediaFormat.KEY_FRAME_RATE, settings.fps)
+            setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, settings.fps.toFloat())
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, keyFrameIntervalSeconds)
+            setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            // KEY_OPERATING_RATE stays unset on purpose: a huge value crashes configure on several Qualcomm
+            // and UniSoc parts (Media3 #810 / b/311206113), and a finite one has no measured benefit here.
+            setInteger(MediaFormat.KEY_PRIORITY, if (lowPriority) 1 else 0)
+            activeBitrateMode?.let { setInteger(MediaFormat.KEY_BITRATE_MODE, it) }
+            if (EncoderOptionalKey.COMPLEXITY !in dropped) {
+                activeComplexity?.let {
+                    setInteger(MediaFormat.KEY_COMPLEXITY, it)
+                    applied += EncoderOptionalKey.COMPLEXITY
+                }
+            }
+            // Experimental (off): cyclic intra refresh instead of periodic keyframes, where the
+            // encoder supports it; the applied period is read back from the output format.
+            if (EncoderOptionalKey.INTRA_REFRESH !in dropped) {
+                DebugTunables.intraRefreshFrames?.let {
+                    setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, it)
+                    applied += EncoderOptionalKey.INTRA_REFRESH
+                }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && EncoderOptionalKey.QP_BOUNDS !in dropped) {
+                var qpBounds = false
+                DebugTunables.hardwareQpMin?.let { qp ->
+                    setInteger(MediaFormat.KEY_VIDEO_QP_I_MIN, qp)
+                    setInteger(MediaFormat.KEY_VIDEO_QP_P_MIN, qp)
+                    qpBounds = true
+                }
+                DebugTunables.hardwareQpMax?.let { qp ->
+                    setInteger(MediaFormat.KEY_VIDEO_QP_I_MAX, qp)
+                    setInteger(MediaFormat.KEY_VIDEO_QP_P_MAX, qp)
+                    qpBounds = true
+                }
+                if (qpBounds) applied += EncoderOptionalKey.QP_BOUNDS
+            }
+            encodingStatisticsEnabled = EncoderOptionalKey.STATISTICS !in dropped && supportsEncodingStatistics()
+            if (encodingStatisticsEnabled) {
+                setInteger(
+                    MediaFormat.KEY_VIDEO_ENCODING_STATISTICS_LEVEL,
+                    MediaFormat.VIDEO_ENCODING_STATISTICS_LEVEL_1,
+                )
+                applied += EncoderOptionalKey.STATISTICS
+            }
+            // Experimental temporal layering: two layers are requested from the hardware
+            // encoder only with the extra DEBUG switch (error-resilient layered VP9 cost ~11 VMAF
+            // on the M31); output frames are only marked droppable after their bitstream proves it.
+            // Relay child thinning asks hardware AV1 for layers by itself; hardware VP9 (error-resilient
+            // layered VP9 cost ~11 VMAF on the M31) only with the extra DEBUG switch.
+            temporalLayeringRequested = EncoderOptionalKey.TEMPORAL_LAYERING !in dropped &&
+                experimentalTemporalLayers && (
+                DebugTunables.hardwareTemporalLayers ||
+                    DebugTunables.relayChildThinning && videoCodec.mimeType == MediaFormat.MIMETYPE_VIDEO_AV1
+                )
+            if (temporalLayeringRequested) {
+                setString(MediaFormat.KEY_TEMPORAL_LAYERING, TEMPORAL_LAYERING_SCHEMA)
+                applied += EncoderOptionalKey.TEMPORAL_LAYERING
+            }
+            // Experimental (off, V-14): KEY_LATENCY=1, never for H.264 Baseline (crbug 409110228); first key dropped.
+            if (EncoderOptionalKey.LATENCY !in dropped && CameraSwitches.encoderKeyLatency &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                encoderKeyLatencyAllowed(videoCodec.mimeType, Build.VERSION.SDK_INT, activeEncoderName)
+            ) {
+                setInteger(MediaFormat.KEY_LATENCY, 1)
+                applied += EncoderOptionalKey.LATENCY
+            }
+            // Experimental (off, V-11): explicit BT.709 limited-range SDR so no stage infers the data space.
+            if (EncoderOptionalKey.COLOUR !in dropped && CameraSwitches.encoderColourKeys) {
+                setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
+                setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+                setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                applied += EncoderOptionalKey.COLOUR
+            }
+        }
+        // Experimental (off, V-12): the vendor QP range is set after configure; listed here so the ladder knows.
+        if (EncoderOptionalKey.VENDOR_QP !in dropped && CameraSwitches.exynosQpRange != null &&
+            ExynosQpRange.scopedComponent(activeEncoderName)
+        ) {
+            applied += EncoderOptionalKey.VENDOR_QP
+        }
+        return format to applied
+    }
+
+    /** The former behaviour: one create/configure/start (benchmark launches, encoder bench, entry off). */
+    private fun startSingleAttempt() {
+        val (format, applied) = buildEncoderFormat(emptySet(), false)
+        val experimental = applied.filter { it == EncoderOptionalKey.LATENCY || it == EncoderOptionalKey.COLOUR || it == EncoderOptionalKey.VENDOR_QP }
+        try {
+            createConfigureStartSingle(format)
+        } catch (error: Exception) {
+            if (error is TemporalLayeringRefused || experimental.isEmpty()) throw error
+            // An Experimental key was requested and the encoder refused it: once more without them, never silently.
+            Log.w(
+                "BluetoothVideo",
+                "BENCHMARK encoder_experimental_keys: encoder=$activeEncoderName | requested=${experimental.joinToString("+") { it.label }} | " +
+                    "effective=none | reason=${error.javaClass.simpleName}: ${error.message.orEmpty().take(120)}",
+            )
+            releaseFailedCodec()
+            val retry = buildEncoderFormat(experimental.toSet(), false).first
+            createConfigureStartSingle(retry)
+        }
+    }
+
+    /**
+     * The one `BENCHMARK temporal_layering` line per encoder start (requested vs effective, never silent). A DEBUG
+     * benchmark launch that requested layers the encoder did not take is refused (`setup_refused:
+     * reason=temporal_layering_unsupported`) instead of measuring a single layer; a user session stays best effort.
+     */
+    private fun reportTemporalLayering(requested: Boolean, effective: Boolean, encoder: String, reason: String) {
+        val requestedSchema = if (requested) TEMPORAL_LAYERING_SCHEMA else null
+        val effectiveSchema = if (requested && effective) TEMPORAL_LAYERING_SCHEMA else null
+        val action = TemporalLayeringReport.action(requestedSchema, effectiveSchema, DebugTunables.benchmarkLaunch)
+        val line = TemporalLayeringReport.line(requestedSchema, effectiveSchema, encoder, reason)
+        if (action == TemporalLayeringReport.Action.SINGLE_LAYER_BEST_EFFORT) Log.w("BluetoothVideo", line)
+        else Log.i("BluetoothVideo", line)
+        if (action == TemporalLayeringReport.Action.REFUSE) {
+            val refusal = BenchmarkSetupRefusal.temporalLayeringRefusalLine(TEMPORAL_LAYERING_SCHEMA, encoder, reason)
+            Log.w("BluetoothVideo", refusal)
+            throw TemporalLayeringRefused(refusal)
+        }
+    }
+
+    private fun releaseFailedCodec() {
+        val failed = codec
+        codec = null
+        failed?.let { BoundedCall.runQuietly("encoder-release", ENCODER_RELEASE_TIMEOUT_MS, { it.release() }) { msg -> Log.w("BluetoothVideo", msg) } }
+        encoderSurface?.let { runCatching { it.release() } }
+        encoderSurface = null
+    }
+
+    private fun createConfigureStartSingle(format: MediaFormat) {
+        codec = MediaCodec.createByCodecName(activeEncoderName)
+        var configured = false
+        val layeringAskedFor = temporalLayeringRequested
+        if (temporalLayeringRequested) {
+            try {
+                checkNotNull(codec).setCallback(codecCallback, worker)
+                timedConfigure(checkNotNull(codec), format)
+                configured = true
+            } catch (error: Exception) {
+                // An encoder may reject the schema outright. A user session encodes single-layer (logged); a DEBUG
+                // benchmark launch that asked for layers is refused instead (the case would test no layering).
+                Log.w(
+                    "BluetoothVideo",
+                    "$activeEncoderName rejected temporal layering: ${error.message}; " +
+                        "encoding a single layer",
+                )
+                codec?.release()
+                codec = null
+                temporalLayeringRequested = false
+                format.removeKey(MediaFormat.KEY_TEMPORAL_LAYERING)
+                reportTemporalLayering(
+                    requested = true, effective = false, encoder = activeEncoderName,
+                    reason = "configure_rejected: ${error.javaClass.simpleName}: ${error.message.orEmpty()}",
+                )
+                codec = MediaCodec.createByCodecName(activeEncoderName)
+            }
+        }
+        if (configured) {
+            reportTemporalLayering(requested = true, effective = true, encoder = activeEncoderName, reason = "configure_accepted")
+        } else if (!layeringAskedFor) {
+            reportTemporalLayering(requested = false, effective = false, encoder = activeEncoderName, reason = "not_requested")
+        }
+        checkNotNull(codec).let { encoder ->
+            if (!configured) {
+                encoder.setCallback(codecCallback, worker)
+                timedConfigure(encoder, format)
+            }
+            if (videoCodec.usesSurfaceInput && debugRawInputFile == null) {
+                encoderSurface = encoder.createInputSurface()
+            }
+            applyVendorQpRange(encoder, activeEncoderName)
+            logEncoderCapabilities(encoder)
+            encoder.start()
+        }
+    }
+
+    /** Chain: drop optional keys newest first, retry resource errors, then the next encoder of the same codec. */
+    private fun startWithInitFallback() {
+        val (_, requestedKeys) = buildEncoderFormat(emptySet(), false)
+        val chain = EncoderInitChain(listOf(videoCodec.encoderName) + alternateEncoderNames(), requestedKeys)
+        val outcome = try {
+            chain.run({ attempt -> performEncoderInit(attempt) }) { error -> (error as? MediaCodec.CodecException)?.errorCode }
+        } catch (exhausted: EncoderInitExhausted) {
+            Log.w("BluetoothVideo", EncoderInitChain.benchmarkLine(videoCodec.encoderName, requestedKeys, null, exhausted))
+            if (EncoderOptionalKey.TEMPORAL_LAYERING in requestedKeys) {
+                Log.w(
+                    "BluetoothVideo",
+                    TemporalLayeringReport.line(TEMPORAL_LAYERING_SCHEMA, null, videoCodec.encoderName, "encoder_init_failed"),
+                )
+            }
+            throw exhausted.cause ?: exhausted
+        }
+        Log.i("BluetoothVideo", EncoderInitChain.benchmarkLine(videoCodec.encoderName, requestedKeys, outcome, null))
+        val effective = outcome.effective
+        // Layering-specific line: the chain may have dropped the key (it is optional, newest first) without saying so.
+        val layeringRequested = EncoderOptionalKey.TEMPORAL_LAYERING in requestedKeys
+        val layeringDropped = layeringRequested && EncoderOptionalKey.TEMPORAL_LAYERING in effective.dropped
+        reportTemporalLayering(
+            requested = layeringRequested,
+            effective = layeringRequested && !layeringDropped,
+            encoder = effective.encoder,
+            reason = TemporalLayeringReport.initFallbackReason(
+                layeringRequested, layeringDropped, outcome.records.firstOrNull { it.error != null }?.error,
+            ),
+        )
+        if (effective.encoder != videoCodec.encoderName || effective.dropped.isNotEmpty() || effective.lowPriority) {
+            // Requested vs effective stays visible: a different component or fewer keys than asked for.
+            onStatus(
+                "Encoder fallback: requested ${videoCodec.encoderName}, using ${effective.encoder}" +
+                    (effective.dropped.takeIf { it.isNotEmpty() }?.let { ", without ${it.joinToString("+") { key -> key.label }}" } ?: "") +
+                    if (effective.lowPriority) ", low priority" else "",
+            )
+        }
+    }
+
+    /** One chain attempt: create, configure (bounded), input surface, vendor keys, start (bounded). Throws on any stage. */
+    private fun performEncoderInit(attempt: EncoderInitAttempt) {
+        activeEncoderName = attempt.encoder
+        val (format, _) = buildEncoderFormat(attempt.dropped, attempt.lowPriority)
+        var created: MediaCodec? = null
+        var surface: Surface? = null
+        try {
+            // Published before start(), as the former path did: input-buffer callbacks use [codec] at once.
+            val encoder = MediaCodec.createByCodecName(attempt.encoder).also { created = it; codec = it }
+            encoder.setCallback(codecCallback, worker)
+            BoundedCall.run("encoder-configure", ENCODER_INIT_STAGE_TIMEOUT_MS) { timedConfigure(encoder, format) }
+            if (videoCodec.usesSurfaceInput && debugRawInputFile == null) {
+                surface = encoder.createInputSurface()
+                encoderSurface = surface
+            }
+            if (EncoderOptionalKey.VENDOR_QP !in attempt.dropped) applyVendorQpRange(encoder, attempt.encoder)
+            logEncoderCapabilities(encoder)
+            BoundedCall.run("encoder-start", ENCODER_INIT_STAGE_TIMEOUT_MS) { encoder.start() }
+        } catch (error: Throwable) {
+            codec = null
+            encoderSurface = null
+            surface?.let { runCatching { it.release() } }
+            created?.let { failed ->
+                BoundedCall.runQuietly("encoder-release", ENCODER_RELEASE_TIMEOUT_MS, { failed.release() }) { msg ->
+                    Log.w("BluetoothVideo", msg)
+                }
+            }
+            throw error
+        }
+    }
+
+    /** configure() with the first-call timing Chromium treats as suspicious above 800 ms. */
+    private fun timedConfigure(encoder: MediaCodec, format: MediaFormat) {
+        val startedNs = System.nanoTime()
+        encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        val ms = (System.nanoTime() - startedNs) / 1_000_000L
+        if (ms > CONFIGURE_SLOW_MS) {
+            Log.w("BluetoothVideo", "BENCHMARK encoder_configure_slow: encoder=$activeEncoderName | ms=$ms | thresholdMs=$CONFIGURE_SLOW_MS")
+        }
+    }
+
+    /**
+     * Experimental (V-12): the Exynos vendor QP range, only for the parameter names the component lists
+     * (getSupportedVendorParameters on API 31+, or the input/output format keys), after configure and before start.
+     */
+    private fun applyVendorQpRange(encoder: MediaCodec, name: String) {
+        val range = CameraSwitches.exynosQpRange ?: return
+        if (!ExynosQpRange.scopedComponent(name)) return
+        val listed = mutableSetOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) runCatching { listed += encoder.supportedVendorParameters }
+        runCatching { listed += encoder.inputFormat.keys }
+        runCatching { listed += encoder.outputFormat.keys }
+        val parameters = ExynosQpRange.parameters(listed, range)
+        if (parameters.isEmpty()) {
+            Log.i(
+                "BluetoothVideo",
+                "BENCHMARK vendor_qp_range: encoder=$name | requested=${range.first}-${range.last} | applied=none | " +
+                    "reason=component lists no sec-ext-enc-qp-range keys",
+            )
+            return
+        }
+        val result = runCatching {
+            encoder.setParameters(Bundle().apply { parameters.forEach { (key, value) -> putInt(key, value) } })
+        }
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK vendor_qp_range: encoder=$name | requested=${range.first}-${range.last} | " +
+                "applied=${parameters.entries.joinToString(",") { "${it.key}=${it.value}" }} | ok=${result.isSuccess}",
+        )
+    }
+
     private fun startRawInput(file: File) {
         val width = settings.resolution.width
         val height = settings.resolution.height
-        require(width % 2 == 0 && height % 2 == 0) { "I420 needs even dimensions" }
-        val frameBytes = width.toLong() * height * 3 / 2
-        require(frameBytes in 1..Int.MAX_VALUE.toLong() && file.length() >= frameBytes &&
-            file.length() % frameBytes == 0L
-        ) { "Raw fixture must contain complete ${width}x$height I420 frames" }
+        val declared = rawGeometry ?: (width to height)
+        val check = RawFixtureGeometry.check(file.length(), declared.first, declared.second, width, height)
+        Log.i("BluetoothVideo", RawFixtureGeometry.line(file.name, file.length(), rawGeometry, width, height, check))
+        if (!check.ok) {
+            // Visible refusal (never a silent change of geometry): requested = the fixture's declared size.
+            Log.w(
+                "BluetoothVideo",
+                BenchmarkSetupRefusal.rawFixtureGeometryLine(declared.first, declared.second, width, height, check.reason),
+            )
+        }
+        require(check.ok) { "Raw fixture refused: ${check.reason}" }
+        val frameBytes = checkNotNull(RawFixtureGeometry.frameBytes(width, height))
+        require(frameBytes in 1..Int.MAX_VALUE.toLong()) { "Raw frame is too large" }
         rawFrame = ByteArray(frameBytes.toInt())
         rawInput = RandomAccessFile(file, "r")
         worker.post(rawFeed)
@@ -554,7 +956,7 @@ class CameraVideoEncoder(
                 val width = settings.resolution.width
                 val height = settings.resolution.height
                 val frameBytes = width.toLong() * height * 3 / 2
-                Log.i("BluetoothVideo", "Benchmark raw source: ${file.name}, ${file.length() / frameBytes} looping I420 frames, ${width}x$height at ${settings.fps} FPS, ${videoCodec.encoderName}, ${settings.bitRate / 1_000} kbps, ${rateControl.label}, frame-zero PTS $rawStartedUs us; Camera2 and physical motion unmeasured")
+                Log.i("BluetoothVideo", "Benchmark raw source: ${file.name}, ${file.length() / frameBytes} looping I420 frames, ${width}x$height at ${settings.fps} FPS, ${activeEncoderName}, ${settings.bitRate / 1_000} kbps, ${rateControl.label}, frame-zero PTS $rawStartedUs us; Camera2 and physical motion unmeasured")
                 onStatus("Streaming ${videoCodec.displayName} at ${width}x$height, ${settings.fps} FPS, " +
                     "${settings.bitRate / 1_000} kbps, ${rateControl.label} mode $activeBitrateMode (recorded raw motion fixture)")
             }
@@ -653,14 +1055,21 @@ class CameraVideoEncoder(
         }
     }
 
-    private val cameraCallback = object : CameraDevice.StateCallback() {
+    private val cameraCallback: CameraDevice.StateCallback = object : CameraDevice.StateCallback() {
         override fun onOpened(openedCamera: CameraDevice) {
             if (closed.get()) {
                 openedCamera.close()
                 return
             }
             camera = openedCamera
+            openRetry.reset()
+            // A reopen for a session rebuild creates its session through the rebuilder (V-01).
+            if (rebuilder.onDeviceOpened()) return
             configureCaptureSession()
+        }
+
+        override fun onClosed(closedCamera: CameraDevice) {
+            rebuilder.onDeviceClosed()
         }
 
         override fun onDisconnected(disconnectedCamera: CameraDevice) {
@@ -670,13 +1079,41 @@ class CameraVideoEncoder(
 
         override fun onError(failedCamera: CameraDevice, error: Int) {
             failedCamera.close()
-            notifyFailure("Camera error $error")
+            if (closed.get()) return
+            // Transient errors are retried, policy errors explained, anything else reported as before (V-05).
+            val decision = openRetry.next(error)
+            Log.i(
+                "BluetoothVideo",
+                CameraOpenPolicy.benchmarkLine(decision, error, openRetry.attemptOf(error), openRetry.elapsedMs),
+            )
+            val delayMs = decision.retryDelayMs
+            val id = openedCameraId
+            if (delayMs == null || id == null) {
+                notifyFailure(decision.message)
+                return
+            }
+            captureSessionGeneration++
+            session = null
+            if (camera === failedCamera) camera = null
+            rebuilder.cancel()
+            onStatus(decision.message)
+            worker.postDelayed({
+                if (!closed.get()) {
+                    @SuppressLint("MissingPermission")
+                    val reopen = runCatching { cameraManager.openCamera(id, cameraCallback, worker) }
+                    reopen.exceptionOrNull()?.let { failure -> notifyFailure("Camera could not reopen: ${failure.message}", failure) }
+                }
+            }, delayMs)
         }
     }
 
     /** Replaces a SurfaceView surface that Android discarded while the activity was backgrounded. */
     fun refreshViewfinderSurface() {
-        if (closed.get() || camera == null) return
+        gpuCapture?.let { capture ->
+            if (!closed.get()) capture.refreshViewfinderSurface()
+            return
+        }
+        if (closed.get() || (camera == null && !rebuilder.busy)) return
         val cameraId = cameraManager.cameraIdFor(cameraLens) ?: return
         val characteristics = cameraManager.getCameraCharacteristics(cameraId)
         viewfinderSurface?.close()
@@ -693,7 +1130,7 @@ class CameraVideoEncoder(
                 if (!closed.get()) {
                     previewSurface = surface
                     worker.post {
-                        if (!closed.get()) configureCaptureSession()
+                        if (!closed.get()) rebuildCaptureSession()
                     }
                 }
             },
@@ -711,45 +1148,288 @@ class CameraVideoEncoder(
         }
     }
 
+    /**
+     * Rebuilds the session after the surface set changed (viewfinder refresh, template change). The mode comes
+     * from the device-family policy: the former immediate re-create, or waiting for onClosed, or a device
+     * reopen (V-01); see [CameraSessionRebuilder].
+     */
+    private fun rebuildCaptureSession() {
+        if (closed.get()) return
+        rebuilder.rebuild(rebuildMode)
+    }
+
+    private fun surfacesFor(plan: CameraStreamPlan, videoInputSurface: Surface): List<Surface> = listOfNotNull(
+        previewSurface.takeIf { plan.preview },
+        videoInputSurface,
+        referenceImageReader?.surface.takeIf { plan.reference },
+    )
+
+    /**
+     * Diagnostic (V-02): whether the platform says [targets] are a supported combination; true, false, or
+     * null when it cannot say (API below 29, an HAL without the query, any failure).
+     */
+    private fun sessionConfigurationSupported(device: CameraDevice, targets: List<Surface>): Boolean? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        return runCatching {
+            val configuration = SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                targets.map { OutputConfiguration(it) },
+                java.util.concurrent.Executor { command -> worker.post(command) },
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) = Unit
+                    override fun onConfigureFailed(session: CameraCaptureSession) = Unit
+                },
+            )
+            device.isSessionConfigurationSupported(configuration)
+        }.getOrNull()
+    }
+
+    /** Creates the capture session on the open camera: the first session, or the next one after a rebuild closed the old. */
     private fun configureCaptureSession() {
         val openedCamera = camera ?: return
         val videoInputSurface = encoderSurface ?: imageReader?.surface ?: return
-        val targets = listOfNotNull(previewSurface, videoInputSurface, referenceImageReader?.surface)
         val generation = ++captureSessionGeneration
-        session?.close()
-        session = null
+        val requested = CameraStreamPlan("full", previewSurface != null, referenceImageReader != null)
+        val requestedSupported = sessionConfigurationSupported(openedCamera, surfacesFor(requested, videoInputSurface))
+        var plan = requested
+        val viaSessionConfiguration = CameraSwitches.sessionConfiguration
+        if (viaSessionConfiguration) {
+            // Experimental: an unsupported set drops the reference reader, then the preview; recorded as requested != effective.
+            val chosen = CameraStreamPlanner.firstSupported(
+                CameraStreamPlanner.plans(requested.preview, requested.reference),
+            ) { candidate ->
+                if (candidate == requested) requestedSupported else sessionConfigurationSupported(openedCamera, surfacesFor(candidate, videoInputSurface))
+            }
+            if (chosen == null) {
+                Log.w("BluetoothVideo", "BENCHMARK camera_session: " + CameraStreamPlanner.effectiveNote(requested, null))
+                notifyFailure("Camera stream combination ${requested.streams} is not supported.")
+                return
+            }
+            plan = chosen
+        }
+        activePlan = plan
+        val targets = surfacesFor(plan, videoInputSurface)
         captureTargets = targets
-        runCatching { openedCamera.createCaptureSession(
-            targets,
-            object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(configuredSession: CameraCaptureSession) {
-                    if (closed.get() || generation != captureSessionGeneration) {
-                        configuredSession.close()
-                        return
-                    }
-                    session = configuredSession
-                    applyRepeatingRequest()
-                    val cameraFps = targetFpsRange?.let { "camera ${it.lower}–${it.upper} FPS" }
-                        ?: "camera default FPS"
-                    onStatus("Streaming ${videoCodec.displayName} at " +
-                        "${settings.resolution.width}×${settings.resolution.height}, ${settings.fps} FPS, " +
-                        "${settings.bitRate / 1_000} kbps, ${settings.latencyMs} ms budget, " +
-                        "${rateControl.label} mode $activeBitrateMode" +
-                        (activeComplexity?.let { ", complexity $it" } ?: "") +
-                        (nativeSpeedGovernor?.cpuUsed?.let { ", libaom cpu-used $it" } ?: "") +
-                        " ($cameraFps)")
-                }
-
-                override fun onConfigureFailed(failedSession: CameraCaptureSession) {
-                    failedSession.close()
-                    if (generation == captureSessionGeneration && !closed.get()) {
-                        notifyFailure("Camera capture session could not be configured.")
-                    }
-                }
-            },
-            worker,
-        ) }.onFailure { error ->
+        logCameraSession(requested, plan, requestedSupported, viaSessionConfiguration)
+        val callback = captureSessionCallback(generation)
+        runCatching {
+            if (viaSessionConfiguration) {
+                val configuration = SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    targets.map { OutputConfiguration(it) },
+                    java.util.concurrent.Executor { command -> worker.post(command) },
+                    callback,
+                )
+                // The AE fps range is a session parameter: the first request then needs no reconfiguration.
+                configuration.sessionParameters = buildCaptureRequest(openedCamera, targets)
+                openedCamera.createCaptureSession(configuration)
+            } else {
+                @Suppress("DEPRECATION")
+                openedCamera.createCaptureSession(targets, callback, worker)
+            }
+        }.onFailure { error ->
             notifyFailure("Camera capture session could not start: ${error.message}", error)
+        }
+    }
+
+    private fun captureSessionCallback(generation: Int): CameraCaptureSession.StateCallback = object : CameraCaptureSession.StateCallback() {
+        override fun onConfigured(configuredSession: CameraCaptureSession) {
+            if (closed.get() || generation != captureSessionGeneration) {
+                configuredSession.close()
+                return
+            }
+            session = configuredSession
+            applyRepeatingRequest()
+            val cameraFps = targetFpsRange?.let { "camera ${it.lower}–${it.upper} FPS" }
+                ?: "camera default FPS"
+            onStatus(streamingStatus(cameraFps))
+            armStallWatchdog(generation)
+        }
+
+        override fun onConfigureFailed(failedSession: CameraCaptureSession) {
+            failedSession.close()
+            if (generation == captureSessionGeneration && !closed.get()) {
+                notifyFailure("Camera capture session could not be configured.")
+            }
+        }
+
+        override fun onClosed(closedSession: CameraCaptureSession) {
+            if (closedSession === closingSession) {
+                closingSession = null
+                rebuilder.onSessionClosed()
+            }
+        }
+    }
+
+    private fun templateName(): String = if (captureTemplate == CameraDevice.TEMPLATE_PREVIEW) "PREVIEW" else "RECORD"
+
+    /** BENCHMARK camera_session: hardware level, stream set requested vs effective, the platform's answer, the AE range. */
+    private fun logCameraSession(
+        requested: CameraStreamPlan,
+        effective: CameraStreamPlan,
+        supported: Boolean?,
+        sessionConfiguration: Boolean,
+    ) {
+        val fpsRange = targetFpsRange?.let { FpsRange(it.lower, it.upper) }
+        val effectiveFps = CameraFpsRanges.effectiveMaxFps(fpsRange, streamMinFrameDurationsNs(effective))
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK camera_session: id=$openedCameraId | hardwareLevel=${CameraLevelCodes.name(hardwareLevel)} | " +
+                "${CameraStreamPlanner.effectiveNote(requested, effective)} | " +
+                "isSessionConfigurationSupported=${supported ?: "unknown"} | " +
+                "path=${if (sessionConfiguration) "session_configuration" else "legacy_list"} | template=${templateName()} | " +
+                "rebuildMode=$rebuildMode | aeRange=${fpsRange ?: "default"} | requestedFps=${settings.fps} | " +
+                "effectiveMaxFps=${effectiveFps ?: "unknown"}",
+        )
+    }
+
+    /** Minimum frame durations (ns) of the configured streams: a big extra stream caps the frame rate (V-03). */
+    private fun streamMinFrameDurationsNs(plan: CameraStreamPlan): List<Long> {
+        val id = openedCameraId ?: return emptyList()
+        val map = runCatching { cameraManager.getCameraCharacteristics(id) }.getOrNull()?.let { characteristics ->
+            safeCameraRead("SCALER_STREAM_CONFIGURATION_MAP") {
+                characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            }
+        } ?: return emptyList()
+        val durations = mutableListOf<Long>()
+        runCatching {
+            durations += if (videoCodec.usesSurfaceInput) {
+                map.getOutputMinFrameDuration(MediaCodec::class.java, android.util.Size(settings.resolution.width, settings.resolution.height))
+            } else {
+                map.getOutputMinFrameDuration(android.graphics.ImageFormat.YUV_420_888, android.util.Size(cameraInputWidth, cameraInputHeight))
+            }
+        }
+        if (plan.reference) {
+            runCatching {
+                durations += map.getOutputMinFrameDuration(
+                    android.graphics.ImageFormat.YUV_420_888,
+                    android.util.Size(settings.resolution.width, settings.resolution.height),
+                )
+            }
+        }
+        if (plan.preview) {
+            runCatching {
+                durations += map.getOutputMinFrameDuration(
+                    android.view.SurfaceHolder::class.java,
+                    android.util.Size(settings.resolution.width, settings.resolution.height),
+                )
+            }
+        }
+        return durations
+    }
+
+    /** BENCHMARK camera_geometry (V-21): the facts framing and rotation depend on, incl. the largest output size. */
+    private fun logCameraGeometry(cameraId: String?, characteristics: CameraCharacteristics) {
+        val sensorOrientation = safeCameraRead("SENSOR_ORIENTATION") { characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) }
+        val facing = safeCameraRead("LENS_FACING") { characteristics.get(CameraCharacteristics.LENS_FACING) }
+        val largest = runCatching {
+            val map = safeCameraRead("SCALER_STREAM_CONFIGURATION_MAP") {
+                characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            }
+            val sizes = if (videoCodec.usesSurfaceInput) map?.getOutputSizes(MediaCodec::class.java)
+            else map?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
+            sizes?.maxByOrNull { it.width.toLong() * it.height }?.let { "${it.width}x${it.height}" }
+        }.getOrNull()
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK camera_geometry: id=$cameraId | lensFacing=${facing ?: "unknown"} | sensorOrientation=${sensorOrientation ?: "unknown"} | " +
+                "largestOutput=${largest ?: "unknown"} | requested=${settings.resolution.width}x${settings.resolution.height} | " +
+                "encoderInput=${cameraInputWidth}x$cameraInputHeight | hardwareLevel=${CameraLevelCodes.name(hardwareLevel)}",
+        )
+    }
+
+    // ---- Frame-stall watchdog (V-06) ------------------------------------------------------------
+
+    private fun cancelStallChecks() {
+        stallChecks.forEach(worker::removeCallbacks)
+        stallChecks.clear()
+    }
+
+    private fun armStallWatchdog(generation: Int) {
+        cancelStallChecks()
+        if (debugRawInputFile != null || gpuActive || !CameraPolicy.isOn("camera-frame-stall-watchdog", deviceTraits)) return
+        val baseFrames = framesEncoded.get()
+        val armedMs = SystemClock.elapsedRealtime()
+        for (delayMs in longArrayOf(FrameStallWatchdog.FIRST_FRAME_MS, FrameStallWatchdog.WINDOW_MS)) {
+            val check = Runnable { checkFrameStall(generation, baseFrames, armedMs) }
+            stallChecks += check
+            worker.postDelayed(check, delayMs)
+        }
+    }
+
+    private fun checkFrameStall(generation: Int, baseFrames: Long, armedMs: Long) {
+        if (closed.get() || generation != captureSessionGeneration || stallReportedGeneration == generation) return
+        val elapsedMs = SystemClock.elapsedRealtime() - armedMs
+        val frames = (framesEncoded.get() - baseFrames).toInt()
+        val verdict = FrameStallWatchdog.verdict(elapsedMs, frames)
+        if (verdict == FrameStallWatchdog.Verdict.OK) return
+        stallReportedGeneration = generation
+        val step = stallLadder.next()
+        Log.w(
+            "BluetoothVideo",
+            FrameStallWatchdog.benchmarkLine(verdict, elapsedMs, frames, templateName(), activePlan.streams, stallLadder.responseLabel(step)),
+        )
+        if (step == FrameStallLadder.Step.TEMPLATE_PREVIEW) {
+            // Experimental response: requested TEMPLATE_RECORD, effective TEMPLATE_PREVIEW; the log above says so.
+            captureTemplate = CameraDevice.TEMPLATE_PREVIEW
+            onStatus("Camera delivered no frames; retrying with the preview template.")
+            rebuildCaptureSession()
+        }
+    }
+
+    private fun streamingStatus(cameraFps: String): String = "Streaming ${videoCodec.displayName} at " +
+        "${settings.resolution.width}×${settings.resolution.height}, ${settings.fps} FPS, " +
+        "${settings.bitRate / 1_000} kbps, ${settings.latencyMs} ms budget, " +
+        "${rateControl.label} mode $activeBitrateMode" +
+        (activeComplexity?.let { ", complexity $it" } ?: "") +
+        (nativeSpeedGovernor?.cpuUsed?.let { ", libaom cpu-used $it" } ?: "") +
+        " ($cameraFps)"
+
+    /**
+     * Marks the next [close] as a ladder rung change: the shared GPU capture then stays open for a
+     * moment so the next encoder finds the camera running (no camera restart). Any other close
+     * releases the camera at once.
+     */
+    fun retainCaptureForRestart() {
+        retainGpuCaptureOnClose = true
+    }
+
+    /**
+     * GPU scale ladder: this encoder's input surface joins the shared camera capture, which draws every
+     * frame into it at [VideoSettings.resolution] (the rung). Logs the encoder reset time (codec create,
+     * configure, start and attach) and, at the first frame, the time to the first encoded output.
+     */
+    private fun startGpuCapture() {
+        val request = checkNotNull(gpuScale)
+        val surface = checkNotNull(encoderSurface) { "GPU scale needs the encoder's input surface" }
+        val capture = try {
+            GpuScaleCapture.obtain(context, viewfinder, cameraLens, scaleMode, request, reusableViewfinderSurface)
+        } catch (error: Throwable) {
+            reusableViewfinderSurface?.second?.close()
+            throw error
+        }
+        gpuCapture = capture
+        capture.attach(this, surface, settings.resolution.width, settings.resolution.height, gpuListener)
+        gpuResetMs = (System.nanoTime() - gpuStartedNs) / 1_000_000.0
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK gpu_scale: rung=${settings.resolution.width}x${settings.resolution.height} | " +
+                "encoderResetMs=${"%.1f".format(gpuResetMs)} (codec create+configure+start+attach) | " +
+                "session=${request.session.width}x${request.session.height}@${request.fps} | ${capture.statsLine()}",
+        )
+    }
+
+    private val gpuListener = object : GpuScaleCapture.Listener {
+        override fun onStatus(message: String) {
+            if (!closed.get()) this@CameraVideoEncoder.onStatus(message)
+        }
+
+        override fun onFailure(error: Throwable) {
+            notifyFailure(error.message ?: error.javaClass.simpleName, error)
+        }
+
+        override fun onConfigured(cameraFpsText: String) {
+            if (!closed.get()) this@CameraVideoEncoder.onStatus(streamingStatus(cameraFpsText))
         }
     }
 
@@ -794,9 +1474,21 @@ class CameraVideoEncoder(
                 }
                 if (!firstVideoFrameSeen && flags and StreamProtocol.FLAG_CODEC_CONFIG == 0) {
                     firstVideoFrameSeen = true
+                    if (gpuActive) {
+                        Log.i(
+                            "BluetoothVideo",
+                            "BENCHMARK gpu_scale: rung=${settings.resolution.width}x${settings.resolution.height} | " +
+                                "firstFrameMs=${"%.1f".format((System.nanoTime() - gpuStartedNs) / 1_000_000.0)} " +
+                                "(encoder start to first output) | keyframe=${flags and StreamProtocol.FLAG_KEY_FRAME != 0}",
+                        )
+                    }
                     onFirstVideoFrame()
                 }
                 if (flags and StreamProtocol.FLAG_CODEC_CONFIG == 0) {
+                    framesEncoded.incrementAndGet()
+                    bitrateProbe.onFrame(System.nanoTime(), info.size)?.let { response ->
+                        Log.i("BluetoothVideo", bitrateProbe.line(response, activeEncoderName, videoCodec.mimeType))
+                    }
                     queuedInputTimesNs.remove(info.presentationTimeUs)?.let { queuedAtNs ->
                         inputToEncodedOutput.recordNanos(System.nanoTime() - queuedAtNs)
                     }
@@ -822,6 +1514,10 @@ class CameraVideoEncoder(
                         ?.getInteger(MediaFormat.KEY_VIDEO_QP_AVERAGE)
                     val pictureType = frameFormat?.takeIf { it.containsKey(MediaFormat.KEY_PICTURE_TYPE) }
                         ?.getInteger(MediaFormat.KEY_PICTURE_TYPE)
+                    if (qp != null && !qpScaleLogged) {
+                        qpScaleLogged = true
+                        Log.i("BluetoothVideo", QpScale.benchmarkLine(activeEncoderName, videoCodec.mimeType, qp))
+                    }
                     val encodeLatencyUs =
                         SystemClock.elapsedRealtimeNanos() / 1_000L - info.presentationTimeUs
                     val encodeLatencyMs = encodeLatencyUs.takeIf { it in 0..MAX_TRACE_ENCODE_LATENCY_US }
@@ -865,15 +1561,24 @@ class CameraVideoEncoder(
         }
 
         override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
+            lastOutputFormat = format
             debugMediaTrace?.setCodecFormat(format)
             if (closed.get()) return
             if (temporalLayeringRequested && !layeringFormatLogged) {
                 layeringFormatLogged = true
                 Log.i(
                     "BluetoothVideo",
-                    "${videoCodec.encoderName} temporal layering requested $TEMPORAL_LAYERING_SCHEMA, " +
+                    "${activeEncoderName} temporal layering requested $TEMPORAL_LAYERING_SCHEMA, " +
                         "reported ${format.getStringOrNull(MediaFormat.KEY_TEMPORAL_LAYERING) ?: "none"}",
                 )
+                if (DebugTunables.relayChildThinning) {
+                    Log.i(
+                        "BluetoothVideo",
+                        "BENCHMARK temporal_layering: encoder=${activeEncoderName} | mime=${videoCodec.mimeType} | " +
+                            "requested=$TEMPORAL_LAYERING_SCHEMA | " +
+                            "reported=${format.getStringOrNull(MediaFormat.KEY_TEMPORAL_LAYERING) ?: "none"}",
+                    )
+                }
             }
             format.getByteBuffer("csd-0")?.let { data ->
                 val bytes = ByteArray(data.remaining())
@@ -903,7 +1608,7 @@ class CameraVideoEncoder(
             if (selectedOffsetUs != 0L) {
                 Log.i(
                     "BluetoothVideo",
-                    "Normalized ${videoCodec.encoderName} video timestamps to the elapsed-realtime A/V epoch.",
+                    "Normalized ${activeEncoderName} video timestamps to the elapsed-realtime A/V epoch.",
                 )
             }
         }
@@ -963,6 +1668,13 @@ class CameraVideoEncoder(
                 if (debugRawInputFile != null) ", raw input drops $rawInputDrops" else "",
             ),
         )
+        gpuCapture?.let { capture ->
+            Log.i(
+                "BluetoothVideo",
+                "BENCHMARK gpu_scale: rung=${settings.resolution.width}x${settings.resolution.height} | " +
+                    "encoderResetMs=${"%.1f".format(gpuResetMs)} | ${capture.statsLine()}",
+            )
+        }
         // The bitrate adjuster replaces the 5 s output-rate trim for MediaCodec encoders while it is on.
         if (rateControl == EncoderRateControl.AUTOMATIC && DebugTunables.encoderRateTrim && bitrateAdjuster == null) {
             val requested = activeBitrate
@@ -994,13 +1706,31 @@ class CameraVideoEncoder(
      * the output format only when the component accepted it. Codec2 (S24 c2.exynos.vp9) lists its
      * vendor parameters and maps QP bounds and intra refresh to C2 tunings.
      */
+    /** DEBUG encoder bench: what the encoder reports it applied, and the live libaom state. */
+    internal fun benchReadback(): EncoderBenchReadback {
+        val format = lastOutputFormat
+        fun intOf(key: String): Int? = format?.takeIf { it.containsKey(key) }?.let {
+            runCatching { it.getInteger(key) }.getOrNull() ?: runCatching { it.getFloat(key).toInt() }.getOrNull()
+        }
+        return EncoderBenchReadback(
+            outputIntraRefreshPeriod = intOf(MediaFormat.KEY_INTRA_REFRESH_PERIOD),
+            outputBitrateMode = intOf(MediaFormat.KEY_BITRATE_MODE),
+            outputBitrateBps = intOf(MediaFormat.KEY_BIT_RATE),
+            outputFrameRate = intOf(MediaFormat.KEY_FRAME_RATE),
+            outputIFrameInterval = intOf(MediaFormat.KEY_I_FRAME_INTERVAL),
+            libaomCpuUsed = if (usesNativeAom) nativeSpeedGovernor?.cpuUsed else null,
+            libaomThreads = if (usesNativeAom) nativeThreadCount(settings.resolution) else null,
+            rawInputDrops = rawInputDrops,
+        )
+    }
+
     private fun logEncoderCapabilities(encoder: MediaCodec) {
         val line = runCatching {
             val capabilities = encoder.codecInfo.getCapabilitiesForType(videoCodec.mimeType)
             fun feature(name: String) = runCatching { capabilities.isFeatureSupported(name) }.getOrDefault(false)
             val path = when {
-                videoCodec.encoderName.startsWith("OMX.", ignoreCase = true) -> "omx"
-                videoCodec.encoderName.startsWith("c2.", ignoreCase = true) -> "codec2"
+                activeEncoderName.startsWith("OMX.", ignoreCase = true) -> "omx"
+                activeEncoderName.startsWith("c2.", ignoreCase = true) -> "codec2"
                 else -> "other"
             }
             val vendorParameters = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -1030,10 +1760,11 @@ class CameraVideoEncoder(
             }
             val burstKeys: (String) -> Boolean = { key ->
                 key.startsWith("vendor.") || "qp" in key || key == "intra-refresh-period" ||
-                    key == MediaFormat.KEY_BITRATE_MODE || key == MediaFormat.KEY_BIT_RATE
+                    key == MediaFormat.KEY_BITRATE_MODE || key == MediaFormat.KEY_BIT_RATE ||
+                    key == MediaFormat.KEY_STRIDE || key == MediaFormat.KEY_SLICE_HEIGHT
             }
             JSONObject()
-                .put("encoder", videoCodec.encoderName)
+                .put("encoder", activeEncoderName)
                 .put("path", path)
                 .put("api", Build.VERSION.SDK_INT)
                 .put("hardware", videoCodec.hardwareAccelerated)
@@ -1050,8 +1781,18 @@ class CameraVideoEncoder(
                 .put("input_format", input.keysMatching(burstKeys))
                 .put("output_format", output.keysMatching(burstKeys))
                 .toString()
-        }.getOrElse { error -> "{\"encoder\":\"${videoCodec.encoderName}\",\"error\":\"${error.javaClass.simpleName}\"}" }
+        }.getOrElse { error -> "{\"encoder\":\"${activeEncoderName}\",\"error\":\"${error.javaClass.simpleName}\"}" }
         Log.i("BluetoothVideo", "BENCHMARK encoder_capabilities v1 $line")
+        runCatching {
+            val video = encoder.codecInfo.getCapabilitiesForType(videoCodec.mimeType).videoCapabilities
+            Log.i(
+                "BluetoothVideo",
+                EncoderAlignment.line(
+                    activeEncoderName,
+                    EncoderAlignment.Report(video.widthAlignment, video.heightAlignment, settings.resolution.width, settings.resolution.height),
+                ),
+            )
+        }
     }
 
     private fun supportsEncodingStatistics(): Boolean {
@@ -1059,7 +1800,7 @@ class CameraVideoEncoder(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
         return runCatching {
             MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos
-                .first { it.name == videoCodec.encoderName }
+                .first { it.name == activeEncoderName }
                 .getCapabilitiesForType(videoCodec.mimeType)
                 .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_EncodingStatistics)
         }.getOrDefault(false)
@@ -1110,6 +1851,7 @@ class CameraVideoEncoder(
             )
             if (!nativeCopied) copyYuv420ToI420(source, input)
             nativeCopyLatency.recordNanos(System.nanoTime() - startedCopyNs)
+            if (firstFramesChecked < FIRST_FRAMES_CHECKED) checkFirstFramesI420(input)
             referenceRecorder?.record(source, visible)
             val presentationTimeUs = source.timestamp / 1_000
             inspectEncoderInput(presentationTimeUs, width = settings.resolution.width, height = settings.resolution.height) {
@@ -1129,7 +1871,24 @@ class CameraVideoEncoder(
         }
     }
 
-    private fun createNativeEncoder(cpuUsed: Int, bitrate: Int): NativeAomEncoder = NativeAomEncoder(
+    private fun createNativeEncoder(cpuUsed: Int, bitrate: Int): NativeAomEncoder {
+        markNativeInit()
+        return buildNativeEncoder(cpuUsed, bitrate)
+    }
+
+    /**
+     * Experimental `test_native_simd_safe_mode` (default off): a marker is written right before libaom initialises and
+     * cleared after the crash window without a crash, so the next start can tell a SIMD crash at init from any other
+     * (NativeSimdSafeMode). A no-op unless the switch is on.
+     */
+    private fun markNativeInit() {
+        if (!ThermalSwitches.simdSafeMode) return
+        val store = NativeSimdSafeMode.FileStore(context.filesDir)
+        NativeSimdSafeMode.markInit(store, true, System.currentTimeMillis(), android.os.Process.myPid())
+        Handler(Looper.getMainLooper()).postDelayed({ NativeSimdSafeMode.markStable(store) }, NativeSimdSafeMode.CRASH_WINDOW_MS)
+    }
+
+    private fun buildNativeEncoder(cpuUsed: Int, bitrate: Int): NativeAomEncoder = NativeAomEncoder(
         width = settings.resolution.width,
         height = settings.resolution.height,
         fps = settings.fps,
@@ -1206,7 +1965,7 @@ class CameraVideoEncoder(
         debugStageTrace?.record("encode_input", presentationTimeUs, input.remaining())
         var encoder = nativeEncoder ?: return
         try {
-            val keyFrameIntervalUs = settings.keyFrameIntervalSeconds * 1_000_000L
+            val keyFrameIntervalUs = keyFrameIntervalSeconds * 1_000_000L
             // Experimental temporal layering only; without it wantLayers is false, no encoder is
             // re-created and every frame is encoded with layer -1 (libaom's own references).
             val wantLayers = nativeTemporalLayers && droppableFramesWanted
@@ -1233,7 +1992,8 @@ class CameraVideoEncoder(
             val encodeLatencyMs = (System.nanoTime() - startedNs) / 1_000_000.0
             nativeEncodeLatency.recordNanos(System.nanoTime() - startedNs)
             var escalateToFastTools = false
-            nativeSpeedGovernor?.let { governor ->
+            // A pinned cpu-used (encoder bench) is never adapted, thermally raised or remembered.
+            nativeSpeedGovernor?.takeIf { bench?.libaomCpuUsed == null }?.let { governor ->
                 val previous = governor.cpuUsed
                 governor.applyThermalFloor(thermalSpeedFloor)?.let { raised ->
                     encoder.updateCpuUsed(raised)
@@ -1291,6 +2051,7 @@ class CameraVideoEncoder(
                 )
                 if (packet.keyFrame) lastNativeKeyFramePtsUs = packet.presentationTimeUs
                 burstAccumulator.record(packet.bytes.size, activeBitrate)
+                framesEncoded.incrementAndGet()
                 if (!firstVideoFrameSeen) {
                     firstVideoFrameSeen = true
                     onFirstVideoFrame()
@@ -1351,6 +2112,10 @@ class CameraVideoEncoder(
         plane: () -> LumaPlane,
     ) {
         val nowNs = System.nanoTime()
+        if (debugRawInputFile == null && privacyNoticeOn && !privacyNoticeShown && nowNs - lastHealthSampleNs >= HEALTH_SAMPLE_INTERVAL_NS) {
+            lastHealthSampleNs = nowNs
+            sampleFeedForPrivacyToggle(nowNs / 1_000_000L, width, height, plane())
+        }
         if (sceneCutShaper.timedOut(nowNs)) {
             Log.i("BluetoothVideo", "Scene-cut shaping: the shaped frame was not returned within 1 s; target restored")
             applyCodecTarget("scene-cut restore after timeout")
@@ -1388,7 +2153,7 @@ class CameraVideoEncoder(
             "BluetoothVideo",
             "BENCHMARK scene_cut v1 " + JSONObject()
                 .put("pts_us", presentationTimeUs)
-                .put("encoder", videoCodec.encoderName)
+                .put("encoder", activeEncoderName)
                 .put("changed_fraction", roundedForLog(result.changedFraction, 3))
                 .put("mean_delta", roundedForLog(result.meanDelta, 1))
                 .put("recent_median_delta", roundedForLog(result.recentMedianDelta, 1))
@@ -1443,7 +2208,7 @@ class CameraVideoEncoder(
                 "scale=${roundedForLog(adjuster.scale, 3)} | exponent=${adjuster.scaleExponent} | " +
                 "deviationKB=${roundedForLog(adjuster.deviationBytes / 1_000.0, 1)} | " +
                 "adjustments=${adjuster.adjustments} | ceilingHolds=${adjuster.ceilingHolds} | " +
-                "encoder=${videoCodec.encoderName}",
+                "encoder=${activeEncoderName}",
         )
         bitrateAdjusterLogStartedNs = nowNs
         bitrateAdjusterLogBytes = 0L
@@ -1482,6 +2247,64 @@ class CameraVideoEncoder(
         }
     }
 
+    /**
+     * V-07: a feed that stays black while the phone has a camera privacy toggle is almost certainly the toggle (no error is
+     * delivered). A notice only; the stream is untouched. Software-encoder YUV path only (surface input has no pixels).
+     */
+    private fun sampleFeedForPrivacyToggle(nowMs: Long, width: Int, height: Int, plane: LumaPlane) {
+        val mean = BlackFrameDetector.sampledMeanLuma(width, height, plane)
+        if (!blackFrameDetector.onSample(nowMs, mean)) return
+        val toggle = cameraPrivacyToggleSupported()
+        Log.i("BluetoothVideo", "BENCHMARK camera_black_feed: meanLuma=${"%.1f".format(java.util.Locale.US, mean)} | toggleSupported=$toggle")
+        if (toggle) {
+            privacyNoticeShown = true
+            onStatus("Camera access is turned off in Quick Settings.")
+        }
+    }
+
+    private fun cameraPrivacyToggleSupported(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        return runCatching {
+            context.getSystemService(android.hardware.SensorPrivacyManager::class.java)
+                ?.supportsSensorToggle(android.hardware.SensorPrivacyManager.Sensors.CAMERA) == true
+        }.getOrDefault(false)
+    }
+
+    /** V-19: average luma and chroma of the first YUV frames; only a suspect (black, purple, green) is logged. */
+    private fun checkFirstFramesImage(source: Image) {
+        firstFramesChecked++
+        runCatching {
+            val planes = source.planes
+            val chromaWidth = YuvPlaneCopy.chromaSize(source.width)
+            val chromaHeight = YuvPlaneCopy.chromaSize(source.height)
+            val y = PlaneSampler.mean(planes[0].buffer, planes[0].buffer.position(), planes[0].rowStride, planes[0].pixelStride, source.width, source.height)
+            val u = PlaneSampler.mean(planes[1].buffer, planes[1].buffer.position(), planes[1].rowStride, planes[1].pixelStride, chromaWidth, chromaHeight)
+            val v = PlaneSampler.mean(planes[2].buffer, planes[2].buffer.position(), planes[2].rowStride, planes[2].pixelStride, chromaWidth, chromaHeight)
+            reportFirstFrame(y, u, v)
+        }
+    }
+
+    private fun checkFirstFramesI420(input: ByteBuffer) {
+        firstFramesChecked++
+        runCatching {
+            val width = settings.resolution.width
+            val height = settings.resolution.height
+            val chromaWidth = YuvPlaneCopy.chromaSize(width)
+            val chromaHeight = YuvPlaneCopy.chromaSize(height)
+            val y = PlaneSampler.mean(input, 0, width, 1, width, height)
+            val u = PlaneSampler.mean(input, width * height, chromaWidth, 1, chromaWidth, chromaHeight)
+            val v = PlaneSampler.mean(input, width * height + chromaWidth * chromaHeight, chromaWidth, 1, chromaWidth, chromaHeight)
+            reportFirstFrame(y, u, v)
+        }
+    }
+
+    private fun reportFirstFrame(y: Double, u: Double, v: Double) {
+        val verdict = FirstFrameSanity.assess(y, u, v)
+        if (verdict != FirstFrameSanity.Verdict.OK) {
+            Log.w("BluetoothVideo", FirstFrameSanity.benchmarkLine(firstFramesChecked, y, u, v, verdict, activeEncoderName))
+        }
+    }
+
     private fun queuePendingFrame() {
         if (closed.get()) {
             pendingImage?.close()
@@ -1497,6 +2320,7 @@ class CameraVideoEncoder(
                 ?: throw IllegalStateException("Encoder did not expose a flexible YUV input image")
             val copyStartedNs = if (BuildConfig.DEBUG) System.nanoTime() else 0L
             copyYuv420(source, target)
+            if (firstFramesChecked < FIRST_FRAMES_CHECKED && debugRawInputFile == null) checkFirstFramesImage(source)
             if (BuildConfig.DEBUG) {
                 yuvCopyLatency.recordNanos(System.nanoTime() - copyStartedNs)
                 if (cameraTimestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
@@ -1542,7 +2366,7 @@ class CameraVideoEncoder(
             )
             val sourceBuffer = sourcePlane.buffer
             check(
-                YuvPlaneCopy.copyPlane(
+                copyPlaneOrClampTail(
                     sourceBuffer, sourceBuffer.position(), sourcePlane.rowStride, sourcePlane.pixelStride, sourceCrop,
                     target, planeOffset, targetWidth, 1, targetWidth, targetHeight,
                 ),
@@ -1551,6 +2375,31 @@ class CameraVideoEncoder(
         }
         target.position(0)
         target.limit(planeOffset)
+    }
+
+    /**
+     * [YuvPlaneCopy.copyPlane]; when it refuses (the layout reads past the buffer) and the Experimental
+     * `test_yuv_tail_clamp` is on, a plane short by only its last few samples is copied with the tail clamped (V-24).
+     */
+    private fun copyPlaneOrClampTail(
+        source: ByteBuffer, sourceOffset: Int, sourceRowStride: Int, sourcePixelStride: Int, region: PlaneRegion,
+        target: ByteBuffer, targetOffset: Int, targetRowStride: Int, targetPixelStride: Int, targetWidth: Int, targetHeight: Int,
+    ): Boolean {
+        if (YuvPlaneCopy.copyPlane(
+                source, sourceOffset, sourceRowStride, sourcePixelStride, region,
+                target, targetOffset, targetRowStride, targetPixelStride, targetWidth, targetHeight,
+            )
+        ) return true
+        if (!CameraSwitches.yuvTailClamp) return false
+        val clamped = YuvTailClamp.copyPlaneClamped(
+            source, sourceOffset, sourceRowStride, sourcePixelStride, region,
+            target, targetOffset, targetRowStride, targetPixelStride, targetWidth, targetHeight,
+        )
+        if (clamped && !tailClampLogged) {
+            tailClampLogged = true
+            Log.w("BluetoothVideo", "BENCHMARK yuv_tail_clamped: encoder=$activeEncoderName | pixelStride=$sourcePixelStride | rowStride=$sourceRowStride | limit=${source.limit()}")
+        }
+        return clamped
     }
 
     /** Luma size for plane 0, 4:2:0 chroma size otherwise. */
@@ -1587,6 +2436,7 @@ class CameraVideoEncoder(
 
     fun updateBitrate(bitRate: Int) {
         if (bitRate <= 0 || bitRate == activeBitrate) return
+        bitrateProbe.onRequest(System.nanoTime(), activeBitrate, bitRate)
         activeBitrate = bitRate
         rateTrim.onRequestChanged()
         applyEncoderTarget(if (rateControl == EncoderRateControl.AUTOMATIC) rateTrim.encoderTargetBps(bitRate) else bitRate)
@@ -1650,12 +2500,27 @@ class CameraVideoEncoder(
         applyCodecTarget("experimental framerate adjuster at $fps delivered FPS")
     }
 
+    /**
+     * The software encoder's live p95 encode time as a fraction of the frame interval at [effectiveFps],
+     * or null (hardware encoder, or fewer than 30 frames measured since this encoder started).
+     */
+    fun liveEncodeLoad(effectiveFps: Int): Double? {
+        if (!usesNativeAom || effectiveFps <= 0) return null
+        val encode = nativeEncodeLatency.snapshot()
+        return if (encode.samples >= LIVE_LOAD_MIN_SAMPLES) encode.p95Ms * effectiveFps / 1_000.0 else null
+    }
+
     fun updateFrameRate(maximumFps: Int) {
         val requestedFps = minOf(settings.fps, maximumFps).coerceAtLeast(1)
         worker.post {
             if (debugRawInputFile != null) {
                 rawInputFps = requestedFps
                 onStatus("Raw fixture frame rate: $requestedFps FPS")
+                return@post
+            }
+            gpuCapture?.let { capture ->
+                capture.setMaxFps(requestedFps)
+                onStatus("Frame rate limit: $requestedFps FPS (GPU scale capture)")
                 return@post
             }
             val nextRange = selectFpsRange(requestedFps)
@@ -1731,35 +2596,50 @@ class CameraVideoEncoder(
         }
     }
 
-    private fun selectFpsRange(maximumFps: Int): Range<Int>? =
-        availableFpsRanges
-            .filter { it.upper <= maximumFps }
-            .maxWithOrNull(compareBy<Range<Int>> { it.upper }.thenBy { it.lower })
-            // No range reaches down to the limit: the lowest-ceiling range, never one that lets the
-            // camera run faster (a [7,30] range containing a 7 FPS limit delivered up to 30 FPS).
-            ?: availableFpsRanges
-                .minWithOrNull(compareBy<Range<Int>> { it.upper }.thenByDescending { it.lower })
+    /**
+     * The AE target range for a frame-rate limit ([CameraFpsRanges]). The LEGACY-level smallest-lower rule is the
+     * Experimental `test_camera_legacy_ae_range` arm; otherwise the former rule.
+     */
+    private fun selectFpsRange(maximumFps: Int): Range<Int>? {
+        val legacy = CameraSwitches.legacyAeRange && CameraLevelCodes.isLegacy(hardwareLevel)
+        val chosen = CameraFpsRanges.select(availableFpsRanges.map { FpsRange(it.lower, it.upper) }, maximumFps, legacy)
+            ?: return null
+        return availableFpsRanges.first { it.lower == chosen.lower && it.upper == chosen.upper }
+    }
 
     private fun applyRepeatingRequest() {
         val activeCamera = camera ?: return
         val activeSession = session ?: return
         if (captureTargets.isEmpty()) return
         runCatching {
-            val request = activeCamera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                captureTargets.forEach(::addTarget)
-                if (continuousAutoFocusAvailable) {
-                    set(
-                        CaptureRequest.CONTROL_AF_MODE,
-                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
-                    )
-                }
-                targetFpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
-            }.build()
-            activeSession.setRepeatingRequest(request, if (BuildConfig.DEBUG) captureTimingCallback else null, worker)
+            val request = buildCaptureRequest(activeCamera, captureTargets)
+            // The completion callback costs one call per frame: DEBUG, or the Experimental release monitor (V-22/V-23).
+            val callback = if (BuildConfig.DEBUG || CameraSwitches.releaseCaptureTiming || CameraSwitches.rotateAndCropNone) {
+                captureTimingCallback
+            } else {
+                null
+            }
+            activeSession.setRepeatingRequest(request, callback, worker)
         }.onFailure { error ->
             notifyFailure("Camera frame-rate update failed: ${error.message ?: error.javaClass.simpleName}", error)
         }
     }
+
+    private fun buildCaptureRequest(activeCamera: CameraDevice, targets: List<Surface>): CaptureRequest =
+        activeCamera.createCaptureRequest(captureTemplate).apply {
+            targets.forEach(::addTarget)
+            if (continuousAutoFocusAvailable) {
+                set(
+                    CaptureRequest.CONTROL_AF_MODE,
+                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
+                )
+            }
+            targetFpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+            // Experimental (V-23): no system rotate-and-crop on large-screen / folded layouts (the encoder rotates itself).
+            if (CameraSwitches.rotateAndCropNone && rotateAndCropNoneSupported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                set(CaptureRequest.SCALER_ROTATE_AND_CROP, CameraMetadata.SCALER_ROTATE_AND_CROP_NONE)
+            }
+        }.build()
 
     private val captureTimingCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -1768,9 +2648,24 @@ class CameraVideoEncoder(
             result: TotalCaptureResult,
         ) {
             if (closed.get()) return
-            exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
-            sensorFrameDurationNs = result.get(CaptureResult.SENSOR_FRAME_DURATION)
-            cameraPipelineDepth = result.get(CaptureResult.REQUEST_PIPELINE_DEPTH)
+            if (BuildConfig.DEBUG) {
+                exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                sensorFrameDurationNs = result.get(CaptureResult.SENSOR_FRAME_DURATION)
+                cameraPipelineDepth = result.get(CaptureResult.REQUEST_PIPELINE_DEPTH)
+            }
+            if (CameraSwitches.releaseCaptureTiming) {
+                captureIntervals.onCapture(System.nanoTime())?.let { window ->
+                    Log.i("BluetoothVideo", captureIntervals.line(window))
+                }
+            }
+            if (CameraSwitches.rotateAndCropNone && !rotateAndCropLogged && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                rotateAndCropLogged = true
+                Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK camera_rotate_and_crop: requested=NONE | supported=$rotateAndCropNoneSupported | " +
+                        "effective=${result.get(CaptureResult.SCALER_ROTATE_AND_CROP) ?: "unreported"}",
+                )
+            }
         }
     }
 
@@ -1796,7 +2691,7 @@ class CameraVideoEncoder(
                 )
             ) return@forEachIndexed
             check(
-                YuvPlaneCopy.copyPlane(
+                copyPlaneOrClampTail(
                     sourceBuffer, sourceOffset, sourcePlane.rowStride, sourcePlane.pixelStride, sourceCrop,
                     targetBuffer, targetOffset, targetPlane.rowStride, targetPlane.pixelStride, targetWidth, targetHeight,
                 ),
@@ -1805,9 +2700,10 @@ class CameraVideoEncoder(
     }
 
     private fun nativeThreadCount(resolution: VideoResolution): Int {
+        bench?.libaomThreads?.let { return it }
         val cores = Runtime.getRuntime().availableProcessors()
         val pixels = resolution.width.toLong() * resolution.height
-        return when {
+        val count = when {
             pixels <= 640L * 360L && cores > 2 -> 2
             // Row-MT uses the extra cores; the speed governor turns the headroom into quality.
             pixels <= 720L * 480L && cores >= 8 -> 4
@@ -1816,9 +2712,14 @@ class CameraVideoEncoder(
             pixels >= 320L * 180L && cores > 2 -> 2
             else -> 1
         }
+        // Experimental test_userspace32_tier (default off): a 32-bit userspace on a 64-bit CPU caps the libaom threads.
+        return Userspace32Tier.nativeThreadCap(count, ThermalSwitches.userspace32Tier, android.os.Process.is64Bit())
     }
 
     private companion object {
+        /** Encode samples needed before the live load or the per-megapixel time means anything. */
+        const val LIVE_LOAD_MIN_SAMPLES = 30
+
         /**
          * Camera frames that may wait for the native encoder. Two dropped source frames on the A15s
          * whenever one encode overran the 66.7 ms budget (lane-a 2026-10-08); four turn such a burst
@@ -1831,6 +2732,14 @@ class CameraVideoEncoder(
         const val BITRATE_ADJUSTER_LOG_INTERVAL_NS = 1_000_000_000L
         const val MAX_TRACE_ENCODE_LATENCY_US = 60_000_000L
         const val CODEC_CLOSE_TIMEOUT_SECONDS = 5L
+        /** configure() and start() of one init attempt; a hung vendor component is abandoned (V-16). */
+        const val ENCODER_INIT_STAGE_TIMEOUT_MS = 10_000L
+        const val ENCODER_RELEASE_TIMEOUT_MS = 5_000L
+        /** A first configure() above this is logged as suspicious (Chromium's threshold). */
+        const val CONFIGURE_SLOW_MS = 800L
+        const val MAX_ALTERNATE_ENCODERS = 2
+        const val HEALTH_SAMPLE_INTERVAL_NS = 500_000_000L
+        const val FIRST_FRAMES_CHECKED = 3
     }
 
     override fun close() {
@@ -1843,6 +2752,9 @@ class CameraVideoEncoder(
         worker.removeCallbacks(rawFeed)
         imageReader?.setOnImageAvailableListener(null, null)
         referenceImageReader?.setOnImageAvailableListener(null, null)
+        // The EGL surface of this encoder's input surface goes before the codec is released.
+        gpuCapture?.detach(this, if (retainGpuCaptureOnClose) GpuScaleCapture.RESTART_KEEP_ALIVE_MS else 0L)
+        gpuCapture = null
         closeCameraAndCodecOnWorker()
         rawInput?.close()
         rawInput = null
@@ -1877,7 +2789,8 @@ class CameraVideoEncoder(
         debugMediaTrace = null
         previewSurface = null
         captureTargets = emptyList()
-        (viewfinderSurface ?: reusableViewfinderSurface?.second)?.close()
+        // A GPU-scaled capture owns the preview surface (it outlives this encoder across rung changes).
+        if (!gpuActive) (viewfinderSurface ?: reusableViewfinderSurface?.second)?.close()
         viewfinderSurface = null
         encoderSurface?.release()
         workerThread.quitSafely()
@@ -1898,17 +2811,27 @@ class CameraVideoEncoder(
         }
         runCatching {
             val store = EncoderBurstProfileStore(context)
+            // Encode time per megapixel (ms), for the Auto ladder's per-size load prediction.
+            nativeEncodeLatency.snapshot().takeIf { usesNativeAom && it.samples >= LIVE_LOAD_MIN_SAMPLES }?.let { encode ->
+                val megapixels = settings.resolution.width.toLong() * settings.resolution.height / 1_000_000.0
+                if (megapixels > 0.0 && encode.p95Ms > 0.0) {
+                    store.saveMsPerMegapixel(
+                        activeEncoderName,
+                        EncoderBurstRanking.mergeMsPerMegapixel(store.msPerMegapixel(activeEncoderName), encode.p95Ms / megapixels),
+                    )
+                }
+            }
             val record = EncoderBurstRanking.merge(
-                store.load(videoCodec.encoderName),
+                store.load(activeEncoderName),
                 sessionBurst,
                 encodeLoad,
                 System.currentTimeMillis(),
             )
-            store.save(videoCodec.encoderName, record)
+            store.save(activeEncoderName, record)
             Log.i(
                 "BluetoothVideo",
                 "BENCHMARK encoder_burst_profile v1 " + JSONObject()
-                    .put("encoder", videoCodec.encoderName)
+                    .put("encoder", activeEncoderName)
                     .put("session_burst_s", roundedForLog(sessionBurst, 3))
                     .put("largest_bytes", burstAccumulator.largestBytes)
                     .put("frames", burstAccumulator.frames)
@@ -1926,15 +2849,25 @@ class CameraVideoEncoder(
         val releaseCodec = Runnable {
             try {
                 captureSessionGeneration++
-                runCatching { session?.stopRepeating() }
-                runCatching { session?.close() }
-                session = null
-                runCatching { camera?.close() }
-                camera = null
+                rebuilder.cancel()
+                cancelStallChecks()
+                val activeSession = session
+                val activeCamera = camera
                 val activeCodec = codec
+                session = null
+                camera = null
                 codec = null
-                runCatching { activeCodec?.stop() }
-                runCatching { activeCodec?.release() }
+                // The camera stops feeding the codec Surface first, then the encoder stops and is released
+                // (never stop() while the camera still targets the Surface); codec calls are bounded (V-15/V-16).
+                EncoderShutdown { message -> Log.w("BluetoothVideo", message) }.run(
+                    EncoderShutdown.steps(
+                        stopRepeating = { activeSession?.stopRepeating() },
+                        closeSession = { activeSession?.close() },
+                        closeCamera = { activeCamera?.close() },
+                        stopCodec = { activeCodec?.stop() },
+                        releaseCodec = { activeCodec?.release() },
+                    ),
+                )
             } finally {
                 released.countDown()
             }

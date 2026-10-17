@@ -45,6 +45,16 @@ class Bmh3ReferenceTest(unittest.TestCase):
         self.assertNotEqual(ref.advert_binding(bytes(6), 0, 7), ref.advert_binding(bytes(6), 0, 8))
         self.assertEqual(len(binding), ref.BINDING_BYTES)
 
+    def test_a_verification_code_tag_key_is_an_expand_of_k_qr_and_differs_from_a_lease_key(self):
+        key = ref.qr_tag_key(ref.K_QR)
+        self.assertEqual(len(key), 32)
+        self.assertNotEqual(key, ref.K_QR)
+        self.assertNotEqual(key, ref.contact_tag_key(ref.K_QR))   # another info string: a lease key never opens a code
+        self.assertNotEqual(key, ref.qr_tag_key(bytes(32)))
+        vectors = {v["name"]: v for v in ref.build_vectors()["vectors"]}
+        self.assertEqual(vectors["link_qr_tag"]["order"], "R_FIRST")
+        self.assertEqual(vectors["link_qr_tag"]["inputs"]["tag_key_I"], key.hex())
+
     def test_extension_areas_are_always_112_bytes(self):
         for exts in ([], [(ref.EXT_INTENT, b"\x01")], [(ref.EXT_OPENING, ref.opening_value([ref.OPENING_ENTRY]))],
                      [(ref.EXT_OPENING, ref.opening_value([ref.OPENING_ENTRY] * 2))]):

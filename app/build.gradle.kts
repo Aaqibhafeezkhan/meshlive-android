@@ -12,7 +12,7 @@ val enableArmeabiV7a = (project.findProperty("enableArmeabiV7a") as String?)?.to
 
 // Per-ABI release APKs (tools/make_release.py passes -PsplitAbis=true -PenableArmeabiV7a=true; default OFF, so
 // debug and benchmark builds stay one APK). Splits produce arm64-v8a, armeabi-v7a and a universal APK, each with
-// its own versionCode = versionCode * 10 + ABI digit (the F-Droid/Signal convention; README "Distribution").
+// its own versionCode = versionCode * 10 + ABI digit (the F-Droid/Signal convention; docs/ARCHITECTURE.md "Distribution and releases").
 val splitAbis = (project.findProperty("splitAbis") as String?)?.toBoolean() == true
 val universalApk = (project.findProperty("universalApk") as String?)?.toBoolean() != false
 val abiVersionDigits = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2)
@@ -39,7 +39,7 @@ android {
     namespace = "com.example.bluetoothtest"
     compileSdk = 36
 
-    // Distribution flavours (README "Updates"): `github` is what make_release.py builds and ships on the
+    // Distribution flavours (docs/SWITCHES.md "Check for updates"): `github` is what make_release.py builds and ships on the
     // release page; it holds the opt-in updater (online check, download, PackageInstaller) and declares
     // REQUEST_INSTALL_PACKAGES. `fdroid` is what the F-Droid recipe builds: no updater code runs, no
     // install permission, no network request of its own. Both carry the "newer version nearby" notice.
@@ -62,8 +62,8 @@ android {
         applicationId = appId
         minSdk = 29
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0-beta"
+        versionCode = 3
+        versionName = "0.3.0-beta"
         // versionCode/versionName are literals: no date, git hash or counter, so a rebuild of a commit gets
         // the same version (the make_release.py and fastlane changelog readers parse these two lines).
 
@@ -177,7 +177,7 @@ tasks.register("testDebugUnitTest") {
     dependsOn("testGithubDebugUnitTest", "compileFdroidDebugUnitTestKotlin")
 }
 
-// Every resolved configuration is locked in app/gradle.lockfile (README "Build", toolchain pins).
+// Every resolved configuration is locked in app/gradle.lockfile (docs/ARCHITECTURE.md "Build notes", toolchain pins).
 dependencyLocking {
     lockAllConfigurations()
 }

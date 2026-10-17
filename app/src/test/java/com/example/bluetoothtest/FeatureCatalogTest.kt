@@ -98,7 +98,7 @@ class FeatureCatalogTest {
         assertEquals("test_dual_listening", ConnectivityFeatures.dualListening.benchmarkExtra)
         assertEquals("experimental_coc_auto_gatt", ConnectivityFeatures.cocAutoGatt.prefKey)
         assertEquals("experimental_classic_bond_free", ConnectivityFeatures.classicWithoutPairing.prefKey)
-        assertEquals("experimental_ios_compact_discovery", ConnectivityFeatures.iphoneDiscovery.prefKey)
+        assertEquals("experimental_ios_compact_discovery_v2", ConnectivityFeatures.iphoneDiscovery.prefKey)
         assertEquals("experimental_offline_app_share", ConnectivityFeatures.shareAppNearby.prefKey)
         assertEquals("experimental_dual_listening", ConnectivityFeatures.dualListening.prefKey)
         // One default constant per feature.

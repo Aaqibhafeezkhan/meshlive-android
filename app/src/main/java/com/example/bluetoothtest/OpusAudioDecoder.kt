@@ -34,6 +34,8 @@ class OpusAudioDecoder(
     private val debugTraceSession: String? = null,
     /** Experimental starvation concealment and silence-gated catch-up (AudioConcealment); calls only. */
     concealment: Boolean = false,
+    /** Audio-only live (Design AL): the 0..1 level of each decoded chunk, for the listening meter. */
+    private val onLevel: ((Float) -> Unit)? = null,
 ) : Closeable {
     private data class PcmPacket(
         val bytes: ByteArray,
@@ -107,7 +109,9 @@ class OpusAudioDecoder(
                 setByteBuffer("csd-$index", ByteBuffer.wrap(bytes))
             }
         }
-        val nativeRequested = communicationMode && DebugTunables.callNativeOpus
+        // Radio (audio-only live) has its own switch, independent of the call codec setting.
+        val radio = playbackDelayProfile == PlaybackDelayProfile.RADIO
+        val nativeRequested = (communicationMode && DebugTunables.callNativeOpus) || (radio && AudioLiveTunables.nativeOpus)
         nativeDecoder = if (nativeRequested) startNativeDecoder() else null
         if (nativeDecoder != null) {
             decoderName = "libopus ${NativeOpusBridge.nativeOpusVersion()}"
@@ -153,6 +157,22 @@ class OpusAudioDecoder(
             }
         }
         Log.i("BluetoothVideo", "Opus decoder $decoderName (${opusConfig.size} config buffers)")
+        if (radio) {
+            Log.i(
+                "BluetoothVideo",
+                AudioLiveCodecChoice.line(
+                    "decoder",
+                    if (nativeDecoder != null) "native" else "mediacodec",
+                    if (AudioLiveTunables.nativeOpus) "native" else "mediacodec",
+                    decoderName,
+                    reason = if (nativeDecoder == null && AudioLiveTunables.nativeOpus) {
+                        "native_unavailable: ${NativeOpusBridge.loadError?.message ?: "decoder could not start"}"
+                    } else {
+                        null
+                    },
+                ),
+            )
+        }
 
         val channelMask = if (header.audioChannelCount == 1) {
             AudioFormat.CHANNEL_OUT_MONO
@@ -164,7 +184,7 @@ class OpusAudioDecoder(
             channelMask,
             AudioFormat.ENCODING_PCM_16BIT,
         )
-        require(minimumBuffer > 0) { "Audio output does not support the stream format" }
+        MinBufferCheck.playbackProblem(minimumBuffer, header.audioSampleRate)?.let { error(it) }
         val playoutBytes = header.audioSampleRate * header.audioChannelCount * 2 *
             playbackDelayProfile.audioBufferMs / 1_000
         val audioBufferBytes = maxOf(minimumBuffer, playoutBytes)
@@ -190,6 +210,8 @@ class OpusAudioDecoder(
             )
             .setTransferMode(AudioTrack.MODE_STREAM)
             .setBufferSizeInBytes(audioBufferBytes)
+            // Radio is buffered by 600 ms or more already: the deep buffer saves power with the screen off.
+            .also { if (radio) it.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_POWER_SAVING) }
             .build()
         require(audioTrack.state == AudioTrack.STATE_INITIALIZED) {
             "Audio output could not be initialized"
@@ -392,6 +414,7 @@ class OpusAudioDecoder(
                 val concealer = concealer
                 if (concealer == null) {
                     val packet = pcmPackets.poll(ACTIVE_POLL_MS, TimeUnit.MILLISECONDS) ?: continue
+                    onLevel?.invoke(AudioLiveLevel.rms(packet.bytes))
                     // Late audio at startup is played, not discarded (no media loss): a viewer that joined
                     // behind a relay's backlog dropped every packet (463) because each one arrived after
                     // its start deadline. The playout clock grows its delay for late media (calls within
@@ -618,8 +641,19 @@ class OpusAudioDecoder(
         audioStarted = true
     }
 
+    /** The listener's own Mute and audio-focus loss silence the output; the link and the clock keep running. */
+    fun setMuted(muted: Boolean) {
+        runCatching { audioTrack.setVolume(if (muted) 0f else (DebugTunables.playbackGain ?: 1f)) }
+    }
+
     override fun close() {
         if (!running.getAndSet(false)) return
+        // A timed, serialized audio command (AudioTrack.stop/release can stall on some Exynos phones);
+        // `test_audio_off_main` runs it off the caller's main thread.
+        AudioCommandQueue.shared.offload("opus_decoder_close") { closeNow() }
+    }
+
+    private fun closeNow() {
         concealer?.let {
             if (BuildConfig.DEBUG) Log.i(
                 "BluetoothVideo",

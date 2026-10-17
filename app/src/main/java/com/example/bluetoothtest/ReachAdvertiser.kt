@@ -22,6 +22,12 @@ import kotlin.concurrent.thread
  * Graceful fallback: when the probe finds fewer than two free sets, or the start fails, nothing else
  * changes; the phone is then a helper only for callers that already know its offer. The set stops while
  * there is nothing to advertise for [EMPTY_STOP_MS], and restarts when entries appear.
+ *
+ * Device-family batch A: this is the [AdvertisingSetRole.REACH] set, second in priority after the session-critical
+ * set. It does not start when [AdvertisingBudget] has learned there is no room for it plus a spare, it releases its
+ * instance when the session-critical set needs it ([yieldForBudget]), its start cannot throw ([AdvertisingStart]),
+ * a failed start backs off instead of retrying every page tick, and a set the stack drops on its own is started
+ * again by the page tick after the [AdvertisingWatchdog] back-off.
  */
 internal class ReachAdvertiser(
     private val adapter: BluetoothAdapter,
@@ -36,7 +42,10 @@ internal class ReachAdvertiser(
     private val closed = AtomicBoolean(false)
     private val starting = AtomicBoolean(false)
     @Volatile private var set: AdvertisingSet? = null
-    private val callbacks = java.util.concurrent.CopyOnWriteArrayList<AdvertisingSetCallback>()
+    private val callbacks = java.util.concurrent.CopyOnWriteArrayList<ReachSetCallback>()
+    private val budget get() = AdvertisingBudget.shared
+    private val watchdog = AdvertisingWatchdog()
+    private var failedStarts = 0
     private var pageIndex = 0
     private var emptySinceMs = 0L
     @Volatile private var retryAtMs = 0L
@@ -48,6 +57,75 @@ internal class ReachAdvertiser(
     fun start() {
         if (closed.get()) return
         handler.post(::tick)
+    }
+
+    /** One callback per set: remembers whether the stack confirmed it, and whether MeshLive asked for its stop. */
+    private inner class ReachSetCallback(val ownedBefore: Int) : AdvertisingSetCallback() {
+        @Volatile var startedOk = false
+        @Volatile var stopRequested = false
+        @Volatile var deadByStack = false
+
+        override fun onAdvertisingSetStarted(advertisingSet: AdvertisingSet?, txPower: Int, status: Int) {
+            lastStartStatus = status
+            // A start stays pending until its callback: a second start must not overlap it.
+            starting.set(false)
+            if (closed.get() || stopRequested) {
+                if (status == ADVERTISE_SUCCESS) {
+                    budget.noteStopRequested(this)
+                    runCatching { adapter.bluetoothLeAdvertiser?.stopAdvertisingSet(this) }
+                }
+                return
+            }
+            if (status == ADVERTISE_SUCCESS) {
+                startedOk = true
+                failedStarts = 0
+                set = advertisingSet
+                budget.acquire(this, AdvertisingSetRole.REACH) { yieldForBudget() }
+            } else {
+                callbacks.remove(this)
+                failedStarts++
+                val verdict = budget.noteRefused(AdvertisingSetRole.REACH, status, ownedBefore, android.os.Build.VERSION.SDK_INT)
+                retryAtMs = android.os.SystemClock.elapsedRealtime() + AdvertisingWatchdog.startFailureBackoffMs(failedStarts, verdict.tooMany)
+            }
+            Log.i(
+                "BluetoothVideo",
+                (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                    "relayed_helper: reach_pages status=$status | tooMany=${status == ADVERTISE_FAILED_TOO_MANY_ADVERTISERS}",
+            )
+        }
+
+        override fun onAdvertisingSetStopped(advertisingSet: AdvertisingSet?) {
+            deadByStack = true
+            budget.noteStopped(this)
+            if (stopRequested || closed.get() || !startedOk) return
+            // The stack dropped a set MeshLive did not stop: the page tick starts a new one after the back-off.
+            if (callbacks.remove(this) && callbacks.isEmpty()) set = null
+            val now = android.os.SystemClock.elapsedRealtime()
+            when (val decision = watchdog.onUnexpectedStop()) {
+                is AdvertisingWatchdog.Decision.Restart -> {
+                    retryAtMs = if (AdvertisingPolicy.watchdogOn()) now + decision.delayMs else Long.MAX_VALUE
+                    Log.i(
+                        "BluetoothVideo",
+                        "adv_watchdog: label=reach_pages | event=restart_planned | delayMs=${decision.delayMs} | enabled=${AdvertisingPolicy.watchdogOn()}",
+                    )
+                }
+                is AdvertisingWatchdog.Decision.GiveUp -> {
+                    retryAtMs = now + SKIP_RETRY_MS
+                    Log.i("BluetoothVideo", "adv_watchdog: label=reach_pages | event=give_up | reason=${decision.reason}")
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    /**
+     * The session-critical set was refused for lack of an instance and asks this one to release its own
+     * ([AdvertisingBudget.preemptFor]): the reach set stops and does not retry for [SKIP_RETRY_MS].
+     */
+    fun yieldForBudget() {
+        retryAtMs = android.os.SystemClock.elapsedRealtime() + SKIP_RETRY_MS
+        stopSet()
+        Log.i("BluetoothVideo", "relayed_helper: reach_pages yielded to the stream's own advertisement")
     }
 
     private fun tick() {
@@ -85,6 +163,13 @@ internal class ReachAdvertiser(
         thread(name = "ReachAdvertiserStart", isDaemon = true) {
             try {
                 // The probe starts and stops throw-away sets; run it once per process (shared with titles).
+                val learned = if (AdvertisingPolicy.budgetOn()) budget.skipReason(AdvertisingSetRole.REACH) else null
+                if (learned != null) {
+                    starting.set(false)
+                    Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "relayed_helper: reach_pages skipped | $learned")
+                    retryAtMs = android.os.SystemClock.elapsedRealtime() + SKIP_RETRY_MS
+                    return@thread
+                }
                 val free = AdvertisingSetProbe.lastFree ?: runCatching { AdvertisingSetProbe.run(adapter) }.getOrDefault(0)
                 if (closed.get()) return@thread
                 if (free < TitleAdvertiser.MIN_FREE_SETS) {
@@ -102,43 +187,37 @@ internal class ReachAdvertiser(
                     starting.set(false)
                     return@thread
                 }
-                val newCallback = object : AdvertisingSetCallback() {
-                    override fun onAdvertisingSetStarted(advertisingSet: AdvertisingSet?, txPower: Int, status: Int) {
-                        lastStartStatus = status
-                        // A start stays pending until its callback: a second start must not overlap it.
-                        starting.set(false)
-                        if (closed.get()) {
-                            runCatching { adapter.bluetoothLeAdvertiser?.stopAdvertisingSet(this) }
-                            return
-                        }
-                        if (status == ADVERTISE_SUCCESS) {
-                            set = advertisingSet
-                        } else {
-                            callbacks.remove(this)
-                        }
-                        Log.i(
-                            "BluetoothVideo",
-                            (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
-                                "relayed_helper: reach_pages status=$status | tooMany=${status == ADVERTISE_FAILED_TOO_MANY_ADVERTISERS}",
-                        )
-                    }
-                }
+                if (AdvertisingPolicy.stopSettleOn()) budget.awaitPendingStops()
+                val newCallback = ReachSetCallback(ownedBefore = budget.owned())
                 callbacks.add(newCallback)
                 // A start whose callback never comes must not block every later attempt.
                 handler.postDelayed({ starting.set(false) }, START_TIMEOUT_MS)
-                runCatching {
-                    advertiser.startAdvertisingSet(
-                        TitleAdvertiser.parameters(),
-                        TitleAdvertiser.primaryData(),
-                        scanResponse(firstPage),
-                        null,
-                        null,
-                        newCallback,
+                EncoderBenchGuard.check("ReachAdvertiser.advertise")
+                if (AdvertisingPolicy.budgetOn() && budget.simulatedRefusal()) {
+                    // Experimental test_adv_budget_cap: behave like a controller whose instances are all in use.
+                    handler.post {
+                        newCallback.onAdvertisingSetStarted(null, 0, AdvertisingSetCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS)
+                    }
+                    return@thread
+                }
+                val refused = if (AdvertisingPolicy.nonThrowingStart()) {
+                    AdvertisingStart.request(
+                        advertiser, TitleAdvertiser.parameters(), TitleAdvertiser.primaryData(),
+                        scanResponse(firstPage), newCallback,
                     )
-                }.onFailure {
+                } else {
+                    runCatching {
+                        advertiser.startAdvertisingSet(
+                            TitleAdvertiser.parameters(), TitleAdvertiser.primaryData(), scanResponse(firstPage), null, null, newCallback,
+                        )
+                    }.exceptionOrNull()?.let { AdvertisingStart.STATUS_THREW }
+                }
+                if (refused != null) {
                     callbacks.remove(newCallback)
                     starting.set(false)
-                    Log.w("BluetoothVideo", "relayed_helper: reach_pages start threw ${it.javaClass.simpleName}")
+                    failedStarts++
+                    retryAtMs = android.os.SystemClock.elapsedRealtime() + AdvertisingWatchdog.startFailureBackoffMs(failedStarts, tooMany = false)
+                    Log.w("BluetoothVideo", "relayed_helper: reach_pages start failed (${AdvertisingStart.describe(refused)})")
                 }
             } catch (error: Exception) {
                 starting.set(false)
@@ -153,7 +232,12 @@ internal class ReachAdvertiser(
         // Every set this advertiser ever started, so a late callback cannot leave one transmitting.
         val started = callbacks.toList()
         callbacks.clear()
-        started.forEach { callback -> runCatching { adapter.bluetoothLeAdvertiser?.stopAdvertisingSet(callback) } }
+        started.forEach { callback ->
+            callback.stopRequested = true
+            budget.release(callback)
+            if (callback.startedOk && !callback.deadByStack) budget.noteStopRequested(callback)
+            runCatching { adapter.bluetoothLeAdvertiser?.stopAdvertisingSet(callback) }
+        }
     }
 
     override fun close() {

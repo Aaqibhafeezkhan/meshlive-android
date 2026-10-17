@@ -109,4 +109,47 @@ object MeshBandwidthEstimator {
 
     // Two 20 ms Opus access units share one encrypted transport record.
     private const val AUDIO_RECORDS_PER_SECOND = 25
+
+    /**
+     * Audio-only live (Design AL): bytes of one mesh record carrying [framesPerRecord] 20 ms Opus access units at
+     * [kbps]: hop header and tag 33 + mesh envelope 50 + endpoint header and tag 34 + inner packet header 13 = 130,
+     * plus the source's signature trailer (sequence 4 + signature 64) and the audio payload and the batch framing
+     * (a single unit has none, a pair 12, a batch 5 + 6 per unit).
+     */
+    fun audioLiveRecordBytes(kbps: Int, framesPerRecord: Int): Int {
+        require(kbps > 0 && framesPerRecord in AudioLive.MIN_BATCH_FRAMES..AudioLive.MAX_BATCH_FRAMES)
+        val payload = kbps * 1_000 / 8 * AudioLive.FRAME_MS * framesPerRecord / 1_000
+        val framing = when (framesPerRecord) {
+            1 -> 0
+            2 -> 12
+            else -> 5 + 6 * framesPerRecord
+        }
+        return AUDIO_LIVE_FRAMING_BYTES + payload + framing
+    }
+
+    /** Wire rate of one audio-only link, no margin. */
+    fun audioLiveWireKbps(kbps: Int, framesPerRecord: Int): Double =
+        audioLiveRecordBytes(kbps, framesPerRecord) * 8.0 * (1_000.0 / (AudioLive.FRAME_MS * framesPerRecord)) / 1_000
+
+    /** Planned wire load of one audio-only link with the 20% transport margin (Voice 24 kbps, 200 ms: 41.4). */
+    fun audioLivePerLinkKbps(kbps: Int, framesPerRecord: Int = AudioLive.DEFAULT_BATCH_FRAMES): Double =
+        audioLiveWireKbps(kbps, framesPerRecord) * (1 + TRANSPORT_MARGIN)
+
+    /** What a relay needs: one receiving link plus one forwarding link (Voice 24 kbps, 200 ms: 82.8). */
+    fun audioLiveRelayKbps(kbps: Int, framesPerRecord: Int = AudioLive.DEFAULT_BATCH_FRAMES): Double =
+        2 * audioLivePerLinkKbps(kbps, framesPerRecord)
+
+    /**
+     * Direct listeners a source admits for [aggregateKbps]: floor(budget / planned per-link), capped by [cap]
+     * (Design AL: the default cap of 4 stands until the fan-out ladder test sets it), never below 1.
+     */
+    fun audioLiveSourceChildren(
+        aggregateKbps: Double,
+        kbps: Int,
+        framesPerRecord: Int = AudioLive.DEFAULT_BATCH_FRAMES,
+        cap: Int = AudioLive.DEFAULT_MAX_CHILDREN,
+    ): Int = floor(aggregateKbps / audioLivePerLinkKbps(kbps, framesPerRecord)).toInt().coerceIn(1, cap)
+
+    private const val AUDIO_LIVE_FRAMING_BYTES = 33 + 50 + 34 + StreamProtocol.PACKET_HEADER_BYTES +
+        AudioLive.SEQ_BYTES + AudioLive.SIGNATURE_BYTES
 }

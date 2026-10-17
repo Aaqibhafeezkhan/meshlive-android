@@ -9,6 +9,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -107,6 +108,33 @@ class BluetoothVideoSender(
     @Volatile private var lastHeartbeatReceivedNs = 0L
     @Volatile private var linkLoad: NodeLinkLoad.Handle? = null
     @Volatile private var periodicChildHeartbeatExpected = false
+
+    /**
+     * What [noteStreamPhyLoss] needs once the link is gone. Created when the GATT link opens (the peer is then known only by
+     * its advertised prefix, [node] null for a rotating pseudonym) and completed when the hop peer authenticated.
+     */
+    private class PhyLossProbe(
+        val address: String,
+        val openedAtMs: Long,
+        val requestedTwoM: Boolean,
+        val gatt: GattVideoConnection?,
+        @Volatile var node: String?,
+    ) {
+        @Volatile var authenticatedAtMs = 0L
+        @Volatile var peerRelays = false
+    }
+
+    @Volatile private var phyLossProbe: PhyLossProbe? = null
+
+    /** Elapsed-realtime ms when the stream became connected (end-to-end handshake done); 0 while still setting up. */
+    @Volatile private var streamConnectedAtMs = 0L
+
+    /** test_phy_move_skip_backlog (default on for fixed-rate streams, PhyMoveSkip.enabled): arriving non-key video is dropped after a skip left no usable keyframe queued. */
+    private val moveSkipAwaitKeyFrame = PhyMoveSkip.AwaitKeyFrame()
+    private val moveSkipRecords = AtomicLong()
+
+    /** The exception that ended the link (worker or control thread), read by [noteStreamPhyLoss]. */
+    @Volatile private var linkFailure: Throwable? = null
     @Volatile private var currentThermalStatus = PowerManager.THERMAL_STATUS_NONE
     @Volatile private var endAcknowledgements: CountDownLatch? = null
     private val acknowledgedGroupReceivers = ConcurrentHashMap.newKeySet<NodeId>()
@@ -121,11 +149,20 @@ class BluetoothVideoSender(
     // Experimental stream delivery reports (version 3; both phones must run this build): what the
     // child received of what this link wrote. Used only under this phone's own switch.
     private val childDeliveryReports = DebugTunables.streamDeliveryReports
+    private val onTimeReports = DebugTunables.onTimeReports
+    private val onTimeSeedRaise = DebugTunables.onTimeSeedRaise
+    // Experimental (default off): join probe seed and seed-raise drain guard, see LinkPacer.
+    private val joinProbeSeed = DebugTunables.joinProbeSeed
+    private val seedRaiseDrainGuard = DebugTunables.seedRaiseDrainGuard
     @Volatile private var childDelivery = PeerDeliveryEstimate()
     private val pacer = LinkPacer()
     @Volatile private var linkTransport: BluetoothTransportOption? = null
     private var debugIntegrityEnabled = false
     private var debugStageTrace: DebugStageTrace? = null
+
+    /** Experimental audio-only live stream (Design AL): non-null while this child is sent a radio stream. */
+    @Volatile private var audioLive: AudioLiveSendConfig? = null
+    @Volatile private var audioSendQueue: AudioLiveSendQueue<Packet>? = null
 
     @SuppressLint("MissingPermission")
     fun connect(
@@ -147,11 +184,27 @@ class BluetoothVideoSender(
          * Its identity is then proven by the listener's link opening (role 2) instead of the prefix.
          */
         selectedRotatingRequest: DiscoveryAnnouncement? = null,
+        /** Experimental audio-only live stream: no video codec, header BTL1, every record signed by the source. */
+        audioLiveConfig: AudioLiveSendConfig? = null,
         onConnected: () -> Unit,
     ) {
+        audioLive = audioLiveConfig
+        audioSendQueue = audioLiveConfig?.let { config ->
+            AudioLiveSendQueue(
+                packets,
+                sheddable = { it.streamState == null && AudioLiveShed.isSourceRecordSheddable(it.flags) },
+                queuedAtNs = { it.queuedAtNs },
+                sizeOf = { it.bytes.size },
+                ageBound = config.ageBound,
+            )
+        }
         debugIntegrityEnabled = BuildConfig.DEBUG && proveVideoIntegrityForTest
         linkTransport = transport
         debugStageTrace = DebugStageTrace.startIfRequested(debugTraceSession, "broadcast_transport")
+        phyLossProbe = null
+        linkFailure = null
+        streamConnectedAtMs = 0L
+        moveSkipAwaitKeyFrame.reset()
         workerThread = thread(name = "BluetoothConnect") {
             try {
                 val identity = AndroidNodeIdentityStore().getOrCreate()
@@ -221,7 +274,16 @@ class BluetoothVideoSender(
                     onStatus("Keeping the GATT control connection active for CoC link priority.")
                 }
 
-                val gattPriority = DebugTunables.sourceGattPriority ?: gattVideoPriority(settings.bitRate / 1_000)
+                val gattPriority = DebugTunables.sourceGattPriority
+                    ?: if (audioLiveConfig != null && AudioLiveTunables.balancedLinkPriority) {
+                        BleConnectionPriority.BALANCED // Experimental arm test_audio_live_link_priority=balanced
+                    } else {
+                        gattVideoPriority(settings.bitRate / 1_000)
+                    }
+                // Experimental test_phy_after_auth (default off): the GATT link opens on 1M and asks for 2M only once the hop
+                // peer is authenticated, so the memory is read by the authenticated node (a rotating advertised prefix cannot
+                // be looked up) and the hop handshake runs on 1M.
+                val deferPhy = DebugTunables.phyAfterAuth && transport == BluetoothTransportOption.BLE_GATT
                 val activeGattConnection = if (transport == BluetoothTransportOption.BLE_GATT) {
                     GattVideoClient.open(
                         context,
@@ -229,6 +291,8 @@ class BluetoothVideoSender(
                         linkPhy,
                         gattPriority,
                         onStatus,
+                        deferPhy = deferPhy,
+                        onPhyMove = ::skipBacklogAfterPhyMove,
                         onWriteTiming = if (BuildConfig.DEBUG && debugGattWriteTiming) {
                             { summary -> android.util.Log.i("BluetoothVideo", summary) }
                         } else {
@@ -239,6 +303,16 @@ class BluetoothVideoSender(
                     }
                 } else {
                     null
+                }
+                if (activeGattConnection != null) {
+                    phyLossProbe = PhyLossProbe(
+                        address = device.address,
+                        openedAtMs = SystemClock.elapsedRealtime(),
+                        requestedTwoM = linkPhy == BlePhyPreference.TWO_M,
+                        gatt = activeGattConnection,
+                        node = expectedPeerNodeIdPrefix?.takeIf { selectedRotatingRequest == null }
+                            ?.let(AdaptivePhyMemory::prefixLabel),
+                    )
                 }
                 val rawInput = activeGattConnection?.inputStream ?: connectedSocket?.inputStream
                     ?: error("Bluetooth input is unavailable")
@@ -293,11 +367,26 @@ class BluetoothVideoSender(
                 }
                 secureSession = session
                 AdaptivePhyMemory.bind(device.address, transport, session.peerNodeId.shortLabel())
+                phyLossProbe?.let { probe ->
+                    probe.node = session.peerNodeId.shortLabel()
+                    probe.peerRelays = session.peerCapabilities.maxChildren > 0
+                    probe.authenticatedAtMs = SystemClock.elapsedRealtime()
+                }
+                if (deferPhy && activeGattConnection != null) {
+                    val wanted = phyAfterAuth(linkPhy, AdaptivePhyMemory.isBad(transport, session.peerNodeId.shortLabel()))
+                    val requested = wanted == BlePhyPreference.TWO_M && activeGattConnection.requestPhy(wanted)
+                    Log.i(
+                        "BluetoothVideo",
+                        "BENCHMARK phy_after_auth: link=stream | node=${session.peerNodeId.shortLabel()} | wanted=${wanted.label} | " +
+                            "requested=$requested | remembered=${wanted != linkPhy}",
+                    )
+                }
                 // test_coc_phy_after_connect (default off): PHY only now, before the end-to-end handshake.
                 bleControlConnection?.requestPhyAfterConnect("stream")
 
                 onStatus("Authenticating the final video receiver…")
                 val groupSession = if (session.peerCapabilities.maxChildren > 1) {
+                    require(audioLiveConfig == null) { "A group relay cannot take an audio-only stream" }
                     BroadcastGroupHandshake.initiate(
                         context,
                         session,
@@ -317,7 +406,7 @@ class BluetoothVideoSender(
                 val labelsOn = PeerLabelFeature.enabled
                 val contentSession = if (groupSession == null) {
                     EndToEndVideoHandshake.initiate(session, identity, PeerLabelFeature.advertise(capabilities, labelsOn)).also { endpoint ->
-                        require(endpoint.peerCapabilities.decodeCodecMask and codec.capabilityMask != 0) {
+                        require(audioLiveConfig != null || endpoint.peerCapabilities.decodeCodecMask and codec.capabilityMask != 0) {
                             "Final receiver cannot decode ${codec.displayName.substringBefore(" - ")}"
                         }
                         endToEndSession = endpoint
@@ -373,8 +462,10 @@ class BluetoothVideoSender(
                     session.writer,
                     groupSession?.streamSealer ?: requireNotNull(contentSession).sealer,
                     identity.nodeId,
-                    useMeshEnvelope = session.peerCapabilities.maxChildren > 0,
-                    meshStreamId = groupSession?.streamId,
+                    // An audio-only stream is always a mesh stream with one shared stream ID, so the source signs
+                    // each record once for every child (the signature binds the stream ID).
+                    useMeshEnvelope = audioLiveConfig != null || session.peerCapabilities.maxChildren > 0,
+                    meshStreamId = audioLiveConfig?.signer?.streamId ?: groupSession?.streamId,
                 )
                 acknowledgedGroupReceivers.clear()
                 endAcknowledgements = CountDownLatch(groupSession?.receiverCount ?: 1)
@@ -394,12 +485,16 @@ class BluetoothVideoSender(
                     LabelRecords.write(session.writer, contentSession.sealer, labels)
                     android.util.Log.i("BluetoothVideo", "BENCHMARK peer_labels stream_tx: count=${labels.size} | peer=${contentSession.peerNodeId.shortLabel()}")
                 }
-                streamWriter.writeHeader(
-                    codec.protocolId,
-                    settings,
-                    rotationDegrees,
-                    includeAudio,
-                )
+                if (audioLiveConfig != null) {
+                    streamWriter.writeAudioLiveHeader(audioLiveConfig.signer)
+                } else {
+                    streamWriter.writeHeader(
+                        codec.protocolId,
+                        settings,
+                        rotationDegrees,
+                        includeAudio,
+                    )
+                }
                 session.writer.flush()
                 if (BuildConfig.DEBUG && corruptFirstVideoRecordForTest) {
                     (groupSession?.streamSealer ?: requireNotNull(contentSession).sealer)
@@ -418,9 +513,15 @@ class BluetoothVideoSender(
                 }
                 running.set(true)
                 startPeriodicFlusher(session, ioConfig.flushPolicy)
-                onStatus("Connected over ${transport.shortLabel}. Starting " +
-                    "${settings.resolution.width}×${settings.resolution.height} " +
-                    "${settings.fps} FPS ${codec.displayName} stream…")
+                onStatus(
+                    if (audioLiveConfig != null) {
+                        "Connected over ${transport.shortLabel}. Starting an audio-only stream…"
+                    } else {
+                        "Connected over ${transport.shortLabel}. Starting " +
+                            "${settings.resolution.width}×${settings.resolution.height} " +
+                            "${settings.fps} FPS ${codec.displayName} stream…"
+                    },
+                )
                 onStatus(
                     "Authenticated link peer ${session.peerNodeId.shortLabel()} and final receiver " +
                         "${contentSession?.peerNodeId?.shortLabel() ?: "group-${groupSession?.receiverCount}"}; " +
@@ -435,6 +536,7 @@ class BluetoothVideoSender(
                 } else {
                     startSourceControlReader(session, requireNotNull(contentSession))
                 }
+                streamConnectedAtMs = SystemClock.elapsedRealtime()
                 onConnected()
 
                 val startedNs = System.nanoTime()
@@ -454,20 +556,30 @@ class BluetoothVideoSender(
                 // Pace from the first write; the child's first arrival report replaces the seed.
                 LinkPacerSeed.seed(pacer, transport, session.peerNodeId.shortLabel())?.let { kbps ->
                     Log.i("BluetoothVideo", "Link pacer seeded at $kbps kbps until the child's first report (${transport.shortLabel})")
+                    if (joinProbeSeed && pacer.beginJoinProbe()) {
+                        Log.i("BluetoothVideo", "Join probe: the link is unpaced for up to 1.5 s or 32 KiB so the child can time it")
+                    }
                 }
                 val writeLatency = RollingLatencyStats()
                 val transmitMps = connectedSocket?.let {
                     runCatching { it.maxTransmitPacketSize }.getOrDefault(0)
                 } ?: 0
                 while (running.get()) {
+                    if (joinProbeSeed) {
+                        pacer.expireJoinProbe()?.let {
+                            Log.i("BluetoothVideo", it.benchmarkLine("stream_tx", session.peerNodeId.shortLabel()))
+                        }
+                    }
                     // Wait for link credit before choosing the packet, so audio that arrives
                     // meanwhile still goes first.
                     // Audio is never held for credit: paced audio arrived late (96 drops).
+                    var heldNs = 0L
                     while (running.get() && packets.none(Packet::isAudio)) {
                         val waitNs = pacer.waitNs()
                         if (waitNs <= 0L) break
                         val sliceNs = minOf(waitNs, PACING_SLICE_NS)
                         Thread.sleep(sliceNs / 1_000_000L, (sliceNs % 1_000_000L).toInt())
+                        heldNs += sliceNs
                     }
                     val packet = takeNextPacket()
                     queuedBytes.addAndGet(-packet.bytes.size.toLong())
@@ -486,12 +598,17 @@ class BluetoothVideoSender(
                     }
                     val wireBytes = packet.streamState?.let { state ->
                         streamWriter.writeState(state)
-                    } ?: streamWriter.writePacket(
-                        packet.flags,
-                        packet.timeUs,
-                        packet.bytes,
-                    )
+                    } ?: if (audioLiveConfig != null) {
+                        streamWriter.writeAudioLiveRecord(AudioLiveSignedRecord(packet.flags, packet.timeUs, packet.bytes))
+                    } else {
+                        streamWriter.writePacket(
+                            packet.flags,
+                            packet.timeUs,
+                            packet.bytes,
+                        )
+                    }
                     pacer.onSent(wireBytes, writeStartedNs)
+                    if (seedRaiseDrainGuard) pacer.noteWrite(heldNs, System.nanoTime() - writeStartedNs)
                     if (packet === lastLargePacket) {
                         burstDrain.onLargeFrameWritten(System.nanoTime())
                         lastLargePacket = null
@@ -575,7 +692,7 @@ class BluetoothVideoSender(
                         if (expectPeriodicChildHeartbeat &&
                             nowNs - lastHeartbeatReceivedNs >= receiverHeartbeatTimeoutNs(transport)
                         ) {
-                            throw IOException("Immediate child heartbeat timed out")
+                            throw IOException(StreamPhyLoss.HEARTBEAT_TIMED_OUT)
                         }
                         // A backlog or a late child means this link fell behind its offer: capacity evidence.
                         // Experimental thinning counts the same way (always 0 while the experiment is off).
@@ -628,10 +745,13 @@ class BluetoothVideoSender(
             } catch (interrupted: InterruptedException) {
                 Thread.currentThread().interrupt()
             } catch (error: Exception) {
+                linkFailure = error
                 if (running.get() || socket != null || gattConnection != null) {
+                    if (audioLive != null) AudioLiveLog.failure("sender:${Thread.currentThread().name}", error)
                     onStatus("Bluetooth stopped: ${error.message ?: error.javaClass.simpleName}")
                 }
             } finally {
+                runCatching { noteStreamPhyLoss() }
                 running.set(false)
                 linkLoad?.close()
                 linkLoad = null
@@ -655,6 +775,60 @@ class BluetoothVideoSender(
 
     internal fun expectsPeriodicChildHeartbeat(): Boolean = periodicChildHeartbeatExpected
 
+    /**
+     * A direct GATT stream whose 2M link went silent soon after hop authentication marks the hop peer bad on 2M, so the next
+     * link to it starts on 1M ([StreamPhyLoss], `test_stream_adaptive_phy`). Runs once, from the worker's cleanup, before the
+     * link objects are released.
+     */
+    private fun noteStreamPhyLoss() {
+        val probe = phyLossProbe ?: return
+        phyLossProbe = null
+        val linkKind = linkTransport ?: return
+        val nowMs = SystemClock.elapsedRealtime()
+        val status = probe.gatt?.disconnectStatus?.invoke() ?: -1
+        val cause = StreamPhyLoss.cause(
+            status,
+            linkFailure,
+            connected = streamConnectedAtMs > 0L,
+            sinceOpenMs = nowMs - probe.openedAtMs,
+        )
+        if (cause == StreamPhyLoss.Cause.OTHER) return
+        val windowStartMs = if (probe.authenticatedAtMs > 0L) probe.authenticatedAtMs else probe.openedAtMs
+        val supervisionMs = LeConnectionParameterLog.latest(probe.address)?.supervisionTimeoutMs?.toLong() ?: 0L
+        val heartbeatMs = lastHeartbeatReceivedNs.takeIf { it > 0L }
+            ?.let { nowMs - (System.nanoTime() - it) / 1_000_000L } ?: 0L
+        val silentSinceMs = StreamPhyLoss.silentSinceMs(cause, nowMs, supervisionMs, heartbeatMs)
+        val phy = runCatching { probe.gatt?.phySummary?.invoke() }.getOrNull().orEmpty()
+        val node = probe.node
+        val verdict = StreamPhyLoss.verdict(
+            enabled = DebugTunables.streamAdaptivePhy && DebugTunables.adaptivePhy && DebugTunables.adaptivePhyMemory,
+            // A setup timeout is the owner closing a link that never finished; only a loss after the stream connected can be a deliberate stop.
+            endedLocally = ending.get() && cause != StreamPhyLoss.Cause.SETUP_TIMEOUT,
+            gatt = linkKind == BluetoothTransportOption.BLE_GATT,
+            cause = cause,
+            authenticatedAtMs = windowStartMs,
+            silentSinceMs = silentSinceMs,
+            wasTwoM = linkWasTwoM(phy, probe.requestedTwoM),
+            sendLinks = NodeLinkLoad.sendLinks(linkKind),
+            peerRelays = probe.peerRelays,
+            peerKnown = node != null,
+        )
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK adaptive_phy: link=stream | node=${node ?: "unknown"} | early_loss=${verdict.record} | reason=${verdict.reason} | " +
+                "cause=${cause.name.lowercase()} | gattStatus=$status | hopAuthenticated=${probe.authenticatedAtMs > 0L} | " +
+                "silentAfterMs=${maxOf(silentSinceMs, windowStartMs) - windowStartMs} | " +
+                "detectedAfterMs=${nowMs - windowStartMs} | supervisionMs=$supervisionMs | " +
+                "phy=${phy.ifEmpty { "unknown" }} | requested2M=${probe.requestedTwoM}",
+        )
+        if (!verdict.record || node == null) return
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK adaptive_phy: link=stream | node=$node | from=2M to=1M | reason=early_loss | next=1M",
+        )
+        AdaptivePhyMemory.recordBad(linkKind, node, "stream_early_loss")
+    }
+
     /** The authenticated link peer (null before the link handshake). */
     internal fun authenticatedPeerNode(): NodeId? = secureSession?.peerNodeId
 
@@ -669,6 +843,10 @@ class BluetoothVideoSender(
     @Synchronized
     fun send(flags: Int, presentationTimeUs: Long, bytes: ByteArray) {
         if (!running.get() || streamPaused.get() || ending.get()) return
+        audioLive?.let { config ->
+            sendAudioLive(config, flags, presentationTimeUs, bytes)
+            return
+        }
         if (flags and StreamProtocol.FLAG_AUDIO == 0 && flags and StreamProtocol.FLAG_CODEC_CONFIG == 0) {
             debugStageTrace?.record("send_enqueue", presentationTimeUs, bytes.size)
         }
@@ -690,6 +868,14 @@ class BluetoothVideoSender(
         offeredWindowBytes.addAndGet(packet.bytes.size.toLong())
         if (!packet.isAudio) noteVideoFrame(packet)
         if (boundedAge && shedForMediaAge(packet)) return
+        if (moveSkipAwaitKeyFrame.armed && !packet.isAudio &&
+            packet.flags and (StreamProtocol.FLAG_CODEC_CONFIG or StreamProtocol.FLAG_DISPLAY_ROTATION) == 0 &&
+            moveSkipAwaitKeyFrame.dropArrivingVideo(packet.isKeyFrame, SystemClock.elapsedRealtime())
+        ) {
+            moveSkipRecords.incrementAndGet()
+            requestShedKeyFrameIfDue(System.nanoTime())
+            return
+        }
         if (thinDiscardable &&
             TemporalLayerThinning.shouldThin(packet.isDiscardable, oldestPacketAgeMs(System.nanoTime()).toLong())
         ) {
@@ -706,6 +892,47 @@ class BluetoothVideoSender(
         }
     }
 
+    /**
+     * Audio-only live: [bytes] is a record the source already signed. Queue it, shed stale whole records of
+     * this child's queue (Design AL age bound; the Opus configuration and markers never match), and withdraw
+     * the child when it is hopelessly behind (more than 20% shed over 10 s, or a record older than 30 s).
+     */
+    private fun sendAudioLive(config: AudioLiveSendConfig, flags: Int, presentationTimeUs: Long, bytes: ByteArray) {
+        val sendQueue = audioSendQueue ?: return
+        val packet = Packet(flags, presentationTimeUs, bytes, System.nanoTime())
+        offeredWindowBytes.addAndGet(bytes.size.toLong())
+        enqueue(packet)
+        val nowNs = System.nanoTime()
+        val outcome = sendQueue.afterEnqueue(packet, nowNs)
+        if (outcome.removed > 0) {
+            queuedBytes.addAndGet(-outcome.removedBytes)
+            shedFramesTotal.addAndGet(outcome.removed.toLong())
+            Log.i(
+                "BluetoothVideo",
+                "BENCHMARK audio_live_shed: role=stream_tx | removed=${outcome.removed} | total=${outcome.shedTotal} | " +
+                    "queueAgeMs=${outcome.oldestAgeMs}",
+            )
+        }
+        val reason = outcome.verdict
+        if (reason != null) {
+            onStatus("This listener fell too far behind ($reason); releasing it to reconnect.")
+            Log.i("BluetoothVideo", "BENCHMARK audio_live_withdraw: role=stream_tx | reason=$reason")
+            withdrawForLocalCapacity()
+            return
+        }
+        if (queuedBytes.get() > MemoryThermalPolicy.senderQueueBytes) {
+            onStatus("This listener fell ${outcome.oldestAgeMs} ms behind live; releasing it to reconnect.")
+            withdrawForLocalCapacity()
+        }
+    }
+
+    /** Mute: nothing recorded before the tap goes out afterwards, so unsent audio records are dropped. */
+    fun discardQueuedAudioRecords(): Int {
+        val dropped = audioSendQueue?.discardSheddable() ?: return 0
+        dropped.forEach { queuedBytes.addAndGet(-it.bytes.size.toLong()) }
+        return dropped.size
+    }
+
     fun pauseStream() {
         if (!running.get() || ending.get() || !streamPaused.compareAndSet(false, true)) return
         clearPackets()
@@ -720,6 +947,16 @@ class BluetoothVideoSender(
     fun resumeStream() {
         if (!running.get() || ending.get() || !streamPaused.compareAndSet(true, false)) return
         enqueue(Packet(0, 0, ByteArray(0), System.nanoTime(), StreamLifecycleState.LIVE))
+    }
+
+    /**
+     * Live with the microphone muted and/or the camera off (experimental `live_media_state`), or plain LIVE
+     * when everything is back on. One record in queue order; ignored while paused or ending.
+     */
+    fun sendMediaState(state: StreamLifecycleState) {
+        require(state.isLiveFamily) { "Only live-family records are media states" }
+        if (!running.get() || ending.get() || streamPaused.get()) return
+        enqueue(Packet(0, 0, ByteArray(0), System.nanoTime(), state))
     }
 
     fun endStream() {
@@ -832,7 +1069,8 @@ class BluetoothVideoSender(
                                 android.util.Log.i("BluetoothVideo", "BENCHMARK direct GATT heartbeat authenticated receipt")
                             }
                         }
-                        SourceControlMessage.KEY_FRAME_REQUEST -> onRemoteKeyFrameNeeded()
+                        // An audio-only stream has no keyframes: the request is ignored, never passed to an encoder.
+                        SourceControlMessage.KEY_FRAME_REQUEST -> if (audioLive == null) onRemoteKeyFrameNeeded()
                         SourceControlMessage.STREAM_END_ACK -> {
                             endAcknowledgements?.countDown()
                             return@thread
@@ -845,6 +1083,7 @@ class BluetoothVideoSender(
                     }
                 }
             } catch (error: Exception) {
+                if (linkFailure == null) linkFailure = error
                 if (running.compareAndSet(true, false)) {
                     onStatus(
                         "Immediate child control channel stopped; closing the link: " +
@@ -873,7 +1112,31 @@ class BluetoothVideoSender(
         if (childLateness.onReport(report)) childLateUntilNs = System.nanoTime() + PeerLatenessTrend.LATE_HOLD_NS
         childAddedDelayMs = report.addedDelayMs
         val kbps = report.arrivalKbps
-        if (kbps <= 0) return
+        if (kbps <= 0) {
+            // On-time report: media reaches the child without lateness, so the link carries the offered
+            // rate; hold the seeded pace instead of decaying it blind (DebugTunables.onTimeReports).
+            if (onTimeReports && !report.linkLate && System.nanoTime() >= childLateUntilNs) {
+                val before = pacer.seedKbps
+                val backlogMs = if (onTimeSeedRaise) oldestPacketAgeMs(System.nanoTime()).toLong() else -1L
+                if (pacer.holdSeed(backlogMs, seedRaiseDrainGuard) && pacer.seedKbps > before) {
+                    Log.i("BluetoothVideo", "BENCHMARK pacer_seed_raise: role=stream_tx | fromKbps=$before | toKbps=${pacer.seedKbps} | backlogMs=$backlogMs")
+                }
+                pacer.lastDrainGuardBlock?.let {
+                    Log.i("BluetoothVideo", it.benchmarkLine("stream_tx", secureSession?.peerNodeId?.shortLabel() ?: "?", pacer.seedKbps))
+                }
+            }
+            return
+        }
+        if (joinProbeSeed) {
+            val probe = pacer.resolveJoinProbe(kbps, oldestPacketAgeMs(System.nanoTime()) >= LinkPacer.SEED_RAISE_BACKLOG_MS)
+            if (probe != null) {
+                Log.i("BluetoothVideo", probe.benchmarkLine("stream_tx", secureSession?.peerNodeId?.shortLabel() ?: "?"))
+                onStatus("Join probe: child timed this ${transport.shortLabel} link's first records at $kbps kbps")
+                // Not backlogged: the burst only shows what was offered was carried, so it seeds the pace
+                // (resolveJoinProbe) but is not this link's capacity.
+                if (!probe.linkBound) return
+            }
+        }
         val previous = peerMeasuredKbps
         peerMeasuredKbps = kbps
         LinkCapacity.recordProbe(transport, kbps)
@@ -1070,6 +1333,81 @@ class BluetoothVideoSender(
         return drop
     }
 
+    /**
+     * This link just moved itself from 2M to 1M ([AdaptivePhyLink]). Two reasons to drop what is queued, both for live streams only:
+     * (1) the flood guard (default on, `test_phy_move_flood_guard`): media older than [PhyMoveSkip.FLOOD_STALE_MS] is not written
+     * into the viewer at link speed (video before a fresh keyframe, audio older than the viewer's playout); (2) the
+     * backlog skip (default on for a fixed-rate stream, [PhyMoveSkip.enabled]; `test_phy_move_skip_backlog` overrides it): video older
+     * than [PhyMoveSkip.thresholdMs] is dropped once, audio kept. Codec configuration
+     * and lifecycle records are never dropped; the video resumes at a queued keyframe that is still fresh or waits for a requested one.
+     */
+    private fun skipBacklogAfterPhyMove() {
+        val nowNs = System.nanoTime()
+        val playoutMs = BoundedMediaAge.ASSUMED_VIEWER_BASE_DELAY_MS + childAddedDelayMs.coerceAtLeast(0)
+        val ageMs = oldestVideoAgeMs(nowNs)
+        val audioAgeMs = oldestAudioAgeMs(nowNs)
+        val stream = audioLive == null
+        val skipEnabled = PhyMoveSkip.enabled(DebugTunables.phyMoveSkipBacklog, PhyMoveSkip.fixedRateStream)
+        val experimental = PhyMoveSkip.shouldSkip(
+            enabled = skipEnabled && !ending.get(),
+            isStream = stream,
+            oldestVideoAgeMs = ageMs,
+            viewerPlayoutMs = playoutMs,
+        )
+        val flood = PhyMoveSkip.floodGuard(
+            enabled = DebugTunables.phyMoveFloodGuard && !ending.get(),
+            isStream = stream,
+            oldestVideoAgeMs = ageMs,
+            oldestAudioAgeMs = audioAgeMs,
+        )
+        if (!experimental && !flood) {
+            if (skipEnabled) {
+                Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK phy_move_skip: role=stream_tx | skipped=false | queueAgeMs=$ageMs | " +
+                        "thresholdMs=${PhyMoveSkip.thresholdMs(playoutMs)} | viewerPlayoutMs=$playoutMs",
+                )
+            }
+            return
+        }
+        val (plan, removedPackets) = shedAtomically(queueLock, packets, ::shedClass) { candidate ->
+            (nowNs - candidate.queuedAtNs) / 1_000_000L <= playoutMs
+        }
+        removedPackets.forEach { queuedBytes.addAndGet(-it.bytes.size.toLong()) }
+        var audioRemoved = 0
+        if (flood) {
+            // Audio older than the viewer's playout is a sender gap to it (the Opus decoder realigns on the timestamp jump).
+            synchronized(queueLock) {
+                val removedAudio = PhyMoveSkip.removeStale(packets) { candidate ->
+                    candidate.isAudio && candidate.streamState == null &&
+                        candidate.flags and StreamProtocol.FLAG_CODEC_CONFIG == 0 &&
+                        (nowNs - candidate.queuedAtNs) / 1_000_000L > playoutMs
+                }
+                removedAudio.forEach { queuedBytes.addAndGet(-it.bytes.size.toLong()) }
+                audioRemoved = removedAudio.size
+            }
+        }
+        moveSkipRecords.addAndGet((removedPackets.size + audioRemoved).toLong())
+        if (plan.awaitKeyFrame) {
+            moveSkipAwaitKeyFrame.arm(SystemClock.elapsedRealtime())
+            lastShedKeyFrameRequestNs = 0L
+            requestShedKeyFrameIfDue(nowNs)
+        }
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK phy_move_skip: role=stream_tx | skipped=true | kind=${if (flood) "flood_guard" else "experimental"} | " +
+                "skippedRecords=${removedPackets.size} | skippedAudio=$audioRemoved | skippedAgeMs=$ageMs | audioAgeMs=$audioAgeMs | " +
+                "thresholdMs=${if (flood) PhyMoveSkip.FLOOD_STALE_MS else PhyMoveSkip.thresholdMs(playoutMs)} | " +
+                "viewerPlayoutMs=$playoutMs | awaitKeyFrame=${plan.awaitKeyFrame} | queueAfter=${packets.size}",
+        )
+        onStatus(
+            "Skipped ${removedPackets.size} queued video frames ($ageMs ms old)" +
+                (if (audioRemoved > 0) " and $audioRemoved audio packets" else "") +
+                " after the move to 1M" +
+                if (plan.awaitKeyFrame) "; waiting for a keyframe" else "; resuming at a queued keyframe",
+        )
+    }
+
     private fun requestShedKeyFrameIfDue(nowNs: Long) {
         if (lastShedKeyFrameRequestNs != 0L && nowNs - lastShedKeyFrameRequestNs < BoundedMediaAge.KEY_FRAME_REREQUEST_NS) return
         lastShedKeyFrameRequestNs = nowNs
@@ -1083,6 +1421,10 @@ class BluetoothVideoSender(
         packet.isKeyFrame -> ShedClass.KEY_FRAME
         else -> ShedClass.VIDEO
     }
+
+    private fun oldestAudioAgeMs(nowNs: Long): Long = packets.firstOrNull { packet ->
+        packet.streamState == null && packet.isAudio && packet.flags and StreamProtocol.FLAG_CODEC_CONFIG == 0
+    }?.let { (nowNs - it.queuedAtNs).coerceAtLeast(0L) / 1_000_000L } ?: 0L
 
     private fun oldestVideoAgeMs(nowNs: Long): Long = packets.firstOrNull { packet ->
         packet.streamState == null && !packet.isAudio && packet.flags and StreamProtocol.FLAG_CODEC_CONFIG == 0

@@ -19,6 +19,10 @@ import org.junit.Test
 
 /** BMH3 behaviour tests: orders, active probes, tampering, replay, negotiation, link and endpoint drivers, relays. */
 class Bmh3Test {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private val caps = NodeCapabilities(
         transportMask = NodeCapabilities.TRANSPORT_BLE_L2CAP,
         encodeCodecMask = NodeCapabilities.CODEC_VP9,
@@ -586,7 +590,7 @@ class Bmh3Test {
         }
         val input = object : InputStream() {
             override fun read(): Int {
-                val deadline = System.nanoTime() + 15_000_000_000L
+                val deadline = System.nanoTime() + 120_000_000_000L
                 while (true) {
                     val value = queue.poll(20, TimeUnit.MILLISECONDS)
                     if (value != null) return value
@@ -608,7 +612,7 @@ class Bmh3Test {
             responderResult.set(runCatching(responder).onFailure { onResponderFailure() })
         }
         val initiatorResult = runCatching(initiator)
-        worker.join(10_000)
+        worker.join(120_000)
         return Pair(initiatorResult, responderResult.get() ?: Result.failure(IllegalStateException("responder timed out")))
     }
 

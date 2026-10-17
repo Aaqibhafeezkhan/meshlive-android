@@ -7,14 +7,21 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import java.io.Closeable
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
-/** Where call audio plays. Bluetooth headsets are deliberately absent (see [callOutputFor]). */
+/**
+ * Where call audio plays. A Bluetooth headset is never chosen automatically (see [callOutputFor]); [BLUETOOTH] is
+ * reachable only from the output sheet and only behind [CallBluetoothOutputFeature] (default off).
+ */
 internal enum class CallOutput(val label: String) {
     SPEAKER("Speaker"),
     EARPIECE("Earpiece"),
     WIRED_HEADSET("Headset"),
+    BLUETOOTH("Bluetooth"),
 }
 
 /** Wired or USB headsets/headphones: they use no radio, so a call may always prefer them. */
@@ -37,10 +44,22 @@ internal fun callOutputFor(
     explicitSpeakerChoice: Boolean,
     wiredHeadsetPresent: Boolean,
     earpiecePresent: Boolean,
-): CallOutput = when {
-    wiredHeadsetPresent && !(speakerRequested && explicitSpeakerChoice) -> CallOutput.WIRED_HEADSET
-    speakerRequested || !earpiecePresent -> CallOutput.SPEAKER
-    else -> CallOutput.EARPIECE
+    /** The user's pick in the output sheet, honoured while that output still exists; null = the rules below. */
+    explicitOutput: CallOutput? = null,
+    bluetoothPresent: Boolean = false,
+): CallOutput {
+    when (explicitOutput) {
+        CallOutput.SPEAKER -> return CallOutput.SPEAKER
+        CallOutput.EARPIECE -> if (earpiecePresent) return CallOutput.EARPIECE
+        CallOutput.WIRED_HEADSET -> if (wiredHeadsetPresent) return CallOutput.WIRED_HEADSET
+        CallOutput.BLUETOOTH -> if (bluetoothPresent) return CallOutput.BLUETOOTH
+        null -> Unit
+    }
+    return when {
+        wiredHeadsetPresent && !(speakerRequested && explicitSpeakerChoice) -> CallOutput.WIRED_HEADSET
+        speakerRequested || !earpiecePresent -> CallOutput.SPEAKER
+        else -> CallOutput.EARPIECE
+    }
 }
 
 /**
@@ -52,18 +71,30 @@ internal fun callOutputFor(
  * silently (checkAudioSettingsPermission, Android 10 through current), so before 2026-10-09 every
  * call ran in MODE_NORMAL and Android 10/11 phones (A15s, ASUS) could not leave the earpiece. The
  * `BENCHMARK call_audio_route` line records the mode the platform actually reports.
+ *
+ * Routing sequence (batch U-06, [CallRoutingPolicy]): focus, mode, optional mode-change wait, communication device
+ * with its boolean result checked and the next candidate tried on false, listeners that re-assert the choice, no
+ * watches, and a close that clears the device and restores the former mode. Every open and close is a timed,
+ * serialized [AudioCommandQueue] command (U-05); `test_audio_off_main` moves close off the main thread.
  */
 internal class PrivateCallAudioSession(
-    context: Context,
+    private val context: Context,
     private val startOnSpeaker: Boolean = true,
     private val onRouteChanged: (() -> Unit)? = null,
+    /** Experimental [CallBluetoothOutputFeature]: Bluetooth audio devices can be picked from the output sheet (API 31+). */
+    private val allowBluetoothOutput: Boolean = false,
     /** Non-null: the call holds audio focus while open ([CallAudioFocus]); null: no focus request (before 2026-10-10). */
     onFocusAction: ((FocusAction) -> Unit)? = null,
 ) : Closeable {
     private val audioManager = context.getSystemService(AudioManager::class.java)
-    private val previousMode = audioManager.mode
-    @Suppress("DEPRECATION")
-    private val previousSpeakerphone = audioManager.isSpeakerphoneOn
+
+    // Read inside the serialized open command: a queued close of the previous call must finish first, or its
+    // not yet restored MODE_IN_COMMUNICATION would be remembered as the mode to restore.
+    private var previousMode = AudioManager.MODE_NORMAL
+    private var previousSpeakerphone = false
+    @Volatile private var closed = false
+    private var lastSpeakerRequested = startOnSpeaker
+    private val reassertLimiter = RouteReassertLimiter()
 
     /** True while call audio plays from the loudspeaker (the default), false for earpiece/headset. */
     var speakerOn = true
@@ -74,14 +105,29 @@ internal class PrivateCallAudioSession(
 
     private var explicitSpeakerChoice = false
 
+    /** The user's pick in the output sheet; cleared when they use the Speaker toggle or a headset is plugged in. */
+    private var explicitOutput: CallOutput? = null
+    private var explicitDeviceId = CallOutputOption.NO_DEVICE
+
     /** Phones without a handset earpiece (for example tablets) keep the loudspeaker. */
     val earpieceAvailable: Boolean =
         audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             .any { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
 
-    /** Whether the route button can leave the loudspeaker (earpiece or a plugged headset). */
+    /** Whether the route button can leave the loudspeaker (earpiece, a plugged headset, or an allowed Bluetooth device). */
     val quietRouteAvailable: Boolean
-        get() = earpieceAvailable || wiredHeadsetPresent()
+        get() = earpieceAvailable || wiredHeadsetPresent() || bluetoothOutputPresent()
+
+    /** The rows of the output sheet and the Speaker button's mode ([CallOutputChoices]). */
+    fun outputOptions(): List<CallOutputOption> = CallOutputChoices.options(outputSinks(), bluetoothOutputAllowed())
+
+    /** Routes call audio to a row of the output sheet. Returns true when that output is now in use. */
+    fun selectOutput(option: CallOutputOption): Boolean {
+        explicitOutput = option.output
+        explicitDeviceId = option.deviceId
+        applyRoute(speakerRequested = option.output == CallOutput.SPEAKER, explicit = true, event = "sheet")
+        return output == option.output
+    }
 
     /**
      * Earpiece calls only: while call audio plays from the earpiece the phone is at the ear, so the
@@ -92,13 +138,24 @@ internal class PrivateCallAudioSession(
 
     private val audioFocus = onFocusAction?.let { CallAudioFocus(context, it) }
 
+    /** Root hook: the call's foreground service holds its types now; a refused focus request is retried at once. */
+    fun onForegroundHeld() {
+        audioFocus?.onForegroundHeld()
+    }
+
+    private var communicationDeviceListener: AudioManager.OnCommunicationDeviceChangedListener? = null
+
     private val deviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
             if (output != CallOutput.WIRED_HEADSET &&
                 addedDevices.any { it.isSink && it.type in WIRED_CALL_OUTPUT_TYPES }
             ) {
                 explicitSpeakerChoice = false
+                explicitOutput = null
                 applyRoute(speakerRequested = false, explicit = false, event = "headset_added")
+                onRouteChanged?.invoke()
+            } else if (addedDevices.any { it.isSink }) {
+                // Another output appeared (for example a Bluetooth device): the route is unchanged, the button may differ.
                 onRouteChanged?.invoke()
             }
         }
@@ -108,22 +165,97 @@ internal class PrivateCallAudioSession(
                 removedDevices.any { it.isSink && it.type in WIRED_CALL_OUTPUT_TYPES } &&
                 !wiredHeadsetPresent()
             ) {
+                explicitOutput = null
                 applyRoute(speakerRequested = startOnSpeaker, explicit = false, event = "headset_removed")
+                onRouteChanged?.invoke()
+            } else if (output == CallOutput.BLUETOOTH &&
+                removedDevices.any { it.isSink && it.type in BLUETOOTH_CALL_OUTPUT_TYPES } &&
+                !bluetoothOutputPresent()
+            ) {
+                explicitOutput = null
+                applyRoute(speakerRequested = startOnSpeaker, explicit = false, event = "bluetooth_removed")
+                onRouteChanged?.invoke()
+            } else if (removedDevices.any { it.isSink }) {
                 onRouteChanged?.invoke()
             }
         }
     }
 
     init {
-        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-        audioFocus?.request()
-        applyRoute(speakerRequested = startOnSpeaker, explicit = false, event = "start")
-        // The callback's initial report lists devices already routed above; it changes nothing then.
-        runCatching { audioManager.registerAudioDeviceCallback(deviceCallback, null) }
+        AudioCommandQueue.shared.run("call_audio_open") {
+            previousMode = audioManager.mode
+            previousSpeakerphone = speakerphoneNow()
+            // Signal's order: focus first (a refusal is classified by CallFocusArbiter), then the mode.
+            audioFocus?.request()
+            setCallMode()
+            applyRoute(speakerRequested = startOnSpeaker, explicit = false, event = "start")
+            // The callback's initial report lists devices already routed above; it changes nothing then.
+            runCatching { audioManager.registerAudioDeviceCallback(deviceCallback, null) }
+            registerCommunicationDeviceListener()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun speakerphoneNow(): Boolean = audioManager.isSpeakerphoneOn
+
+    /** MODE_IN_COMMUNICATION (or the Experimental USB rule), optionally waiting for the platform's mode callback. */
+    @SuppressLint("NewApi")
+    private fun setCallMode() {
+        val usb = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
+        val target = CallRoutingPolicy.callMode(usb, DeviceTraits.current().oemSkin, AudioSwitches.usbHeadsetModeNormal, startOnSpeaker)
+        val waitForCallback = AudioSwitches.modeChangeWait && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            audioManager.mode != target
+        if (!waitForCallback) {
+            audioManager.mode = target
+            return
+        }
+        val changed = CountDownLatch(1)
+        val listener = AudioManager.OnModeChangedListener { mode -> if (mode == target) changed.countDown() }
+        val executor = java.util.concurrent.Executor { it.run() }
+        runCatching { audioManager.addOnModeChangedListener(executor, listener) }
+        val startedAt = SystemClock.elapsedRealtime()
+        audioManager.mode = target
+        val seen = runCatching { changed.await(CallRoutingPolicy.MODE_CHANGE_WAIT_MS, TimeUnit.MILLISECONDS) }.getOrDefault(false)
+        runCatching { audioManager.removeOnModeChangedListener(listener) }
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK call_audio_mode: target=$target | callback=$seen | waited_ms=${SystemClock.elapsedRealtime() - startedAt}",
+        )
+    }
+
+    /** API 31+: re-assert the call's communication device when the platform or another app changes it (rate limited). */
+    @SuppressLint("NewApi")
+    private fun registerCommunicationDeviceListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val listener = AudioManager.OnCommunicationDeviceChangedListener { device -> onCommunicationDeviceChanged(device) }
+        communicationDeviceListener = listener
+        runCatching { audioManager.addOnCommunicationDeviceChangedListener(context.mainExecutor, listener) }
+    }
+
+    private fun onCommunicationDeviceChanged(device: AudioDeviceInfo?) {
+        if (closed || !AudioSwitches.routeReassert || !AudioSwitches.policyActive(ROUTE_ENTRY_ID)) return
+        if (!CallRoutingPolicy.needsReassert(device?.type, output)) return
+        if (!reassertLimiter.allow(SystemClock.elapsedRealtime())) {
+            Log.i("BluetoothVideo", "BENCHMARK call_audio_route: event=reassert_skipped | reason=rate_limit | platformDevice=${device?.type ?: "none"} | output=${output.name}")
+            return
+        }
+        applyRoute(speakerRequested = lastSpeakerRequested, explicit = false, event = "reassert")
+        onRouteChanged?.invoke()
     }
 
     private fun wiredHeadsetPresent(): Boolean =
         audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type in WIRED_CALL_OUTPUT_TYPES }
+
+    /** Bluetooth call audio is selectable on Android 12+ (setCommunicationDevice) and only behind the experimental switch. */
+    private fun bluetoothOutputAllowed(): Boolean = allowBluetoothOutput && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    private fun bluetoothOutputPresent(): Boolean = bluetoothOutputAllowed() &&
+        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type in BLUETOOTH_CALL_OUTPUT_TYPES }
+
+    private fun outputSinks(): List<AudioSink> = CallRoutingPolicy.withoutWatches(
+        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .map { AudioSink(it.type, it.productName?.toString().orEmpty(), it.id) },
+    )
 
     /**
      * Routes call audio to the loudspeaker, or to the quiet route (a plugged headset, else the
@@ -133,6 +265,7 @@ internal class PrivateCallAudioSession(
      */
     fun setSpeakerOn(speaker: Boolean, explicit: Boolean = true): Boolean {
         if (!speaker && !quietRouteAvailable) return speakerOn
+        if (explicit) explicitOutput = null // the toggle replaces an earlier pick from the sheet
         applyRoute(speaker, explicit, if (explicit) "user" else "layout")
         return speakerOn
     }
@@ -141,26 +274,55 @@ internal class PrivateCallAudioSession(
     @Suppress("DEPRECATION")
     private fun applyRoute(speakerRequested: Boolean, explicit: Boolean, event: String) {
         if (explicit) explicitSpeakerChoice = speakerRequested
+        lastSpeakerRequested = speakerRequested
         val wanted = callOutputFor(
             speakerRequested,
             explicitSpeakerChoice,
             wiredHeadsetPresent(),
             earpieceAvailable,
+            explicitOutput,
+            bluetoothOutputPresent(),
         )
         val applied = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val devices = audioManager.availableCommunicationDevices
-            val target = when (wanted) {
-                CallOutput.SPEAKER -> devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-                CallOutput.EARPIECE -> devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
-                CallOutput.WIRED_HEADSET -> devices.firstOrNull { it.type in WIRED_CALL_OUTPUT_TYPES }
+            val checkResult = AudioSwitches.policyActive(ROUTE_ENTRY_ID)
+            val ordered = if (checkResult) {
+                // Watches are never candidates; every device of the wanted kind is tried until one is accepted.
+                val byId = devices.associateBy { it.id }
+                CallRoutingPolicy.candidatesFor(
+                    wanted,
+                    devices.map { CallRoutingPolicy.Candidate(it.type, it.productName?.toString().orEmpty(), it.id) },
+                    explicitDeviceId,
+                ).mapNotNull { byId[it.id] }
+            } else {
+                // Former rule (registry entry off): the first device of the wanted kind, once.
+                listOfNotNull(
+                    when (wanted) {
+                        CallOutput.SPEAKER -> devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                        CallOutput.EARPIECE -> devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+                        CallOutput.WIRED_HEADSET -> devices.firstOrNull { it.type in WIRED_CALL_OUTPUT_TYPES }
+                        CallOutput.BLUETOOTH -> devices.firstOrNull {
+                            it.type in BLUETOOTH_CALL_OUTPUT_TYPES && (explicitDeviceId == CallOutputOption.NO_DEVICE || it.id == explicitDeviceId)
+                        } ?: devices.firstOrNull { it.type in BLUETOOTH_CALL_OUTPUT_TYPES }
+                    },
+                ).take(1)
             }
-            if (target != null && audioManager.setCommunicationDevice(target)) wanted else currentOutputS()
+            val accepted = CallRoutingPolicy.pickFirstAccepted(ordered) { audioManager.setCommunicationDevice(it) }
+            if (accepted == null || accepted.second > 0) {
+                Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK call_audio_route: event=device_set | wanted=${wanted.name} | candidates=${ordered.size} | " +
+                        "rejected=${accepted?.second ?: ordered.size} | accepted=${accepted != null}",
+                )
+            }
+            if (accepted != null) wanted else currentOutputS()
         } else {
             // FORCE_SPEAKER, or FORCE_NONE, where the platform prefers a wired headset to the earpiece.
             audioManager.isSpeakerphoneOn = wanted == CallOutput.SPEAKER
             when {
                 audioManager.isSpeakerphoneOn -> CallOutput.SPEAKER
                 wanted == CallOutput.SPEAKER -> if (wiredHeadsetPresent()) CallOutput.WIRED_HEADSET else CallOutput.EARPIECE
+                wanted == CallOutput.BLUETOOTH -> currentOutputPreS()
                 else -> wanted
             }
         }
@@ -176,9 +338,15 @@ internal class PrivateCallAudioSession(
         return when {
             type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> CallOutput.EARPIECE
             type in WIRED_CALL_OUTPUT_TYPES -> CallOutput.WIRED_HEADSET
+            type in BLUETOOTH_CALL_OUTPUT_TYPES -> CallOutput.BLUETOOTH
             else -> CallOutput.SPEAKER
         }
     }
+
+    /** Before Android 12 a Bluetooth pick is not supported (the option is never listed); keep what the platform reports. */
+    @Suppress("DEPRECATION")
+    private fun currentOutputPreS(): CallOutput =
+        if (audioManager.isSpeakerphoneOn) CallOutput.SPEAKER else CallOutput.EARPIECE
 
     @SuppressLint("NewApi")
     @Suppress("DEPRECATION")
@@ -196,14 +364,32 @@ internal class PrivateCallAudioSession(
         )
     }
 
+    /**
+     * Stops listening, then (as one serialized, timed audio command) abandons focus, clears the communication
+     * device and restores the former speakerphone state and mode. `test_audio_off_main` runs that command on the
+     * audio command thread instead of the caller's; the proximity lock is released at once either way.
+     */
+    @SuppressLint("NewApi")
     @Suppress("DEPRECATION")
     override fun close() {
-        runCatching { audioManager.unregisterAudioDeviceCallback(deviceCallback) }
-        audioFocus?.abandon()
+        if (closed) return
+        closed = true
         proximity.close()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) audioManager.clearCommunicationDevice()
-        audioManager.isSpeakerphoneOn = previousSpeakerphone
-        audioManager.mode = previousMode
+        AudioCommandQueue.shared.offload("call_audio_close") {
+            runCatching { audioManager.unregisterAudioDeviceCallback(deviceCallback) }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                communicationDeviceListener?.let { runCatching { audioManager.removeOnCommunicationDeviceChangedListener(it) } }
+            }
+            audioFocus?.abandon()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) audioManager.clearCommunicationDevice()
+            audioManager.isSpeakerphoneOn = previousSpeakerphone
+            audioManager.mode = previousMode
+        }
+    }
+
+    private companion object {
+        /** Registry entry (AudioPolicyEntries) for the boolean-result check, re-pick and re-assert. */
+        const val ROUTE_ENTRY_ID = "call-route-set-result-and-reassert"
     }
 }
 

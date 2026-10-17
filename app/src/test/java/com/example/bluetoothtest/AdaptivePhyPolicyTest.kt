@@ -39,10 +39,25 @@ class AdaptivePhyPolicyTest {
     }
 
     @Test
-    fun aStalledLinkFarBelowOnePduPerEventIsNotMoved() {
-        // mesh4-7a6c401c 0001: ASUS -> M31 carried 8 kbps, blocked the whole time.
+    fun aStalledLinkFarBelowOnePduPerEventIsNotAOnePduMove() {
+        // mesh4-7a6c401c 0001: ASUS -> M31 carried 8 kbps, blocked the whole time. The policy reports it as STALLED and
+        // AdaptivePhyLink decides (a relay's downstream link keeps 2M; a link the peer is still heard on moves).
         val policy = AdaptivePhyPolicy()
-        assertEquals(listOf(AdaptivePhyPolicy.Verdict.KEEP), policy.feed(0, 9, kbps = 8, blockedFraction = 1.0))
+        assertEquals(listOf(AdaptivePhyPolicy.Verdict.STALLED), policy.feed(0, 9, kbps = 8, blockedFraction = 1.0))
+    }
+
+    @Test
+    fun theA15sSourceThatWroteSevenToTenKbpsForNinetySecondsIsStalledOnce() {
+        // b10-97a95ad4 1-defaults/d2: TX 7 to 13 kbps with the writer blocked 99 percent, intervalMs 15, oneEventKbps 131.
+        val policy = AdaptivePhyPolicy()
+        val verdicts = policy.feed(0, 9, kbps = 7, blockedFraction = 0.99) + policy.feed(9_000, 80, kbps = 9, blockedFraction = 0.99)
+        assertEquals(listOf(AdaptivePhyPolicy.Verdict.STALLED), verdicts)
+    }
+
+    @Test
+    fun justAboveAQuarterOfOnePduIsStillTheOnePduBand() {
+        val policy = AdaptivePhyPolicy()
+        assertEquals(listOf(AdaptivePhyPolicy.Verdict.MOVE_TO_1M), policy.feed(0, 9, kbps = 40, blockedFraction = 0.9))
     }
 
     @Test
@@ -71,5 +86,24 @@ class AdaptivePhyPolicyTest {
         // Warm-up window at 200 kbps (buffer fill), then 120 kbps: one PDU per event at 15 ms.
         assertEquals(emptyList<AdaptivePhyPolicy.Verdict>(), policy.feed(0, 2, kbps = 200, blockedFraction = 0.9))
         assertEquals(listOf(AdaptivePhyPolicy.Verdict.MOVE_TO_1M), policy.feed(2_000, 7, kbps = 120, blockedFraction = 0.9))
+    }
+
+    @Test
+    fun aStalledWriterMovesOnlyWhereTheStallIsTheLinksOwnAndThePeerIsStillHeard() {
+        // d2: not a relay, 95 heartbeats arrived: move and remember.
+        assertEquals(true, stalledTwoMShouldMove(enabled = true, relayGuarded = false, peerHeard = true))
+        // A relay's downstream link (mesh4-7a6c401c 0001), a silent peer (the supervision timeout's business), the control arm: keep.
+        assertEquals(false, stalledTwoMShouldMove(enabled = true, relayGuarded = true, peerHeard = true))
+        assertEquals(false, stalledTwoMShouldMove(enabled = true, relayGuarded = false, peerHeard = false))
+        assertEquals(false, stalledTwoMShouldMove(enabled = false, relayGuarded = false, peerHeard = true))
+    }
+
+    @Test
+    fun theInboundPipeKnowsWhenThePeerWasLastHeard() {
+        val pipe = GattBytePipe { }
+        assertEquals(false, pipe.heardWithin(AdaptivePhyLink.PEER_HEARD_MS))
+        pipe.offer(byteArrayOf(1, 2, 3))
+        assertEquals(true, pipe.heardWithin(AdaptivePhyLink.PEER_HEARD_MS))
+        assertEquals(false, pipe.heardWithin(-1))
     }
 }

@@ -41,6 +41,10 @@ Some words used throughout:Some words used throughout:
   re-encode, so a relay chain adds no codec delay and no quality loss per hop.
 - A private call is a separate session with two independent producers and decoders on one authenticated
   full-duplex link.
+- Tapping a person to call waits up to 10 s for that person's next Bluetooth sighting (a scanner restart, for example
+  after returning to the app, can delay the first sighting by several seconds), shows "Looking for <name>…", and on
+  expiry says the person was not found nearby with the reason (not seen, or this phone's scanner is unavailable). It
+  adds no advertising and sends nothing extra over the air.
 
 ## Where the code is
 
@@ -49,7 +53,7 @@ product is MeshLive). Native code is in `app/src/main/cpp/`.
 
 | Area | Main files | What they do |
 | --- | --- | --- |
-| Screens | `MainActivity`, `HomeUi`, `CallScreenUi`, `CallScreenController`, `MessagesActivity`, `AboutActivity`, `OnboardingActivity`, `SupportUi`, `SecurityUi`, `VerifyContactActivity` | UI and session ownership. Sessions live with the activity, not a background service. |
+| Screens | `MainActivity`, `HomeUi`, `ContactActions`, `PeopleList`, `SettingsUi`, `StatusIndicator`, `CallScreenUi`, `CallScreenController`, `MessagesActivity`, `AboutActivity`, `OnboardingActivity`, `SupportUi`, `SecurityUi`, `VerifyContactActivity` | UI and session ownership. Sessions live with the activity, not a background service. |
 | Discovery | `BleDiscoveryAdvertiser`, `BleL2capControl` (scanner and control server), `StreamDiscovery`, `MeshControlMessages`, `CompactDiscoveryAnnouncement`, `RotatingDiscovery`, `TitleAdvertiser`, `StableAdvertisingSet`, `PeerAddressBook`, `PeopleList` | The 22-byte announcement, scanning with a start quota and failure recovery, and the "People nearby" and "Nearby broadcasts" lists. |
 | Transports | `ClassicConnector`, `ClassicTransport`, `ClassicPeerConnection`, `BleCocClient`, `CocListenerHub`, `CocSocketOutput`, `GattVideoTransport`, `AdaptivePhy`, `BlePhyPreference`, `LeConnectionPriorityKeeper`, `GattClientTeardown`, `BluetoothTransportPolicy` | The three media transports, PHY and connection-parameter handling, and stack-bug workarounds. |
 | Security | `SecureBluetoothLink`, `EndToEndVideoSecurity`, `ForwardedStreamSecurity`, `GroupBroadcastSecurity`, `AndroidNodeIdentityStore`, `IdentityVerification`, `EmergencyWipe`, `NotificationPrivacy` | Handshakes, record sealing, identity, verified contacts and the wipe. |
@@ -58,6 +62,7 @@ product is MeshLive). Native code is in `app/src/main/cpp/`.
 | Mesh and relay | `ReceiverStreamForwarder`, `BluetoothVideoRelay`, `MeshCore`, `MeshBandwidth`, `RelayChildHealthPolicy`, `ReceiverNodeHealthPolicy`, `FanOutStarvationPolicy`, `SourceCapacityRejectionPolicy`, `RelayChildReanchor`, `LinkCapacity`, `LinkRateController` | Hop-local forwarding, admission, overload withdrawal, learned link capacity and rate control. |
 | Calls | `AndroidPrivateVideoCall`, `PrivateCallSession`, `PrivateCallMedia`, `PrivateCallAudioSession`, `PrivateCallRelayChain`, `BluetoothPrivateCallRelay`, `IntercomCall`, `CallPlayoutPolicy`, `CallAudioFocus`, `CallRinger`, `CallResolutionLadder`, `AudioConcealment` | Call signalling and media, relay chains, intercom features and audio behaviour. |
 | Messages | `StoreForwardNode`, `StoreForwardLink`, `StoreForwardStore`, `StoreForwardCrypto`, `StoreForwardAutoSync`, `MessagesActivity` | Experimental store-and-forward messages. |
+| Messages v2 screens | `ThreadScreen`, `MessagingV2ThreadModel`, `ConversationRowsController`, `MessagingV2PrivacyRows`, `VoiceNoteRecorder`, `ThreadSettings` | Experimental conversation rows on Contacts and the thread view (see "Store-and-forward messages"). |
 | App sharing | `AppShare`, `OfflineAppShare`, `OfflineAppShareActivity` | Passing the APK to a nearby phone. |
 | Device policy | `DeviceFamilyPolicy`, `DevicePolicyRegistry`, `CodecPolicy`, `YuvPolicy`, `BluetoothTransportPolicy`, `BackgroundPolicy`, `MemoryThermalPolicy`, `NativeCompat` | The registry of phone-family specific behaviour. |
 | Power and lifecycle | `ActiveVideoSessionService`, `BackgroundReliability`, `DozeWatchdog`, `ThermalGuardPolicy`, `WifiCoexistence` | Foreground services, restriction reporting, thermal limits. |
@@ -72,6 +77,45 @@ Outside the Android app:
 | `tools/video-stress-generator/` | A standalone test-video generator (MIT licensed). |
 | `benchmarks/` | Small reusable inputs and catalog definitions for the harness. |
 | `distribution/`, `fastlane/` | F-Droid and IzzyOnDroid metadata, store text and changelogs. |
+
+## Screens and navigation
+
+The look is "Plain Signal": black ground, Manrope (four bundled weights), Material Symbols Rounded icons, white
+primary actions, red only for live, hang up and decline, green only for answer and the verified check, plain rows
+instead of cards. The tokens are in `res/values/colors.xml` and `themes.xml`.
+
+`MainActivity` owns every screen as a sibling view and a bottom navigation (`mainNav`) shown on the four tab
+screens only: Live, Calls, Contacts, Settings. Live is the stream browser itself (`AppScreen.RECEIVER_BROWSER`): it is
+the landing screen, scans for nearby streams while it is visible, lists them as plain rows (tap joins) and pins the
+one Go live button above the tab bar; back from it leaves the app. Calls has a Nearby | Recent switch: Nearby is the
+call browser (`AppScreen.CALL_BROWSER`, discovery running): everyone in range with voice and video buttons, contacts
+first, strangers as "Someone nearby"; Recent is the history of calls (`RecentCalls`) in the idle Home state, where a
+tap calls back and a long press blocks. Contacts lists the saved (verified) people, "Nearby now" for those in range
+(the call browser runs there too), a tap opens the contact sheet (`ContactActions`: call, video, rename, block, remove,
+full ID; with Messages v2 on it opens the conversation and the sheet is in the thread's menu), and Add contact is the one pinned button. Add contact (`VerifyContactActivity`) has a Scan their code | Show
+my code switch and is the only place this phone's code and ID are shown. Reachability follows `CallReachability`: Home (Calls > Recent, Settings from Home) and the Live tab while it only browses (`ReachabilityScreen.LIVE_BROWSING`, scanning needs no advertising set) keep the idle call endpoint, so the phone rings on the landing screen; joining a stream (`ReachabilityScreen.WATCH`) or going live closes the endpoint so the viewer request, stream offer and title set keep their advertising sets, and returning restores it. An incoming call while browsing stops the stream scan, shows the call, and returns to the Live tab afterwards. The switch is `ReachableWhileBrowsingFeature` (SWITCHES). Every tab's title bar ends with a status indicator (`StatusKind`): a green dot when
+all is well, otherwise the one highest-priority problem with a short word (Bluetooth off, permissions, Hidden, battery
+saver pausing relay, heat lowering quality), computed from the existing readiness, reachability, battery and thermal
+logic; a tap fixes Bluetooth/permissions or opens the status sheet (Bluetooth, Allow calls, Relay video for others,
+battery and temperature). The broadcasting and watching screens share one top bar (back, title, red-dot LIVE badge,
+timer when broadcasting). Control rows are one row of equal columns with an odd count and the red End circle (72 dp, the others 64 dp)
+exactly in the middle (`HomeLayoutTest` asserts it): a call, voice or video, is Mute, Camera, End, Flip, Speaker; a video live is Mute,
+Camera, End, Flip, Pause (`LiveControlSlots`); an audio-only live is Mute, End, Pause with Switch to video as a plain action under it.
+A control with nothing to do keeps its slot (hidden or disabled) so End never moves. Flip is Material Symbols `cameraswitch`.
+Speaker toggles the earpiece and loudspeaker (voice calls start on the earpiece, video calls on the loudspeaker); once a wired headset is
+present (or a Bluetooth audio device, behind the experimental `call_bluetooth_output` switch) it opens the audio output sheet
+(`CallOutputSheet`: Phone speaker, Earpiece, the device by name). The routing rules (`callOutputFor`, `PrivateCallAudioSession`) are unchanged
+except that an explicit pick in the sheet is honoured while that output exists. A video live's Mute drops the Opus access units from
+the microphone encoder (the codec configuration still passes; the microphone stays open as in calls) and Camera releases the camera and
+encoder (a keyframe-first restart when it comes back); both work with or without the `live_media_state` switch, which only decides
+whether viewers are told (a state record, PROTOCOL "Experimental live media state"). Flip while live restarts the stream camera on
+the other lens when that lens offers the stream's current size and frame rate, otherwise it explains and changes nothing. Switch to video
+in an audio-only live ends the radio, then starts a new video live with the same title (a new stream, never converted in place). Settings is the fourth tab: one scrolling top level whose rows open
+one-level pages (`SettingsPage`: Video, Privacy, Calls, Share app offline, Experiments); Advanced is a section label followed by exactly five
+plain rows (Connection, Manual video, Playback, Experiments, Help and feedback), each opening one page of that group's options
+(`SettingsPage.CONNECTION`, `MANUAL`, `PLAYBACK`, `EXPERIMENTS`, `HELP`, all with the top level as parent), so nothing nests two levels. Every setting and experiment still exists; a settings row says what it does and shows at most a
+current value, and its explanation opens from an (i) (`SettingsInfo`). Lists show contact names or "Someone nearby",
+never an ID.
 
 ## Transports
 
@@ -99,6 +143,12 @@ How they are used:
 - Wi-Fi and USB are used only for development (adb). The one exception is the experimental "Share app nearby"
   screen, which uses a local Wi-Fi Direct group to hand over the APK, never media.
 
+When a live stream sender moves its own link from 2M to 1M PHY (`one_pdu_per_event` or `stalled_one_way`), video queued for
+longer than twice the viewer's playout (at least 4 s) is dropped once, codec-safely, and the sender waits for a keyframe
+(`PhyMoveSkip`). This is on by default for streams with a fixed (manual) bitrate and off with Auto quality, calls and
+audio-only live (SWITCHES, "Skip the backlog at a PHY move"). A separate flood guard drops media older than 8 s at the
+same moment.
+
 Bluetooth stacks differ a lot between Android versions and makers. Workarounds for known stack bugs (deferred GATT
 close on Android 10/11, a shared LE CoC listener on Android 10, a fresh ACL for CoC on Android 12/13, write-busy
 retries on Android 13+, the scan start quota and others) are entries in the device policy registry described
@@ -108,6 +158,7 @@ below, each with an upstream source.
 
 ```text
 Camera2 preview surface ----> MediaCodec hardware encoder (VP9 or AV1), surface input
+Camera2 -> SurfaceTexture -> GL ----> MediaCodec hardware encoder, surface input   [experimental GPU scale ladder]
 Camera2 ImageReader (YUV) --> MediaCodec byte-buffer input   (software/compatibility encoders)
                           \-> libaom "optimized software AV1" (JNI, CBR / VBR / CBR with frame dropping)
 Microphone -----------------> Opus (MediaCodec, mono 48 kHz, 32 kbps)  [experimental: native libopus for calls]
@@ -135,6 +186,33 @@ Microphone -----------------> Opus (MediaCodec, mono 48 kHz, 32 kbps)  [experime
   settings"); resolutions 240p/360p/480p, FPS 15/24/30. Keyframes are sent on demand
   (join, loss recovery) and every 60 seconds as a safety net, because a scheduled keyframe on detailed content is
   the biggest single burst on a Bluetooth link.
+- **Measured Auto ladder (Experimental, off by default; `test_auto_ladder`).** With Video quality on Auto, the
+  start geometry, frame rate and rate come from the measured link instead of the fixed default, and the same
+  rungs are then walked up and down while the session runs. `AutoQualityLadder` is a pure policy: link goodput
+  (85% utilisation; a call direction plans half the measured link; unmeasured plans 300 kbps), codec, encoder
+  class and the wire model `1.076 x (video + 0.64 x fps) + audio wire` give a rung (below the lowest it is audio
+  only). The request becomes a climb bound (a call: the transport maximum; a stream: the learned fan-out budget for
+  one link, with admission still planned at the start rate) and the call header the class maximum geometry, so
+  nothing in Auto is a fixed ceiling. `LinkRateController` starts at the plan's rate and climbs only on clean evidence;
+  `CallResolutionLadder` (calls and live streams) follows its target with the measured limits, one rung up after
+  1.25x headroom held 10 s and 15 s between changes, down after 1.5 s; `FrameRateLadder.curve` cuts frame rate
+  above 15 FPS first and below 15 FPS only after 240p. A stream restarts its camera encoder at a rung change
+  (never while paused; the first frame is a keyframe carrying the new size in-band) and follows the weakest direct
+  child, so a source never outruns its tightest child (relays handle their own downstream hop). Manual video
+  settings are never touched; the picker only warns when bits per pixel per frame fall below the fitted floor.
+  Evidence and phone plan: DECISIONS "Measured Auto ladder".
+- **GPU scale ladder (Experimental, off by default; `test_gpu_scale_ladder`, with the Auto ladder).** A rung change
+  no longer restarts the camera. `GpuScaleCapture` opens the camera once at one capture mode (`GpuScaleMath.chooseCapture`:
+  the smallest mode that covers the session's largest picture in its aspect, cropped on the GPU when the sensor has none)
+  into a SurfaceTexture; `GpuFrameRenderer` (one EGL context on its own thread) draws each frame into the encoder's input
+  surface at the rung size, the crop and scale folded into the texture matrix, with the camera's sensor timestamp as the
+  presentation time (so timestamps stay continuous across encoder resets). Frames stay in sensor orientation exactly as
+  when the camera fed the encoder directly, so the display-rotation flag and the viewer's transform are unchanged. Rungs
+  are 720/540/480/360/240/180/144p in the session aspect, each side rounded to the encoder's alignment with the few
+  pixels of difference cropped, never stretched. A rung change is `old encoder close()` (the capture stays open for
+  2.5 s) then `new CameraVideoEncoder.start()`; its first keyframe carries the size change marker as before, so
+  viewers rebuild their decoder. Software YUV-input encoders, raw fixtures, benchmark reference frames, Manual video
+  settings and camera flip/off keep or release the camera as before.
 - **Framing.** Video and Opus audio share one monotonic timestamp inside the encrypted `BTV3` packet, so the
   receiver can lip-sync them. Flags mark codec configuration, keyframes, rotation, audio and discontinuities.
 - **Queues.** A source encodes once and gives each child an independent ordered queue with admission and
@@ -161,6 +239,11 @@ Bluetooth transport -> BMS1 open -> BME1 open -> BTV3 parse
   slightly with pitch preserved, instead of dropping samples. The encoded-frame queue is sized for the whole
   adaptive range and applies backpressure to the link instead of discarding queued frames. Only frames that cannot
   be decoded anyway (before the first keyframe, or after a marked discontinuity) are skipped.
+- **Size changes mid-stream.** A ladder restart (Auto stream ladder, call resolution ladder) changes the coded size; the
+  viewer reads each keyframe's size from its bitstream and, when the size or the codec configuration differs, releases its
+  decoder and creates one for it (held new csd, recovery with the newest csd, adaptive-playback maximum, display follows).
+  The sender marks the first keyframe of a size-changing restart as a discontinuity; late joiners get only the current
+  encoder's csd. Switch and detail: SWITCHES.md, PROTOCOL.md "Mid-stream size changes".
 - **Bounded media age (Experimental).** When the delay must not grow without limit (calls, or a slow relay branch),
   an experimental policy degrades video in a fixed order: lower rate, skip verified non-reference frames, skip to
   the next keyframe, pause video and keep audio. Audio is never dropped. It is under A/B comparison against the
@@ -191,6 +274,21 @@ MeshLive is a tree of hop-local relationships, not a routed network.
   2.5 seconds, or starved for most of a window while a sibling is healthy) is released: the parent sends an authenticated
   `LOCAL_CAPACITY` withdrawal, waits for the acknowledgement, closes that one link, and the child avoids that route
   for 30 seconds before searching again. The source's encoder is never slowed for one child's sake.
+- **Per-child thinning (Experimental, off by default).** With the relay child thinning switch on, a forwarder gives
+  its child one of three levels, chosen from that child's own queue age, the rate this phone delivered to it and the
+  child's late-media report (nothing from any phone beyond the next hop). *Full* forwards every record. *Base*
+  leaves out the frames the source marked discardable, which it does only for frames whose compressed data proves that
+  no later frame refers to them, so the child sees half the frame rate and every frame it gets decodes: no re-encode,
+  no keyframe, and stepping back up needs nothing. *Audio only* leaves out all video while audio, configuration and
+  stream-state records continue, so a link too weak even for the base layer keeps speech instead of stalling at a
+  fraction of a frame per second; the child shows "Video paused: weak link", and the way back asks for a keyframe
+  with the same back-off the bounded-age shedding uses. A step down is immediate on a severe backlog and otherwise
+  needs the backlog to persist; a step up needs a calm period and a hold that doubles after each failed probe
+  (8 s to 60 s), and does not start if the child's measured capacity cannot carry the next level. Only whole records
+  are dropped, so the end-to-end checks are unchanged: each record is sealed with its own sequence, flags in its
+  authenticated header, and the receiver accepts any increasing sequence (a gap), refusing replay and reordering. The
+  source encodes the second layer for the whole stream while the switch is on (about 2.5 VMAF at equal bitrate),
+  because it cannot see a weak link two hops away.
 - **Losing a parent.** An unexpected parent loss keeps the last frame on screen and searches for the **same logical
   stream**. The replacement can be the source or another forwarder, but its authenticated identity must match its
   announcement and the original source must match the one first accepted. Playback resumes at a fresh keyframe. The
@@ -254,6 +352,15 @@ MeshLive is a tree of hop-local relationships, not a routed network.
 - There is an in-app **emergency wipe** (confirmed, or a triple-tap gesture that is off by default) that deletes
   every Keystore key first and then the app data. Its limits (flash remanence, copies outside the app) are listed
   in [PROTOCOL.md](PROTOCOL.md), "Emergency wipe".
+- Android backup is off (`allowBackup="false"`, no backup or data-extraction rules): the keys are Keystore-bound, so a
+  restored copy would be unreadable, and nothing is sent to cloud backup.
+- Call and stream notifications carry the peer's name in their full version only (shown on an unlocked phone); the
+  lock-screen version is name-free (`NotificationPrivacy`, `ActiveVideoSessionService`). The opt-in "Show caller names on
+  the lock screen" makes a named notification public.
+- An unreadable verified-contact store fails open: calls and streams continue and nobody shows as verified. The home
+  screen shows "Verified contacts couldn't be loaded" (`VerifiedStoreBannerController`). A temporary Keystore or I/O
+  error is retried with backoff (2 s doubling to 60 s, `VerifiedStoreRecovery`) and the banner clears by itself; a
+  corrupt file is kept untouched and never overwritten, and the banner offers "Reset verified contacts".
 - An independent security review has not happened yet.
 
 ## Store-and-forward messages (Experimental)
@@ -270,8 +377,45 @@ not nearby right now. Version 1 covers two **directly adjacent** phones only.
   it yields immediately to a call, stream or relay. An automatic sync mode (debug extra) uses the same exchange with
   per-peer back-off.
 - A carrier role, where a third phone ferries sealed bundles for others, exists in code but is hard-off.
+- The phone that dials gets the call dial's 2M protections (`MessageDialPhy`, switch `test_message_adaptive_phy`): a first 2M link whose
+  hop handshake stalls is closed after 3 s and retried once on 1M, and a peer that needed that, or whose 2M exchange died early
+  with no answer, starts on 1M next time. A plain exchange keeps its 120 s total limit only while no transfer moves: it is extended
+  (up to 15 minutes) while chunks keep flowing, and the 10 s liveness and progress deadlines stay strict (`test_mv2_progress_total`).
+  A responder gives the 60 s spacing back when an admitted exchange is cut by the link before anything moved (the hourly cap stays).
 
 See [PROTOCOL.md](PROTOCOL.md), "Store-and-forward messages", and [DECISIONS.md](DECISIONS.md), "Design A", for the design.
+
+**Messages v2 attachments (Experimental, switch `test_messaging_v2`, off).** Phase 1b of Design M lets a message carry any file. On send, `AttachmentPreparer` turns a picked photo, video or file into a `PreparedAttachment` for `MessagingV2Engine.sendFile`: pictures are re-encoded (1600 px, JPEG 80, no metadata) or, as "Original", a JPEG is rewritten without any `APPn`/`COM` segment or trailer (`JpegMetadataFilter`); videos are remuxed without their location atoms and scrubbed again (`Mp4Scrubber`); any other file is sent as it is. On receive, nothing is parsed or decoded automatically: `FileSniffer` decides from the bytes what the file is (the sender's MIME type is only a label), `FileActionPolicy` offers Open only for pictures, audio, video, PDF and plain text that are not polyglots, and everything else is Save only behind a warning. Open hands the viewer a revocable one-file grant on a non-exported `MessagingV2OpenProvider` that decrypts from the file vault on demand through a proxy file descriptor (`OpenGrantTable`, `VaultRangeReader`); a picture is decoded only after a tap, in `MessagingV2ImageService`, an isolated-process service. The details and limits are in [PROTOCOL.md](PROTOCOL.md) "Implementation notes (phase 1b)".
+
+**Messages v2 conversations (Experimental, switch `test_messaging_v2`, off).** Phase 1c puts the engine behind two screens, both views of `MainActivity` rather than activities, because the thread link (phase 1d) is dialled from the discovery that runs while the Call screen (and so the Contacts tab) is showing; a second activity would stop that scan. With the switch off the Contacts tab is unchanged and a row still opens the contact sheet.
+- *Contacts rows* (`ConversationRowsController`, `item_conversation_row`): each saved person is one row with the name and verified check, a one-line preview (or the kind: Photo, Voice note, File), the time, the unread count, the state glyph of the newest own message and "Nearby now". Rows with activity sort first (newest first), then the Contacts order. They are computed off the main thread from `ConversationIndex` and refreshed every 3 s while the tab shows. A tap opens the thread; the contact actions (call, video, rename, block, remove) live in the thread's top bar and its info sheet (`ContactActions`).
+- *Thread* (`ThreadScreen`, `view_thread`): top bar (back, name with verified check, "Nearby" or "Not nearby", voice, video, more), a banner for the link state, the message list, the composer. Yours are raised-surface bubbles on the right, theirs plain-surface on the left, with date separators and an unread marker; a tap on a bubble's glyph shows its sentence ("Delivered to Rahul, 14:00"). The states are the engine's: Waiting, Sending, Delivered, Downloaded, Read, and Not sent with Retry (`MessagingV2Engine.retry` seals the message again from its words or from the copy the vault keeps). A file is a card (type icon, name, size) with Download, Cancel, Open, Save or Show picture as `FileActionPolicy` allows; a picture is decoded only after a tap. The banner covers `ConversationLinkState`: not a contact or card pending (Add contact, Compare), keys changed (Compare, Accept new keys after a confirmation, Dismiss; the composer stays off), and an older peer app. The composer has a text field, an attach sheet (Photo or video with "Send original", File) and a microphone that records a voice note while held (slide left to cancel; AAC in MP4, two minutes). The info sheet holds the conversation's disappearing timer and read-receipt choice (`ThreadSettings`, sealed), the contact actions, the safety-number comparison and Delete conversation. Opening the thread is `ChatPresence.threadOpened`; leaving it, or pausing the app, is `threadClosed` and revokes every open grant of the conversation. The window is `FLAG_SECURE` while the thread shows (a DEBUG launch with `test_allow_screenshots` is exempt).
+- *Structure:* everything the screens show is built by pure code in `MessagingV2ThreadModel.kt` (row text, glyph mapping, banners and composer state, file cards, the list with separators), over a `ThreadText` that reads string resources by name (`strings_messaging_v2_ui.xml`), so the JVM tests check the real words. Settings > Privacy gains "Read receipts" (off) and "Download files automatically" (up to 8 MB) when the switch is on (`MessagingV2PrivacyRows`, `MessagingV2Options`).
+
+## Audio-only live (Experimental)
+
+Off by default (`AudioLiveFeatureDefaults.ENABLED`, Settings > Features). A radio is a stream kind of its own, not
+video with the camera off. Wire rules: [PROTOCOL.md](PROTOCOL.md) "Experimental audio-only live streams"; reasons and
+measurements to take: [DECISIONS.md](DECISIONS.md) "Design AL".
+
+```text
+microphone -> AudioLiveEncoder (libopus, MediaCodec fallback) -> AudioLiveBatcher (10 x 20 ms)
+  -> AudioLiveSigner (one signature per record) -> BluetoothVideoBroadcaster -> senders (per-child queue)
+  -> BMS1/BME1 mesh envelopes -> [relay: copy, shed stale whole records] -> listener
+listener: reader verifies the source's signatures -> OpusAudioDecoder (RADIO clock, power-saving AudioTrack)
+```
+
+- **Source.** `AudioLiveSource` owns capture and the signer; `BluetoothVideoSender` writes the `BTL1` header and
+  signed records and applies the age bound and the withdrawal rules per child; the source caps direct listeners at 4.
+- **Listener and relay.** `AndroidVideoReceiver` branches after the header: no video decoder, surface or keyframe;
+  a relay admits itself from the preset, joins its child at the next record and sheds stale records with the exact
+  mesh-flag predicate. Playout uses the `RADIO` profile (start 600 ms, adaptive to 3 s). Audio focus loss mutes
+  playout and keeps the link (a permanent loss leaves after 60 s).
+- **Background.** A listener runs under the media-playback foreground service with a media-style notification and
+  a framework media session (neutral lock-screen text, no metadata); a broadcaster runs under the microphone type.
+  The service stops with the receiver.
+- **UI.** `AudioLiveController` and its layouts (Go live choice sheet, broadcast screen, listening screen) are new
+  files with small hooks in `MainActivity` marked "AUDIO-LIVE hook".
 
 ## Offline app sharing
 
@@ -293,7 +437,8 @@ Bitchat, re-implemented from a description, with no code copied).
 Phones differ in SoC, Bluetooth stack version, vendor skin and codec components, and many "it works on my phone"
 problems are stack bugs. MeshLive keeps every phone-family specific decision in one registry
 (`DevicePolicyRegistry.entries`, built from `DevicePolicyRegistry.kt` plus the per-area files `CodecPolicy`,
-`YuvPolicy`, `BluetoothTransportPolicy`, `BackgroundPolicy`, `MemoryThermalPolicy` and `NativeCompat`). Code that
+`YuvPolicy`, `BluetoothTransportPolicy`, `BackgroundPolicy`, `MemoryThermalPolicy`, `NativeCompat`, `ScanPolicy`,
+`ServiceFamilyPolicy`, `AudioPolicyEntries`, `CocPolicy`, `CameraPolicy`, `AdvertisingPolicy` and `PhyLinkPolicy`). Code that
 used to test `Build` fields asks the resolved policy for an effect instead.
 
 Each entry has:
@@ -315,6 +460,22 @@ Each entry has:
   proposals would match the phone, so test runs collect evidence before anything is promoted. At the 2026-10-10
   revision the registry had 75 entries (55 active, 20 proposals).
 
+**Matchers, areas and service types added in 2026-10-14.** A matcher can now also name a security-patch window (so a
+stack bug fixed in a monthly patch stops matching), one of five Bluetooth-stack eras (Android 10-11 legacy stack, Android 12 legacy stack with
+optional new modules, Android 13 new core, Android 14 flag-heavy, Android 15+ aconfig flags) and *runtime traits* read once at start by
+`DeviceTraitsProbe` (ROM version properties, supported ABIs, page size, memory, low-RAM flag, Bluetooth package
+versions, audio features, camera hardware level on first use). A trait that could not be read is "unknown" and never
+satisfies a constraint. Entries belong to a `PolicyArea` (codec, YUV, Bluetooth transport, graphics, background,
+memory and thermal, native, camera, audio). Each area file exposes `entries` and is listed once in the aggregate;
+three areas fold a sub-list into their own `entries` instead (GATT link entries inside the transport area, decoder entries inside
+the codec area, phone-maker entries inside the background area, and the thermal family inside memory and thermal), so
+no id is counted twice. The foreground service decides its types in one place (`ServiceTypePolicy`): camera and
+microphone only for a session that uses them, `connectedDevice` for the Bluetooth session, `mediaPlayback` for audio-only
+live, and the optional `location` type only on Android 10-11 and only while Location is on; a refusal drops the optional
+type first and is reported as requested versus held (`fgs_start`). Every area has its own switches object
+(`XxxSwitches.applyLaunchExtras`), parsed once in the launch code; all non-default arms are DEBUG-only and listed in
+[SWITCHES.md](SWITCHES.md).
+
 Two rules keep this honest. Acceptance gates are identical for every phone and never depend on a policy entry. And
 a phone-specific protection is a visible limit, never a silent change to a requested bitrate, FPS, resolution,
 encoder, transport or buffer. `python tools/device_policy_report.py` prints the registry with its sources and
@@ -327,8 +488,10 @@ confidence by itself).
 - Typed foreground services (camera, microphone, connected device) protect ordinary app switching and screen-off. They
   do not recreate a session after the process is killed.
 - `BackgroundReliability` reports Android's documented restriction states (battery optimisation, background
-  restriction, standby bucket, power-save) and phone-maker guidance with settings links. It adds no keep-alive hacks
-  and no exemption prompt.
+  restriction, standby bucket, power-save) and phone-maker guidance with settings links, and builds the Settings
+  "Connection reliability" card. It adds no keep-alive hacks. The one system action it offers is Android's own battery
+  exemption dialog, in onboarding, in Settings and when an always-on role is switched on (design decision Q38); the
+  process-exit history, a phone-update stamp and the scan watchdog's suspect feed the card.
 - `DozeWatchdog` observes Doze, light Doze and Low Power Standby and shows "Phone is in deep sleep; calls may be
   delayed." It changes no behaviour.
 - Thermal limits reduce FPS and rate at source on Android's thermal status; a critical status stops streaming.

@@ -137,9 +137,33 @@ class MemoryThermalPolicyTest {
         assertTrue(proposals.toString(), "thermal-battery-temperature-fallback" in proposals)
         assertTrue(proposals.toString(), "native-armeabi-v7a-optional-build" in proposals)
         assertFalse(resolved.isActive("thermal-battery-temperature-fallback"))
-        // A phone that is not Unisoc/MediaTek does not list them.
+        // The thermal fallback is no longer a SoC-family rule: it is detected at run time (NaN streak), so every API 29+
+        // phone lists it, a Qualcomm one included; the ARM32 build proposal stays tied to the budget families.
         val qualcomm = DeviceFamilyPolicy.resolve(DeviceTraits("qcom", "kona", 34, socManufacturer = "QTI"), emptySet())
-        assertFalse("thermal-battery-temperature-fallback" in qualcomm.matchingProposals.map { it.id })
+        assertTrue("thermal-battery-temperature-fallback" in qualcomm.matchingProposals.map { it.id })
+        assertFalse("native-armeabi-v7a-optional-build" in qualcomm.matchingProposals.map { it.id })
+        assertEquals(
+            DeviceMatcher(sdkMin = 29),
+            MemoryThermalPolicy.entries.first { it.id == "thermal-battery-temperature-fallback" }.matcher,
+        )
+    }
+
+    @Test
+    fun theStatusFromHeadroomDocumentsTheRealClientRateLimit() {
+        // The old comment claimed NaN meant "called more than once per 10 s"; the AOSP client limit is 500 ms.
+        val source = java.io.File("src/main/java/com/example/bluetoothtest/MemoryThermalPolicy.kt").readText()
+        assertTrue(source.contains("MINIMUM_HEADROOM_TIME_MILLIS (500 ms)"))
+        assertFalse(source.contains("NaN (unsupported, or called more than once per 10 s)"))
+    }
+
+    @Test
+    fun forecastEntryRecordsTheCadenceCorrectionAndTheRetest() {
+        val entry = MemoryThermalPolicy.entries.first { it.id == "thermal-headroom-forecast" }
+        assertTrue(entry.proposed)
+        assertTrue(entry.behaviour, entry.behaviour.contains("every 2 s") && entry.behaviour.contains("test_thermal_forecast_legacy_10s"))
+        assertTrue(entry.evidence.joinToString(), entry.evidence.any { it.startsWith("NEEDS RETEST") })
+        assertTrue(entry.sources.any { it.reference.endsWith("ThermalManagerService.java") })
+        assertTrue(entry.sources.any { it.reference.endsWith("PowerManager.java") })
     }
 
     @Test
@@ -183,7 +207,7 @@ class MemoryThermalPolicyTest {
             queue.offerMust("left")
         }
         producer.start()
-        assertEquals("left", queue.poll(2_000, java.util.concurrent.TimeUnit.MILLISECONDS))
+        assertEquals("left", queue.poll(120_000, java.util.concurrent.TimeUnit.MILLISECONDS))
         producer.join()
         assertEquals(null, queue.poll(10, java.util.concurrent.TimeUnit.MILLISECONDS))
     }

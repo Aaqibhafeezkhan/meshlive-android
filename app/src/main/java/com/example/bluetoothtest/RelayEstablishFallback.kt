@@ -26,15 +26,22 @@ internal class EstablishmentFailureTracker(
 ) {
     private val failures = HashMap<String, MutableList<Long>>()
     private val marks = HashMap<String, Long>()
+    private val levels = HashMap<String, Int>()
 
-    /** Records one establishment failure; true when this failure newly marks [key]. */
+    /**
+     * Records one establishment failure; true when this failure newly marks [key]. [decaying] (the
+     * Experimental `test_relay_establish_budget`) escalates the mark 30/60/120/300 s on consecutive marks
+     * of the same peer without a success in between, instead of a flat [markMs].
+     */
     @Synchronized
-    fun onFailure(key: String, nowMs: Long): Boolean {
+    fun onFailure(key: String, nowMs: Long, decaying: Boolean = false): Boolean {
         val recent = failures.getOrPut(key) { mutableListOf() }
         recent.removeAll { nowMs - it !in 0 until windowMs }
         recent += nowMs
         if (recent.size < threshold || isMarked(key, nowMs)) return false
-        marks[key] = nowMs + markMs
+        val level = levels[key] ?: 0
+        marks[key] = nowMs + if (decaying) decayingMarkMs(level) else markMs
+        levels[key] = level + 1
         recent.clear()
         return true
     }
@@ -49,16 +56,62 @@ internal class EstablishmentFailureTracker(
         return true
     }
 
+    /** Milliseconds left on [key]'s mark (0 when unmarked). */
+    @Synchronized
+    fun remainingMs(key: String, nowMs: Long): Long {
+        val until = marks[key] ?: return 0L
+        return (until - nowMs).coerceAtLeast(0L)
+    }
+
+    private val stalls = HashMap<String, MutableList<Long>>()
+    private val stallLevels = HashMap<String, Int>()
+
+    /**
+     * Records one guard-detected hop-stage stall ([RelayChildStallGuard]: the link was silent after the connection update, the
+     * dead-anchor signature) and returns true when it newly marks [key]. Stalls are not refusals: a stall says this attempt drew
+     * a dead anchor phase (about 16 percent of attempts), not that the child is unreachable. They count apart from
+     * [onFailure], need [stallThreshold] within [stallWindowMs], and mark only for [STALL_MARKS_MS] (30 s, 60 s, 120 s, then
+     * 300 s on consecutive marks of the same peer without a success), so two dead anchors in a row never withdraw the offer for
+     * the full [MARK_MS] (b14-audio-chain-a5a8f056 music r1: stalls 15.9 s apart marked the child for 5 minutes, twice).
+     */
+    @Synchronized
+    fun onStall(key: String, nowMs: Long, stallThreshold: Int = STALL_THRESHOLD, stallWindowMs: Long = STALL_WINDOW_MS): Boolean {
+        val recent = stalls.getOrPut(key) { mutableListOf() }
+        recent.removeAll { nowMs - it !in 0 until stallWindowMs }
+        recent += nowMs
+        if (recent.size < stallThreshold || isMarked(key, nowMs)) return false
+        val level = stallLevels[key] ?: 0
+        marks[key] = nowMs + STALL_MARKS_MS[level.coerceIn(0, STALL_MARKS_MS.lastIndex)]
+        stallLevels[key] = level + 1
+        recent.clear()
+        return true
+    }
+
     @Synchronized
     fun onSuccess(key: String) {
         failures.remove(key)
         marks.remove(key)
+        levels.remove(key)
+        stalls.remove(key)
+        stallLevels.remove(key)
     }
 
     companion object {
         const val THRESHOLD = 2
         const val WINDOW_MS = 120_000L
         const val MARK_MS = 5L * 60 * 1_000
+
+        /** Guard stalls needed within [STALL_WINDOW_MS] to mark a child (refusals need [THRESHOLD]). */
+        const val STALL_THRESHOLD = 3
+        const val STALL_WINDOW_MS = 120_000L
+
+        /** Marks for consecutive stall marks of the same peer: short, because a dead anchor redraws on the next link. */
+        val STALL_MARKS_MS = longArrayOf(30_000L, 60_000L, 120_000L, 300_000L)
+
+        /** Escalating marks of the Experimental establishment budget: 30 s, 60 s, 120 s, then 300 s. */
+        private val DECAYING_MARKS_MS = longArrayOf(30_000L, 60_000L, 120_000L, 300_000L)
+
+        fun decayingMarkMs(level: Int): Long = DECAYING_MARKS_MS[level.coerceIn(0, DECAYING_MARKS_MS.lastIndex)]
     }
 }
 
@@ -74,6 +127,35 @@ internal fun isRelayEstablishmentFailure(hopAuthenticated: Boolean, message: Str
     if (hopAuthenticated || message == null) return false
     val text = message.lowercase()
     return "status 133" in text || "status 62" in text || "establish" in text
+}
+
+/** What a failed relay child attempt is to the establishment tracker. */
+internal enum class RelayChildFailureKind {
+    /** Not an establishment failure (the link was authenticated, or another error). */
+    NONE,
+
+    /** The stack refused or timed out the connection (status 133/62, "establish"): counted with [EstablishmentFailureTracker.onFailure]. */
+    REFUSAL,
+
+    /** The stall guard closed a link that was silent before hop authentication: counted with [EstablishmentFailureTracker.onStall]. */
+    STALL,
+}
+
+/**
+ * [stallSeparate] false (the control arm `test_relay_stall_separate=false`) counts a stall as an ordinary refusal, as before. A stall
+ * is checked first: the error that follows a guard close is an EOF, but a stalled attempt whose message also names a 133 is still
+ * the stall, not a refusal.
+ */
+internal fun classifyRelayChildFailure(
+    hopAuthenticated: Boolean,
+    message: String?,
+    stalled: Boolean,
+    stallSeparate: Boolean,
+): RelayChildFailureKind = when {
+    isRelayStallEstablishmentFailure(stalled, hopAuthenticated) ->
+        if (stallSeparate) RelayChildFailureKind.STALL else RelayChildFailureKind.REFUSAL
+    isRelayEstablishmentFailure(hopAuthenticated, message) -> RelayChildFailureKind.REFUSAL
+    else -> RelayChildFailureKind.NONE
 }
 
 /** Selection rank: 1 for a marked (establishment-failing) parent, so it sorts after every other route. */

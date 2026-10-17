@@ -18,7 +18,7 @@ import com.google.android.material.materialswitch.MaterialSwitch
  * Features; neither depends on the "Manual settings" toggle or on BuildConfig.DEBUG.
  *
  * Shipping a feature ON is a one-line change here, made only after the phone test named beside it
- * has passed (README register). A user who has touched a switch keeps that explicit choice; an
+ * has passed (docs/SWITCHES.md register). A user who has touched a switch keeps that explicit choice; an
  * untouched switch follows the constant, so flipping it reaches everyone who never decided.
  *
  * DEBUG benchmark launches (any `test_` extra) are unchanged: they read only their own extras,
@@ -30,19 +30,19 @@ internal object CallFeatureDefaults {
     const val APP_SETTINGS_PREFERENCES = "bluetooth_video_settings"
 
     /** Voice calls with per-direction video upgrade (phone test T1). */
-    const val VOICE_CALLS = false
+    const val VOICE_CALLS = true // on, no Settings switch since 2026-10-17 (design decision)
 
     /** Ringing tone for the caller while the callee rings (T1). */
-    const val RINGBACK = false
+    const val RINGBACK = true // on, no Settings switch since 2026-10-17 (design decision)
 
     /** Pause the outgoing camera while the phone is held at the ear (T1). */
-    const val EAR_CAMERA_PAUSE = false
+    const val EAR_CAMERA_PAUSE = true // on, no Settings switch since 2026-10-17 (design decision)
 
     /** The call screen over the lock screen, and the screen turning on for an incoming call (T2). */
-    const val LOCK_SCREEN_CALLS = false
+    const val LOCK_SCREEN_CALLS = true // on, no Settings switch since 2026-10-17 (design decision)
 
     /** Answer / Decline / Hang up from call notifications (CallStyle) (T2). */
-    const val CALL_NOTIFICATIONS = false
+    const val CALL_NOTIFICATIONS = true // on, no Settings switch since 2026-10-17 (design decision)
 
     /** Store-and-forward Messages, direct neighbours only (T3). */
     const val MESSAGES = false
@@ -50,8 +50,8 @@ internal object CallFeatureDefaults {
     /** Start a message exchange by itself when a contact comes into range (T4). Needs Messages. */
     const val AUTO_SYNC = false
 
-    /** Optional names, call subjects and stream titles (T5). */
-    const val NAMES_AND_TITLES = false
+    /** Optional names, call subjects and stream titles. On since 2026-10-17, no Settings switch (design decision). */
+    const val NAMES_AND_TITLES = true
 }
 
 internal enum class CallFeature(
@@ -62,12 +62,12 @@ internal enum class CallFeature(
     val defaultOn: Boolean,
 ) {
     VOICE_CALLS(IntercomFeatureSettings.PREF_VOICE_CALLS, IntercomFeatureSettings.EXTRA_VOICE_CALLS, CallFeatureDefaults.VOICE_CALLS),
-    RINGBACK("feature_call_ringback", CallUxSettings.EXTRA_RINGBACK, CallFeatureDefaults.RINGBACK),
+    RINGBACK("feature_call_ringback_v2", CallUxSettings.EXTRA_RINGBACK, CallFeatureDefaults.RINGBACK),
     EAR_CAMERA_PAUSE(
-        "feature_call_ear_camera_pause", CallUxSettings.EXTRA_PROXIMITY_CAMERA_PAUSE, CallFeatureDefaults.EAR_CAMERA_PAUSE,
+        "feature_call_ear_camera_pause_v2", CallUxSettings.EXTRA_PROXIMITY_CAMERA_PAUSE, CallFeatureDefaults.EAR_CAMERA_PAUSE,
     ),
-    LOCK_SCREEN_CALLS("feature_call_lock_screen", CallUxSettings.EXTRA_LOCK_SCREEN, CallFeatureDefaults.LOCK_SCREEN_CALLS),
-    CALL_NOTIFICATIONS("feature_call_notifications", CallUxSettings.EXTRA_CALL_STYLE, CallFeatureDefaults.CALL_NOTIFICATIONS),
+    LOCK_SCREEN_CALLS("feature_call_lock_screen_v2", CallUxSettings.EXTRA_LOCK_SCREEN, CallFeatureDefaults.LOCK_SCREEN_CALLS),
+    CALL_NOTIFICATIONS("feature_call_notifications_v2", CallUxSettings.EXTRA_CALL_STYLE, CallFeatureDefaults.CALL_NOTIFICATIONS),
     MESSAGES(StoreForwardFeature.PREF, StoreForwardFeature.EXTRA, CallFeatureDefaults.MESSAGES),
     AUTO_SYNC(StoreForwardAutoSyncFeature.PREF, StoreForwardAutoSyncFeature.EXTRA, CallFeatureDefaults.AUTO_SYNC),
     NAMES_AND_TITLES(PeerLabelFeature.PREF, PeerLabelFeature.EXTRA, CallFeatureDefaults.NAMES_AND_TITLES),
@@ -177,14 +177,8 @@ internal class CallFeatureSettingsBinder(
     private class Row(val feature: CallFeature?, val switchId: Int, val get: (CallFeatureSet) -> Boolean)
 
     private val rows = listOf(
-        Row(CallFeature.VOICE_CALLS, R.id.featureVoiceCallsSwitch) { it.voiceCalls },
-        Row(CallFeature.RINGBACK, R.id.featureRingbackSwitch) { it.ringback },
-        Row(CallFeature.EAR_CAMERA_PAUSE, R.id.featureEarCameraPauseSwitch) { it.earCameraPause },
-        Row(CallFeature.LOCK_SCREEN_CALLS, R.id.featureLockScreenCallsSwitch) { it.lockScreenCalls },
-        Row(CallFeature.CALL_NOTIFICATIONS, R.id.featureCallNotificationsSwitch) { it.callNotifications },
         Row(CallFeature.MESSAGES, R.id.featureMessagesSwitch) { it.messages },
         Row(CallFeature.AUTO_SYNC, R.id.featureAutoSyncSwitch) { it.autoSync },
-        Row(CallFeature.NAMES_AND_TITLES, R.id.featureNamesSwitch) { it.namesAndTitles },
         Row(null, R.id.featureLockScreenNamesSwitch) { false },
     )
     private var binding = false
@@ -205,7 +199,7 @@ internal class CallFeatureSettingsBinder(
                 refresh()
             }
         }
-        root.findViewById<View>(R.id.featureFullScreenButton).setOnClickListener {
+        root.rootView.findViewById<View>(R.id.featureFullScreenButton).setOnClickListener {
             runCatching { FullScreenIntentAccess.openSettings(context) }
         }
         refresh()
@@ -229,8 +223,9 @@ internal class CallFeatureSettingsBinder(
                 canUse = FullScreenIntentAccess.canUse(context),
             )
             val visible = if (needsPrompt) View.VISIBLE else View.GONE
-            root.findViewById<View>(R.id.featureFullScreenButton).visibility = visible
-            root.findViewById<TextView>(R.id.featureFullScreenText).visibility = visible
+            // The call switches are gone (2026-10-17): this Android 14+ prompt sits under Allow calls on the main page.
+            root.rootView.findViewById<View>(R.id.featureFullScreenButton)?.visibility = visible
+            root.rootView.findViewById<TextView>(R.id.featureFullScreenText)?.visibility = visible
             root.findViewById<View>(R.id.featureBenchmarkNote).visibility =
                 if (host.benchmarkLaunch) View.VISIBLE else View.GONE
         } finally {

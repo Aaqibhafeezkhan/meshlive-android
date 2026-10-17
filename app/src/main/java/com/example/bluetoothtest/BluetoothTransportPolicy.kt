@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.bluetoothtest.PolicyConfidence.HIGH
 import com.example.bluetoothtest.PolicyConfidence.LOW
 import com.example.bluetoothtest.PolicyConfidence.MEDIUM
+import com.example.bluetoothtest.PolicySourceKind.AOSP_COMMIT
 import com.example.bluetoothtest.PolicySourceKind.AOSP_SOURCE
 import com.example.bluetoothtest.PolicySourceKind.API_REFERENCE
 import com.example.bluetoothtest.PolicySourceKind.BLUETOOTH_SPEC
@@ -50,7 +51,7 @@ internal object BluetoothTransportPolicy {
             "at process start, keyed by Settings.Global.BOOT_COUNT so a reboot never seeds stale starts.",
         sources = listOf(
             PolicySource(AOSP_SOURCE, "$A14_BT/android/app/src/com/android/bluetooth/gatt/GattService.java#3135",
-                "startScan: isScanningTooFrequently() -> SCAN_FAILED_SCANNING_TOO_FREQUENTLY; no scan runs"),
+                "startScan: isScanningTooFrequently() -> the scan is not started, silently: no onScanFailed(6) is delivered on any release (aosp-bt-versions SCAN-01)"),
             PolicySource(AOSP_SOURCE, "$A14_BT/android/app/src/com/android/bluetooth/gatt/AppScanStats.java#507",
                 "isScanningTooFrequently: the last getScanQuotaCount() starts all inside getScanQuotaWindowMillis()"),
             PolicySource(AOSP_SOURCE, "$A14_BT/android/app/src/com/android/bluetooth/btservice/AdapterService.java#6777",
@@ -62,7 +63,8 @@ internal object BluetoothTransportPolicy {
         evidence = listOf(
             "benchmarks/runs/lane-a-matrix-529f36cc/0001-4b5ecaf7784b/physical/a15s-bluetooth-6297.log:147 " +
                 "(\"App 'com.example.bluetoothtest' is scanning too frequently\" while an incoming-stream failure loop " +
-                "restarted discovery every ~1.5 s; 7 such lines in lane-a-matrix-529f36cc on the A15s and the S24)",
+                "restarted discovery every ~1.5 s; 7 such lines in lane-a-matrix-529f36cc on the A15s and the S24; the refusal " +
+                "is a stack log line, not a scan callback)",
         ),
         confidence = HIGH,
         confidenceNote = "The refusal is reproduced on Android 10 and 14 phones; that the budget removes it is not phone-tested.",
@@ -70,7 +72,7 @@ internal object BluetoothTransportPolicy {
         origin = "Audit 2026-10-10: BleL2capDiscovery restarted scans without counting starts.",
         area = PolicyArea.BLUETOOTH_TRANSPORT,
         validation = PolicyValidation.LOCALLY_REPRODUCED,
-        fallback = "Scans start immediately; a 6th start inside 30 s fails with code 6 (silently on Android 10).",
+        fallback = "Scans start immediately; a 6th start inside 30 s is dropped by the stack without any callback (no onScanFailed(6) on any release), so discovery goes quiet and only the app's own start budget protects it.",
     )
 
     val GATT_MTU_FIXED_517 = DevicePolicyEntry(
@@ -87,6 +89,9 @@ internal object BluetoothTransportPolicy {
                 "GATTC_ConfigureMTU sends GATT_MAX_MTU_SIZE whatever the app asked"),
             PolicySource(AOSP_SOURCE, "$A14_BT/system/bta/gatt/bta_gattc_act.cc#743",
                 "bta_gattc_cfg_mtu: an exchange already done or in progress is reported back with the current MTU"),
+            PolicySource(AOSP_SOURCE, "$A14_BT/system/stack/gatt/gatt_api.cc#820",
+                "GATTC_UpdateUserAttMtuIfNeeded: LE Data Length 251 is set only after an ATT MTU exchange, from the first caller's " +
+                    "requested value on Android 14+ (so a small first request caps the data length); a settle delay delays both"),
         ),
         sourceStatus = OFFICIAL,
         evidence = listOf("none: saved runs never set test_gatt_request_mtu below 517 on an Android 14+ client"),
@@ -102,9 +107,12 @@ internal object BluetoothTransportPolicy {
         id = "gatt-write-busy-retry",
         title = "Retry a GATT write the stack reports busy",
         matcher = DeviceMatcher(sdkMin = 33),
-        effects = listOf(GattWriteBusyRetry(maxWaitMs = 500L, stepMs = 2L)),
+        effects = listOf(GattWriteBusyRetry(maxWaitMs = 500L, stepMs = GattWriteBusyPolicy.LEGACY_STEP_MS)),
         behaviour = "When writeCharacteristic returns ERROR_GATT_WRITE_REQUEST_BUSY (201) the same write is retried " +
-            "every 2 ms for at most 500 ms before the link fails as before. Nothing is dropped or reordered.",
+            "every 2 ms for at most 500 ms before the link fails as before. Nothing is dropped or reordered. The " +
+            "Experimental arm test_gatt_busy_wedge=recover (default legacy, root review) retries every 25 ms (the framework " +
+            "has already retried 5 x 10 ms inside the call) and, on Android 13-14, ends the link at once on a busy answer " +
+            "while MeshLive has nothing in flight on that client (android13-14-gatt-client-wedged-after-busy).",
         sources = listOf(
             PolicySource(API_REFERENCE,
                 "https://developer.android.com/reference/android/bluetooth/BluetoothStatusCodes#ERROR_GATT_WRITE_REQUEST_BUSY",
@@ -115,7 +123,8 @@ internal object BluetoothTransportPolicy {
         sourceStatus = OFFICIAL,
         evidence = listOf("none: no 'write queue rejected' line in saved runs; upstream-documented, not locally tested"),
         confidence = MEDIUM,
-        confidenceNote = "Mechanism is AOSP source; it only matters when another client or app writes to the same peer.",
+        confidenceNote = "Mechanism is AOSP source; it only matters when another client or app writes to the same peer. " +
+            "A 25 ms step (backlog G-03; BluetoothGatt.java already retries 5 x 10 ms) is the Experimental test_gatt_busy_wedge=recover arm; the shipped step stays 2 ms.",
         reviewed = REVIEWED,
         origin = "Audit 2026-10-10: a busy return failed the whole GATT link at once.",
         area = PolicyArea.BLUETOOTH_TRANSPORT,
@@ -188,12 +197,17 @@ internal object BluetoothTransportPolicy {
 
     val SAMSUNG_DIRECT_CONNECT_TIMEOUT = DevicePolicyEntry(
         id = "samsung-gatt-direct-connect-5s",
-        title = "Samsung direct GATT connect may give up after about 5 s",
+        title = "Samsung direct GATT connect may give up after about 5 s (no AOSP basis: classify by duration)",
         matcher = DeviceMatcher(manufacturers = setOf("samsung")),
         effects = emptyList(),
-        behaviour = "Proposal (diagnostic): classify a 133 about 5 s after connectGatt on Samsung as the stack's own " +
-            "direct-connect timeout. Our 6/12 s attempt deadlines and retries already own the timeout.",
+        behaviour = "Proposal (diagnostic), reclassified 2026-10-14: AOSP has no 5 s direct-connect timer; its timers are " +
+            "30 s (L2CAP_BLE_LINK_CONNECT_TIMEOUT_MS and the GD create-connection timeout, ending in 133, or 147 from " +
+            "Android 14 QPR3). A failure at about 5 s on Samsung would be an OEM stack change. Every failed GATT connect " +
+            "now logs its duration class (gatt_connect_failure_class: fast 0x3E, own deadline, stack 30 s, other) on every " +
+            "phone, so a Samsung-only 5 s cluster shows up as data. Our 6/12 s attempt deadlines and retries own the timeout.",
         sources = listOf(
+            PolicySource(AOSP_SOURCE, "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/3615d8fa04",
+                "Add GATT_CONNECTION_TIMEOUT and change connection timeout flow (2024-01-19): the stack's direct connect ends after 30 s"),
             PolicySource(VENDOR_DOC,
                 "https://github.com/A-ElMahmi/BlueMesh/blob/4cfd94a9afc4/blessed/src/main/java/com/welie/blessed/BluetoothPeripheral.kt#L1518-L1519",
                 "blessed library comment (third party, not Samsung): Samsung connectGatt(autoConnect=false) times out after ~5 s"),
@@ -201,6 +215,7 @@ internal object BluetoothTransportPolicy {
         sourceStatus = PARTIAL,
         evidence = listOf("none: saved Samsung 133s are 0x3E failures 0.4-1 s after the request, not 5 s timeouts"),
         confidence = LOW,
+        confidenceNote = "The only 5 s source is a third-party library comment; aosp-bt-versions CONN-04 finds no AOSP 5 s timer.",
         reviewed = REVIEWED,
         origin = "Research 2026-10-10 (Qaul/Berty/Knit/MeshChat patterns).",
         proposed = true,
@@ -211,11 +226,12 @@ internal object BluetoothTransportPolicy {
 
     val ANDROID15_COC_STALL = DevicePolicyEntry(
         id = "android15-qcom-coc-connect-stall",
-        title = "Android 15 Qualcomm LE CoC connect can stall 30 s",
+        title = "Android 15 Qualcomm LE CoC connect can stall 30 s (superseded by coc-connect-bounded; the 30 s premise is wrong)",
         matcher = DeviceMatcher(sdkMin = 35, socFamilies = setOf(SocFamily.QUALCOMM)),
         effects = emptyList(),
-        behaviour = "Proposal: bound the blocking LE CoC socket connect (BluetoothSocket.close() aborts it) and fall " +
-            "back to the existing retry/auto-GATT path. Today BleCocClient.connectChannel has no app-side bound.",
+        behaviour = "Superseded by coc-connect-bounded (implemented: the LE CoC connect is bounded at 12 s on every SDK and " +
+            "falls back to the existing retry/auto-GATT path). The 30 s premise is wrong: AOSP's own L2CAP channel-connect timer is 60 s " +
+            "(L2CAP_CHNL_CONNECT_TIMEOUT_MS) and no 30 s CoC timer exists (aosp-bt-versions COC-04); the bound is still sound.",
         sources = listOf(
             PolicySource(API_REFERENCE, "https://developer.android.com/reference/android/bluetooth/BluetoothSocket#connect()",
                 "connect() blocks until connected or failed; close() from another thread aborts it"),
@@ -267,7 +283,11 @@ internal object BluetoothTransportPolicy {
             "came 77-92 ms after the update), the rest ran starved or healthy. Every M31 15 ms stage with the child anchor " +
             "11.3-13.7 ms after the parent anchor was dead or starved (8 of 8); every one at 3.7-10.3 ms was healthy " +
             "except two CoC stages without a data-length update (6.1/6.6 ms, 17-29 kbps). The generic mitigations (relay_child_stall_guard, relay_child_reanchor, " +
-            "relay_establish_fallback) apply to every phone; this entry only records the family so a later A/B " +
+            "relay_establish_fallback) apply to every phone; a child that is an A15s (MediaTek MT6765, Android 10) fails " +
+            "alike (11 of 23 attempts, 2026-10-12): six of nine failed attempts left the child with no connect request at all, " +
+            "three left both ends connected with no first anchor, and direct M31->A15s without a parent link lost about 2 of 28. " +
+            "The Experimental test_relay_establish_budget retries these fast 0x3E failures in place for 12 s. " +
+            "This entry only records the family so a later A/B " +
             "(test_relay_upstream_dck, test_gatt_request_mtu) can promote a family-specific rule, for example " +
             "a 30 ms parent link or a smaller data length for a relay child on this controller.",
         sources = listOf(
@@ -284,6 +304,11 @@ internal object BluetoothTransportPolicy {
             PolicySource(API_REFERENCE,
                 "https://developer.android.com/reference/android/bluetooth/BluetoothGatt#requestConnectionPriority(int)",
                 "the public API offers BALANCED, HIGH, LOW_POWER and (API 34) DCK only"),
+            PolicySource(AOSP_COMMIT,
+                "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/d32b2d461",
+                "Lower the BLE connection supervision timeout to 5s (2017): every requestConnectionPriority sends timeout = 500 (5 s) on " +
+                    "Android 10+ (20 s on 8-9), so the '0x08 after 5.0-5.1 s of silence' above is this timer expiring, " +
+                    "not a stack fault (aosp-bt-versions CONN-01); the link-silence line now names it"),
             PolicySource(VENDOR_DOC,
                 "https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrfxlib/softdevice_controller/doc/scheduling.html",
                 "Nordic's controller (a different vendor): peripheral link timing is dictated by the peer central and may " +
@@ -295,6 +320,12 @@ internal object BluetoothTransportPolicy {
                 "Core Vol 6 Part B 4.5 (connection state: events, supervision timer) and 5.1.1 (connection update: transmit " +
                     "window): two connections' overlapping events are left to the controller; no Samsung or Exynos document " +
                     "describes its scheduler"),
+            PolicySource(VENDOR_DOC,
+                "https://devzone.nordicsemi.com/f/nordic-q-a/129232/peripheral-connection-terminated-with-0x08-connection-timeout-after-163-ms-although-the-initial-supervision-timeout-is-720-ms",
+                "A Nordic answer cites Core v6.3 Vol 6 Part B 4.5.2: a connection that receives no packet from the peer in " +
+                    "its first six connection events is lost (0x3E; 6 x 45 ms = the 270 ms seen). Verified only through this " +
+                    "secondary quote (the primary Core text was not fetched, 2026-10-12); a connect request the peer never " +
+                    "received ends the same way"),
         ),
         sourceStatus = PARTIAL,
         evidence = listOf(
@@ -302,6 +333,7 @@ internal object BluetoothTransportPolicy {
             "benchmarks/runs/relayfix-0725a213-diagP1 (healthy 10.21 and 3.71), diagP2 (0001: four 0x3E; 0003: 2 deaths at 11.38/11.63)",
             "benchmarks/runs/mesh4ab-52681dbf-loop14b-1 (0002/0011/0012 deaths and starved stages at 11.98-13.73; 0001 healthy at 9.4)",
             "the ASUS (Qualcomm SM8150) as the dual-role relay: 29 child attempts, 5 x 0x3E, no 0x08",
+            "benchmarks/runs/demo-f22f533d-relay, -relay2, -relay3 and demo-cf8752d1-q5 0007/0008/0011/0012/0018: the M31 relay's A15s child, 11 of 23 attempts 0x3E (relay2: 4 of 4, offer withdrawn after 3.5 s)",
         ),
         confidence = LOW,
         reviewed = "2026-10-11",
@@ -322,7 +354,7 @@ internal object BluetoothTransportPolicy {
         ANDROID15_COC_STALL,
         ANDROID12_DISCONNECT_STATUS_ZERO,
         EXYNOS9611_DUAL_ROLE_EQUAL_INTERVAL,
-    )
+    ) + GattLinkPolicy.entries
 
     private fun policy(): ResolvedDevicePolicy = DeviceFamilyPolicy.current()
 
@@ -605,13 +637,14 @@ internal class LeLinkDiagnostics(
             Locale.ROOT,
             "LE link: link=%s | event=%s | peer=...%s | phy requested=%s observed=%s status=%s | " +
                 "mtu requested=%s effective=%s status=%s source=%s | priority requested=%s queued=%s | " +
-                "interval observedMs=%s latency=%s supervisionMs=%s status=%s",
+                "interval observedMs=%s latency=%s supervisionMs=%s status=%s | btAudio=%s",
             link, event, peer?.takeLast(5) ?: "unknown",
             requestedPhy, observedPhy, phyStatus?.toString() ?: "-",
             requested?.toString() ?: "-", effectiveMtu?.toString() ?: "-", mtuStatus?.toString() ?: "-", mtuSource,
             requestedPriority, priorityQueued?.toString() ?: "-",
             p?.let { String.format(Locale.ROOT, "%.2f", it.intervalMs) } ?: "-",
             p?.peripheralLatency?.toString() ?: "-", p?.supervisionTimeoutMs?.toString() ?: "-", p?.status?.toString() ?: "-",
+            runCatching { BluetoothAudioCoexistence.state().describe() }.getOrDefault("?"),
         )
     }
 

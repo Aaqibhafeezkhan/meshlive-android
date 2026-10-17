@@ -22,7 +22,7 @@ class BluetoothVideoBroadcaster(
     private val onLinkSample: (Any, LinkRateSample) -> Unit = { _, _ -> },
     /** True while Automatic rate control already sends at its lowest video rate (see [FanOutStarvationPolicy]). */
     private val encoderAtRateFloor: () -> Boolean = { false },
-) : Closeable {
+) : Closeable, AudioLiveSink {
     private val closed = AtomicBoolean(false)
     private val streamStarted = AtomicBoolean(false)
     private val paused = AtomicBoolean(false)
@@ -43,19 +43,38 @@ class BluetoothVideoBroadcaster(
     private val layerShare = LayerShareMeter()
     @Volatile private var admissionSettings: VideoSettings? = null
     @Volatile private var admissionTransport: BluetoothTransportOption? = null
+
+    /** Experimental audio-only live stream (Design AL): non-null for a radio broadcast. */
+    @Volatile private var audioLive: AudioLiveSendConfig? = null
+    private val admissionLog = AudioLiveLogLimiter()
     private var lastAdmissionRefreshNs = 0L
     private val capacityRejections = SourceCapacityRejectionPolicy()
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val starvation = FanOutStarvationPolicy()
     private val packetLock = Any()
     private val codecConfiguration = mutableListOf<StreamProtocol.Packet>()
+    private val videoConfigBatch = VideoConfigBatch()
     private var pendingAudioPacket: StreamProtocol.Packet? = null
     private val allDisconnectedRunnable = Runnable {
         if (senders.isEmpty() && !closed.get()) onAllDisconnected()
     }
 
+    /**
+     * Design SG stage 2 (Experimental, `coc_auto_gatt` + `test_coc_auto_gatt_streams`, off): the keys of the separate
+     * GATT child pool of an LE CoC source and the airtime each is charged. Both stay empty unless the pool is enabled,
+     * so every count below equals the plain one and the flag-off source behaves exactly as before.
+     */
+    private val gattPoolKeys = ConcurrentHashMap.newKeySet<String>()
+    private val gattCharges = ConcurrentHashMap<String, Double>()
+    private val gattRefusals = ConcurrentHashMap<String, Pair<Long, StreamGattFallback.GattChildVerdict>>()
+    @Volatile private var gattPoolCapacity = 0
+
+    private fun gattChargedKbps(): Double = gattCharges.values.sum()
+    private fun primarySenderCount(): Int = senders.keys.count { it !in gattPoolKeys }
+    private fun primaryConnectedCount(): Int = connectedPeers.count { it !in gattPoolKeys }
+
     fun sourceSlotsFull(): Boolean = !closed.get() && maximumSourceChildren > 0 &&
-        connectedPeers.size >= maximumSourceChildren
+        primaryConnectedCount() >= maximumSourceChildren
 
     /** True while an admitted receiver is still connecting/authenticating. */
     fun connectionAttemptsPending(): Boolean = !closed.get() && senders.size > connectedPeers.size
@@ -74,11 +93,37 @@ class BluetoothVideoBroadcaster(
         ioConfig: VideoStreamIoConfig = VideoStreamIoConfig.DEFAULT,
         maximumChildrenOverride: Int? = null,
         debugTraceSession: String? = null,
+        /** Experimental audio-only live stream: planned with the audio per-link figure and the source cap. */
+        audioLiveConfig: AudioLiveSendConfig? = null,
+        /** Design SG stage 2: non-null (and only on an LE CoC video source) enables the separate GATT child pool. */
+        gattPool: GattChildPoolConfig? = null,
     ) {
         require(peers.isNotEmpty()) { "No viewers requested this stream" }
+        audioLive = audioLiveConfig
+        val pool = gattPool?.takeIf { transport == BluetoothTransportOption.BLE_L2CAP && audioLiveConfig == null }
+        gattPoolCapacity = pool?.capacity ?: 0
         val maximumChildren = maximumChildrenOverride ?: fanOutChildren(settings, transport)
         maximumSourceChildren = maximumChildren
-        if (maximumChildrenOverride == null) {
+        if (maximumChildrenOverride == null && audioLiveConfig != null) {
+            admissionTransport = transport
+            val perLink = MeshBandwidthEstimator.audioLivePerLinkKbps(audioLiveConfig.kbps, audioLiveConfig.framesPerRecord)
+            val budgetKbps = LinkCapacity.budgetKbps(transport, LinkLoadKind.FAN_OUT, perLink)
+            // connect() runs for every viewer request (several per second while slots are open): the line is
+            // logged when its content changes, and at most every 30 s otherwise.
+            if (admissionLog.shouldLog("$maximumChildren|${audioLiveConfig.maxChildren}|${budgetKbps.toInt()}|${transport.name}", System.nanoTime() / 1_000_000L)) {
+                android.util.Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK audio_live_admission: children=%d | cap=%d | perLinkKbps=%.1f | budgetKbps=%.0f | transport=%s".format(
+                        java.util.Locale.ROOT,
+                        maximumChildren,
+                        audioLiveConfig.maxChildren,
+                        perLink,
+                        budgetKbps,
+                        transport.shortLabel,
+                    ),
+                )
+            }
+        } else if (maximumChildrenOverride == null) {
             admissionSettings = settings
             admissionTransport = transport
             android.util.Log.i(
@@ -103,28 +148,51 @@ class BluetoothVideoBroadcaster(
         val newPeers = peers.distinctBy(::peerIdentityKey)
             .filterNot { senders.containsKey(peerIdentityKey(it)) }
             .filterNot { peer ->
+                // The phone-wide GATT registration pool refused a client registration a moment ago (status 257/128): every
+                // LE connect (GATT and the CoC control link) needs one, so a viewer request is not dialled again until the
+                // exponential hold (1 s to 30 s) ends. The viewer keeps requesting; one gatt_pool_exhausted line per step.
+                (transport != BluetoothTransportOption.CLASSIC_RFCOMM ||
+                    peer.announcement.transportOption() == BluetoothTransportOption.BLE_GATT) &&
+                    GattPoolBackoff.holdsClientConnect()
+            }
+            .filterNot { peer ->
                 peer.announcement.recoveryFromNodeIdPrefix == null &&
                     peerIdentityKey(peer) in disconnectedPreviousKeys
             }
             .filterNot { peer ->
                 val nowNs = System.nanoTime()
                 val previousSender = recoveryPreviousSenderKey(peer)?.let(senders::get)
+                val gattPeer = pool != null && peer.announcement.transportOption() == BluetoothTransportOption.BLE_GATT
+                if (gattPeer && gattRefusalHolds(peerIdentityKey(peer), nowNs, pool!!.capacity)) return@filterNot true
                 capacityRejections.shouldSuppress(
                     peerIdentityKey(peer),
                     nowNs,
-                    capacityAvailable = senders.size < maximumChildren,
+                    capacityAvailable = if (gattPeer) gattPoolKeys.size < pool!!.capacity else primarySenderCount() < maximumChildren,
                     previousParentStale = previousSender != null &&
                         previousSender.expectsPeriodicChildHeartbeat() &&
                         nowNs - previousSender.lastChildHeartbeatNs() >= RECOVERY_STALE_HEARTBEAT_NS,
                 )
             }
             .sortedByDescending { recoveryPreviousSenderKey(it) != null }
-        var availableSlots = (maximumChildren - senders.size).coerceAtLeast(0)
+        var availableSlots = (maximumChildren - primarySenderCount()).coerceAtLeast(0)
         var recoveryProbeAdmitted = false
         val admittedPeers = mutableListOf<BleL2capPeer>()
-        newPeers.forEach { peer ->
+        // Experimental phone-wide link budget (test_link_budget_admission, default off): a source with fan-out slots left
+        // can still be out of LE links. The refusal says "relay full", never "capacity" or "low memory".
+        val linkBudget = if (GattSwitches.linkBudgetAdmission) runCatching { GattLinkBudget.shared(context) }.getOrNull() else null
+        val budgetRefused = mutableSetOf<String>()
+        val gattCandidates = if (pool != null) {
+            newPeers.filter { it.announcement.transportOption() == BluetoothTransportOption.BLE_GATT }
+        } else {
+            emptyList()
+        }
+        val primaryCandidates = if (gattCandidates.isEmpty()) newPeers else newPeers - gattCandidates.toSet()
+        primaryCandidates.forEach { peer ->
+            val budgetFull = linkBudget != null && availableSlots > 0 &&
+                !linkBudget.admitChild(upstreamParentLinked = true).allowed
+            if (budgetFull) budgetRefused += peerIdentityKey(peer)
             when {
-                availableSlots > 0 -> {
+                availableSlots > 0 && !budgetFull -> {
                     admittedPeers += peer
                     availableSlots--
                 }
@@ -136,20 +204,27 @@ class BluetoothVideoBroadcaster(
                 }
             }
         }
-        val rejectedCount = newPeers.size - admittedPeers.size
+        val rejectedCount = primaryCandidates.size - admittedPeers.size
         if (rejectedCount > 0) {
             val admittedKeys = admittedPeers.map(::peerIdentityKey).toSet()
-            newPeers.filterNot { peerIdentityKey(it) in admittedKeys }.forEach { peer ->
-                capacityRejections.reject(peerIdentityKey(peer), System.nanoTime())
+            primaryCandidates.filterNot { peerIdentityKey(it) in admittedKeys }.forEach { peer ->
+                val key = peerIdentityKey(peer)
+                capacityRejections.reject(
+                    key,
+                    System.nanoTime(),
+                    if (key in budgetRefused) SourceCapacityRejectionPolicy.REASON_RELAY_FULL else SourceCapacityRejectionPolicy.REASON_CAPACITY,
+                )
             }
             onStatus(
                 "$rejectedCount receiver(s) exceeded the measured ${transport.shortLabel} " +
                     "fan-out budget at ${settings.bitRate / 1_000} kbps.",
             )
         }
+        if (pool != null) admitGattPoolPeers(gattCandidates, pool, settings, admittedPeers)
         val connectingAttempts = mutableMapOf<String, BluetoothVideoSender>()
         admittedPeers.forEach { peer ->
             val peerKey = peerIdentityKey(peer)
+            val gattChild = peerKey in gattPoolKeys
             lateinit var sender: BluetoothVideoSender
             sender = BluetoothVideoSender(
                 queueCapacity = queueCapacity,
@@ -157,8 +232,10 @@ class BluetoothVideoBroadcaster(
                 onDisconnected = {
                     if (senders.remove(peerKey, sender)) {
                         connectedPeers.remove(peerKey)
+                        gattPoolKeys.remove(peerKey)
+                        gattCharges.remove(peerKey)
                         onConnectionsChanged(connectedPeers.size)
-                        if (senders.size < maximumChildren && !closed.get()) onCapacityAvailable()
+                        if (primarySenderCount() < maximumChildren && !closed.get()) onCapacityAvailable()
                         if (senders.isEmpty() && !closed.get()) {
                             timeoutHandler.removeCallbacks(allDisconnectedRunnable)
                             timeoutHandler.postDelayed(
@@ -173,7 +250,9 @@ class BluetoothVideoBroadcaster(
                 debugDirectGattHeartbeat = debugDirectGattHeartbeat,
                 debugGattWriteTiming = debugGattWriteTiming,
                 onLinkSample = { sample ->
-                    onLinkSample(peerKey, sample)
+                    // A GATT-pool child never feeds the shared rate controller: a link that cannot keep up must not
+                    // lower the encoder rate of the L2CAP viewers (Design SG; the starvation guard still sees it).
+                    if (peerKey !in gattPoolKeys) onLinkSample(peerKey, sample)
                     starvation.onSample(peerKey, sample, System.nanoTime(), encoderAtRateFloor())?.let { withdrawal ->
                         timeoutHandler.post {
                             withdrawStarvedChild(peerKey, sender, transport, withdrawal.carriedAggregateKbps)
@@ -181,7 +260,11 @@ class BluetoothVideoBroadcaster(
                     }
                 },
             )
-            if (senders.putIfAbsent(peerKey, sender) != null) return@forEach
+            if (senders.putIfAbsent(peerKey, sender) != null) {
+                gattPoolKeys.remove(peerKey)
+                gattCharges.remove(peerKey)
+                return@forEach
+            }
             timeoutHandler.removeCallbacks(allDisconnectedRunnable)
             connectingAttempts[peerKey] = sender
             sender.connect(
@@ -189,16 +272,17 @@ class BluetoothVideoBroadcaster(
                 peer.device,
                 codec,
                 settings,
-                transport,
+                if (gattChild) BluetoothTransportOption.BLE_GATT else transport,
                 rotationDegrees,
                 peer.announcement.nodeIdPrefix,
                 includeAudio,
                 phyPreference,
                 corruptFirstVideoRecordForTest,
                 proveVideoIntegrityForTest,
-                ioConfig,
+                if (gattChild) pool?.ioConfig ?: ioConfig else ioConfig,
                 debugTraceSession = debugTraceSession,
                 selectedRotatingRequest = peer.announcement.takeIf { it.rotating },
+                audioLiveConfig = audioLiveConfig,
             ) {
                 handleAuthenticatedPeer(peer, peerKey, sender, maximumChildren)
             }
@@ -213,13 +297,34 @@ class BluetoothVideoBroadcaster(
         }, CONNECTION_TIMEOUT_MS)
     }
 
-    private fun fanOutChildren(settings: VideoSettings, transport: BluetoothTransportOption): Int =
+    private fun fanOutChildren(settings: VideoSettings, transport: BluetoothTransportOption): Int {
+        val audio = audioLive
+        if (audio != null) {
+            // Children = min(floor(budget / planned per-link), cap): bandwidth alone would admit 11-18, but the
+            // limit measured on this radio is airtime, so the default cap of 4 stands until the ladder test.
+            val perLink = MeshBandwidthEstimator.audioLivePerLinkKbps(audio.kbps, audio.framesPerRecord)
+            return MeshBandwidthEstimator.audioLiveSourceChildren(
+                LinkCapacity.budgetKbps(transport, LinkLoadKind.FAN_OUT, perLink),
+                audio.kbps,
+                audio.framesPerRecord,
+                audio.maxChildren,
+            )
+        }
+        return videoFanOutChildren(settings, transport)
+    }
+
+    private fun videoFanOutChildren(settings: VideoSettings, transport: BluetoothTransportOption): Int =
         MeshBandwidthEstimator.estimate(
             settings,
             transport,
             MeshNodeRole.SOURCE,
             plannedChildren = 0,
-            measuredAggregateKbps = { perLink -> LinkCapacity.budgetKbps(transport, LinkLoadKind.FAN_OUT, perLink) },
+            measuredAggregateKbps = { perLink ->
+                StreamGattFallback.fanOutBudgetKbps(
+                    LinkCapacity.budgetKbps(transport, LinkLoadKind.FAN_OUT, perLink),
+                    gattChargedKbps(),
+                )
+            },
             baseLayerShare = if (layeredAdmission) layerShare.baseShare() else null,
         ).sourceChildren
 
@@ -230,7 +335,7 @@ class BluetoothVideoBroadcaster(
 
     /** Re-plans fan-out from live measurements (capacity reports, expired ceilings); reopens a slot when one fits. */
     private fun refreshAdmissionIfDue() {
-        val settings = admissionSettings ?: return
+        val settings = admissionSettings ?: audioLive?.let { VideoSettings.DEFAULT } ?: return
         val transport = admissionTransport ?: return
         val nowNs = System.nanoTime()
         if (nowNs - lastAdmissionRefreshNs < ADMISSION_REFRESH_NS) return
@@ -247,6 +352,27 @@ class BluetoothVideoBroadcaster(
         if (wasFull != sourceSlotsFull()) onConnectionsChanged(connectedPeers.size)
     }
 
+    /**
+     * Audio-only live: sends one record the source already signed. The Opus configuration is remembered and
+     * repeated for every child that joins later; media is dropped while paused. Never paired or batched here.
+     */
+    override fun sendAudioLiveRecord(record: AudioLiveSignedRecord) {
+        synchronized(packetLock) {
+            if (record.flags and StreamProtocol.FLAG_CODEC_CONFIG != 0) {
+                val configuration = StreamProtocol.Packet(record.flags, record.presentationTimeUs, record.payload.copyOf())
+                codecConfiguration.clear()
+                codecConfiguration += configuration
+            }
+            if (closed.get() || paused.get() && record.flags and StreamProtocol.FLAG_CODEC_CONFIG == 0) return
+            readySenders().forEach { it.send(record.flags, record.presentationTimeUs, record.payload) }
+        }
+    }
+
+    /** Mute: drops every unsent audio record queued for any listener. */
+    override fun discardQueuedAudio(): Int = synchronized(packetLock) {
+        senders.values.sumOf(BluetoothVideoSender::discardQueuedAudioRecords)
+    }
+
     fun send(flags: Int, presentationTimeUs: Long, bytes: ByteArray) {
         if (flags and (StreamProtocol.FLAG_AUDIO or StreamProtocol.FLAG_CODEC_CONFIG) == 0) {
             if (layeredAdmission) layerShare.add(bytes.size, flags and StreamProtocol.FLAG_DISCARDABLE != 0)
@@ -260,6 +386,11 @@ class BluetoothVideoBroadcaster(
             }
             if (packetFlags and StreamProtocol.FLAG_CODEC_CONFIG != 0) {
                 val configuration = StreamProtocol.Packet(packetFlags, presentationTimeUs, bytes.copyOf())
+                if (packetFlags and StreamProtocol.FLAG_AUDIO == 0 && videoConfigBatch.onConfig()) {
+                    // A restarted encoder (new rung, camera flip): a late joiner gets only the current
+                    // encoder's configuration, never csd of two picture sizes.
+                    codecConfiguration.removeAll { it.flags and StreamProtocol.FLAG_AUDIO == 0 }
+                }
                 if (codecConfiguration.none {
                         it.flags == configuration.flags && it.payload.contentEquals(configuration.payload)
                     }
@@ -268,6 +399,12 @@ class BluetoothVideoBroadcaster(
                         codecConfiguration.removeAt(0)
                     }
                     codecConfiguration += configuration
+                }
+            } else if (packetFlags and (StreamProtocol.FLAG_AUDIO or StreamProtocol.FLAG_DISPLAY_ROTATION) == 0) {
+                val restartKeyFrame = packetFlags and StreamProtocol.FLAG_KEY_FRAME != 0 &&
+                    packetFlags and StreamProtocol.FLAG_DISCONTINUITY != 0
+                if (videoConfigBatch.onMedia(restartKeyFrame)) {
+                    codecConfiguration.removeAll { it.flags and StreamProtocol.FLAG_AUDIO == 0 }
                 }
             }
             if (closed.get() || paused.get() && packetFlags and StreamProtocol.FLAG_CODEC_CONFIG == 0) {
@@ -307,6 +444,30 @@ class BluetoothVideoBroadcaster(
     fun resumeStream() {
         if (!paused.compareAndSet(true, false)) return
         senders.values.forEach(BluetoothVideoSender::resumeStream)
+        // A resume says plain LIVE; tell the listeners again what is still switched off.
+        val state = mediaState
+        if (state != StreamLifecycleState.LIVE) senders.values.forEach { it.sendMediaState(state) }
+    }
+
+    /**
+     * Microphone muted / camera off while live (experimental `live_media_state`). Remembered so a child that
+     * joins later is told too; LIVE means everything is on again. Not sent while paused (the resume repeats it).
+     */
+    fun setMediaState(state: StreamLifecycleState) {
+        require(state.isLiveFamily) { "Only live-family records are media states" }
+        synchronized(packetLock) {
+            if (closed.get() || mediaState == state) return
+            mediaState = state
+            if (paused.get()) return
+            readySenders().forEach { it.sendMediaState(state) }
+        }
+    }
+
+    @Volatile private var mediaState: StreamLifecycleState = StreamLifecycleState.LIVE
+
+    /** Mute: the unpaired Opus access unit waiting for its partner must not pair with one recorded after Unmute. */
+    fun flushPendingAudio() {
+        synchronized(packetLock) { flushPendingAudioLocked() }
     }
 
     fun endStream() {
@@ -314,9 +475,12 @@ class BluetoothVideoBroadcaster(
             if (!closed.compareAndSet(false, true)) return
             flushPendingAudioLocked()
             timeoutHandler.removeCallbacksAndMessages(null)
-            senders.values.toList().also {
+            ArrayList(senders.values).also {
                 senders.clear()
                 connectedPeers.clear()
+                gattPoolKeys.clear()
+                gattCharges.clear()
+                gattRefusals.clear()
                 capacityRejections.clear()
             }
         }
@@ -333,11 +497,14 @@ class BluetoothVideoBroadcaster(
     ) {
         if (closed.get() || senders[peerKey] !== sender || !senders.remove(peerKey, sender)) return
         connectedPeers.remove(peerKey)
+        val gattChild = gattPoolKeys.remove(peerKey)
+        gattCharges.remove(peerKey)
         onConnectionsChanged(connectedPeers.size)
         capacityRejections.reject(peerKey, System.nanoTime())
         starvation.remove(peerKey)
-        // Media bytes only (no framing), so the learned ceiling errs conservative.
-        LinkCapacity.recordCeiling(transport, LinkLoadKind.FAN_OUT, carriedAggregateKbps)
+        // Media bytes only (no framing), so the learned ceiling errs conservative. A GATT-pool child is not an L2CAP
+        // fan-out child: its starvation says nothing about the L2CAP ceiling.
+        if (!gattChild) LinkCapacity.recordCeiling(transport, LinkLoadKind.FAN_OUT, carriedAggregateKbps)
         sender.withdrawForLocalCapacity()
         android.util.Log.i(
             "BluetoothVideo",
@@ -350,9 +517,12 @@ class BluetoothVideoBroadcaster(
         if (!closed.compareAndSet(false, true)) return
         timeoutHandler.removeCallbacksAndMessages(null)
         synchronized(packetLock) { pendingAudioPacket = null }
-        val active = senders.values.toList()
+        val active = ArrayList(senders.values)
         senders.clear()
         connectedPeers.clear()
+        gattPoolKeys.clear()
+        gattCharges.clear()
+        gattRefusals.clear()
         capacityRejections.clear()
         active.forEach(BluetoothVideoSender::close)
         onConnectionsChanged(0)
@@ -373,6 +543,10 @@ class BluetoothVideoBroadcaster(
         maximumChildren: Int,
     ) {
         if (peer.announcement.rotating) replaceSameNode(peerKey, sender)
+        if (peerKey in gattPoolKeys) {
+            admitSender(peerKey, sender)
+            return
+        }
         val previousKey = recoveryKeyOf(peer)?.takeUnless { it == peerKey }
         val previousSender = previousKey?.let(senders::get)
         if (previousKey == null || previousSender == null ||
@@ -381,7 +555,7 @@ class BluetoothVideoBroadcaster(
             admitSender(peerKey, sender)
             return
         }
-        if (connectedPeers.size < maximumChildren) {
+        if (primaryConnectedCount() < maximumChildren) {
             onStatus("Authenticated replacement route admitted in an available source slot.")
             admitSender(peerKey, sender)
             return
@@ -397,7 +571,7 @@ class BluetoothVideoBroadcaster(
                     return
                 }
                 if (previousSender.lastChildHeartbeatNs() > heartbeatAtProbeStart) {
-                    if (connectedPeers.size < maximumChildren) {
+                    if (primaryConnectedCount() < maximumChildren) {
                         onStatus("The previous immediate node is still responsive; keeping both admitted routes.")
                         admitSender(peerKey, sender)
                     } else {
@@ -427,6 +601,59 @@ class BluetoothVideoBroadcaster(
         })
     }
 
+    /** True while a refusal of this GATT request still holds (30 s, or until the pool has room again after "pool full"). */
+    private fun gattRefusalHolds(key: String, nowNs: Long, capacity: Int): Boolean {
+        val (untilNs, verdict) = gattRefusals[key] ?: return false
+        if (nowNs >= untilNs || (verdict == StreamGattFallback.GattChildVerdict.REFUSE_POOL_FULL && gattPoolKeys.size < capacity)) {
+            gattRefusals.remove(key)
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Design SG stage 2: decides each GATT viewer request into the separate pool. An admitted request is charged to the
+     * aggregate budget at its planned rate and appended to [admittedPeers]; a refused one is logged and shown, never
+     * given another stream. L2CAP children are not touched.
+     */
+    private fun admitGattPoolPeers(
+        candidates: List<BleL2capPeer>,
+        pool: GattChildPoolConfig,
+        settings: VideoSettings,
+        admittedPeers: MutableList<BleL2capPeer>,
+    ) {
+        if (candidates.isEmpty()) return
+        val perLink = MeshBandwidthEstimator.perLinkKbps(settings.bitRate / 1_000, settings.fps)
+        val baseShare = if (layeredAdmission) layerShare.baseShare() else null
+        candidates.forEach { peer ->
+            val key = peerIdentityKey(peer)
+            val input = StreamGattFallback.GattChildInput(
+                gattChildren = gattPoolKeys.size,
+                poolCapacity = pool.capacity,
+                gattChargedKbps = gattChargedKbps(),
+                l2capCommittedKbps = primarySenderCount() * perLink,
+                aggregateBudgetKbps = LinkCapacity.budgetKbps(BluetoothTransportOption.BLE_L2CAP, LinkLoadKind.FAN_OUT, perLink),
+                needKbps = perLink * (baseShare ?: 1.0),
+                gattLinkCapacityKbps = LinkCapacity.budgetKbps(BluetoothTransportOption.BLE_GATT, LinkLoadKind.FAN_OUT, perLink),
+            )
+            val admission = StreamGattFallback.admitGattChild(input)
+            android.util.Log.i(
+                "BluetoothVideo",
+                (if (BuildConfig.DEBUG) "BENCHMARK " else "") + StreamGattFallback.poolLine(input, admission, primarySenderCount()),
+            )
+            if (admission.verdict.admit) {
+                gattPoolKeys += key
+                gattCharges[key] = admission.chargeKbps
+                gattRefusals.remove(key)
+                admittedPeers += peer
+                lastAdmissionRefreshNs = 0L // re-plan the L2CAP fan-out with the new charge at the next frame
+            } else {
+                gattRefusals[key] = System.nanoTime() + GATT_REFUSAL_COOLDOWN_NS to admission.verdict
+                onStatus(StreamGattFallback.refusalStatus(admission.verdict))
+            }
+        }
+    }
+
     private fun admitSender(peerKey: String, sender: BluetoothVideoSender) {
         synchronized(packetLock) {
             if (closed.get() || senders[peerKey] !== sender || !connectedPeers.add(peerKey)) return
@@ -435,6 +662,7 @@ class BluetoothVideoBroadcaster(
             }
             onConnectionsChanged(connectedPeers.size)
             if (paused.get()) sender.pauseStream()
+            else if (mediaState != StreamLifecycleState.LIVE) sender.sendMediaState(mediaState)
             if (streamStarted.compareAndSet(false, true)) onFirstConnected()
             onPeerReady()
         }
@@ -442,6 +670,10 @@ class BluetoothVideoBroadcaster(
 
     private fun readySenders(): List<BluetoothVideoSender> =
         connectedPeers.mapNotNull(senders::get)
+
+    /** Short labels of the authenticated direct children (the measured Auto ladder's start evidence). */
+    fun connectedPeerLabels(): List<String> =
+        readySenders().mapNotNull { it.authenticatedPeerNode()?.shortLabel() }
 
     private fun recoveryPreviousSenderKey(peer: BleL2capPeer): String? =
         recoveryKeyOf(peer)
@@ -480,7 +712,7 @@ class BluetoothVideoBroadcaster(
      */
     private fun replaceSameNode(peerKey: String, sender: BluetoothVideoSender) {
         val node = sender.authenticatedPeerNode() ?: return
-        senders.entries.toList().forEach { (key, other) ->
+        ArrayList(senders.entries).forEach { (key, other) ->
             if (key != peerKey && other !== sender && other.authenticatedPeerNode() == node) {
                 if (senders.remove(key, other)) {
                     connectedPeers.remove(key)
@@ -493,6 +725,7 @@ class BluetoothVideoBroadcaster(
 
     private companion object {
         const val ADMISSION_REFRESH_NS = 2_000_000_000L
+        const val GATT_REFUSAL_COOLDOWN_NS = 30_000_000_000L
         const val CONNECTION_TIMEOUT_MS = 12_000L
         const val ROUTE_RECOVERY_GRACE_MS = 6_000L
         const val MAX_CODEC_CONFIGURATION_PACKETS = 4

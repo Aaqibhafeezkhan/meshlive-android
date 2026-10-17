@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Messaging v2 phase 1c: a Contacts row that is also a conversation row (Q-M1 option B). Avatar initial, name with the verified
+     check, time on the right; second line = state glyph + one-line preview (or "Nearby now"), the unread count on the right.
+     Plain row on black, no card. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/selectableItemBackground"
+    android:descendantFocusability="blocksDescendants"
+    android:gravity="center_vertical"
+    android:minHeight="72dp"
+    android:orientation="horizontal"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
+
+    <TextView
+        android:id="@+id/convAvatar"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:background="@drawable/icon_circle_background"
+        android:gravity="center"
+        android:importantForAccessibility="no"
+        android:textAppearance="@style/TextAppearance.App.Title"
+        tools:text="A" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/convName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textAppearance="@style/TextAppearance.App.Title"
+                tools:text="Asha" />
+
+            <ImageView
+                android:id="@+id/convVerified"
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:layout_marginStart="6dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_check_circle"
+                android:visibility="gone"
+                app:tint="@color/success" />
+
+            <!-- Nearby now: a small white dot (the words are the row's subtitle when there is no message yet). -->
+            <View
+                android:id="@+id/convNearbyDot"
+                android:layout_width="8dp"
+                android:layout_height="8dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/status_dot"
+                android:importantForAccessibility="no"
+                android:visibility="gone" />
+
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <TextView
+                android:id="@+id/convTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:importantForAccessibility="no"
+                android:maxLines="1"
+                android:textAppearance="@style/TextAppearance.App.Body"
+                tools:text="11:00" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:id="@+id/convGlyph"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_marginEnd="6dp"
+                android:importantForAccessibility="no"
+                android:visibility="gone"
+                app:tint="@color/text_secondary" />
+
+            <TextView
+                android:id="@+id/convSubtitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:importantForAccessibility="no"
+                android:maxLines="1"
+                android:textAppearance="@style/TextAppearance.App.Body"
+                tools:text="see you at the bridge" />
+
+            <!-- Unread count: a white pill with black text (nothing coloured). -->
+            <TextView
+                android:id="@+id/convUnread"
+                android:layout_width="wrap_content"
+                android:layout_height="20dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/badge_background"
+                android:fontFamily="@font/manrope_w700"
+                android:gravity="center"
+                android:importantForAccessibility="no"
+                android:minWidth="20dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp"
+                android:textColor="@color/on_accent"
+                android:textSize="12sp"
+                android:visibility="gone"
+                tools:text="2" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

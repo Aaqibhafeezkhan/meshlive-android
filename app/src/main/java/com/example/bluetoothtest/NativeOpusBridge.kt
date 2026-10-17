@@ -35,6 +35,19 @@ internal object NativeOpusBridge {
         constrainedVbr: Boolean,
     ): Long
 
+    /** Audio-only live: [application] 2048 VOIP or 2049 AUDIO, [speechSignal] adds the speech signal hint. */
+    external fun nativeEncoderCreateEx(
+        sampleRate: Int,
+        channels: Int,
+        bitRate: Int,
+        complexity: Int,
+        fecLossPercent: Int,
+        dtx: Boolean,
+        constrainedVbr: Boolean,
+        application: Int,
+        speechSignal: Boolean,
+    ): Long
+
     external fun nativeEncoderLookahead(handle: Long): Int
 
     external fun nativeEncoderSetLossPercent(handle: Long, percent: Int): Int

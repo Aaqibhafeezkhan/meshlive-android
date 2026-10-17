@@ -449,6 +449,15 @@ internal class PrivateCallMediaReceiver(
         reportIfDue()
     }
 
+    /** The remote picture changed size (call resolution ladder): the surface transform follows the new size. */
+    private fun followCodedSize(width: Int, height: Int) {
+        val current = header ?: return
+        if (current.width == width && current.height == height) return
+        val updated = current.copy(width = width, height = height)
+        header = updated
+        onVideoFormat(updated)
+    }
+
     fun setRemoteCameraEnabled(enabled: Boolean) {
         onRemoteVideoActive(enabled)
         if (enabled) onKeyFrameNeeded()
@@ -527,9 +536,15 @@ internal class PrivateCallMediaReceiver(
                         privateCallStackFingerprint(),
                     ),
                     presentFirstFrameImmediately = DebugTunables.callFirstFrameNow,
+                    firstPacket = packet,
+                    onCodedSizeChanged = { width, height -> followCodedSize(width, height) },
                 )
             }.also {
                 decoder = it
+                // The call header names the maximum; the encoder may already be on a lower rung.
+                if (it.codedWidth != activeHeader.width || it.codedHeight != activeHeader.height) {
+                    followCodedSize(it.codedWidth, it.codedHeight)
+                }
                 // Announce the decoder actually running, not the one the policy asked for.
                 preferredDecoderName?.let { requested ->
                     onStatus(
@@ -561,6 +576,10 @@ internal class PrivateCallMediaReceiver(
             if (BuildConfig.DEBUG) debugPriorDecoderDrops += activeDecoder.stats().queue.droppedFrames
             decoder = null
             awaitingVideoRecoveryKeyFrame = true
+            // The next decoder starts from the configuration of the encoder now sending (a rung change
+            // may have replaced the call-start one), not the one collected before the first decoder.
+            videoConfig.clear()
+            videoConfig += activeDecoder.currentCodecSpecificData()
             activeDecoder.close()
             Log.w(
                 "BluetoothVideo",

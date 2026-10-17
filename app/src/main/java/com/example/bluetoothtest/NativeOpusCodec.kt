@@ -7,7 +7,7 @@ import java.nio.ByteOrder
 /**
  * Native libopus call codec (promoted to Settings > Features on 2026-10-11 as "Call audio with loss
  * recovery"; default [ConnectivityFeatureDefaults.NATIVE_OPUS] until the phone A/B T10; DEBUG
- * `test_call_native_opus` is the benchmark switch; README register).
+ * `test_call_native_opus` is the benchmark switch; docs/SWITCHES.md register).
  *
  * c2.android.opus hard-codes general-audio mode, no in-band FEC and no packet-loss concealment
  * (AOSP frameworks/av C2SoftOpusEnc.cpp / C2SoftOpusDec.cpp). WebRTC drives libopus with
@@ -57,10 +57,22 @@ internal class NativeOpusEncoder(
     bitRate: Int,
     complexity: Int,
     val settings: NativeOpusSettings,
+    /**
+     * Audio-only live (own entry point, own switch): 2049 `OPUS_APPLICATION_AUDIO` for Music, 2048 VOIP with a
+     * speech signal hint for Voice and Low data. Null (calls, and the default) uses the call create function.
+     */
+    application: Int? = null,
 ) : Closeable {
-    private var handle: Long = NativeOpusBridge.nativeEncoderCreate(
-        sampleRate, channels, bitRate, complexity, settings.fecLossPercent, settings.dtx, true,
-    )
+    private var handle: Long = if (application == null) {
+        NativeOpusBridge.nativeEncoderCreate(
+            sampleRate, channels, bitRate, complexity, settings.fecLossPercent, settings.dtx, true,
+        )
+    } else {
+        NativeOpusBridge.nativeEncoderCreateEx(
+            sampleRate, channels, bitRate, complexity, settings.fecLossPercent, settings.dtx, true,
+            application, application == APPLICATION_VOIP,
+        )
+    }
     private val output = ByteArray(MAX_PACKET_BYTES)
 
     /** Encoder delay in 48 kHz samples: the OpusHead pre-skip a decoder must discard. */
@@ -83,6 +95,8 @@ internal class NativeOpusEncoder(
 
     companion object {
         const val MAX_PACKET_BYTES = 4_000
+        const val APPLICATION_VOIP = 2048
+        const val APPLICATION_AUDIO = 2049
     }
 }
 

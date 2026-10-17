@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/blockedRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/app_background"
+    android:orientation="vertical"
+    android:paddingStart="@dimen/screen_gutter"
+    android:paddingTop="8dp"
+    android:paddingEnd="@dimen/screen_gutter">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageButton
+            android:id="@+id/blockedBackButton"
+            style="@style/Widget.App.TopIconButton"
+            android:contentDescription="@string/action_back"
+            android:src="@drawable/ic_arrow_back" />
+
+        <TextView
+            style="@style/Widget.App.TopBarTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:accessibilityHeading="true"
+            android:text="@string/blocked_people_title"
+            android:textAppearance="@style/TextAppearance.App.Readout"
+            android:textSize="22sp" />
+    </LinearLayout>
+
+    <TextView
+        style="@style/Widget.App.Description"
+        android:layout_marginTop="8dp"
+        android:text="@string/blocked_people_intro" />
+
+    <!-- The block list cannot be read (checked on resume); tapping offers a reset. -->
+    <TextView
+        android:id="@+id/blockedStoreProblem"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:drawablePadding="12dp"
+        android:gravity="center_vertical"
+        android:minHeight="48dp"
+        android:text="@string/blocked_people_unreadable"
+        android:textAppearance="@style/TextAppearance.App.BodyLarge"
+        android:visibility="gone"
+        app:drawableStartCompat="@drawable/ic_warning"
+        app:drawableTint="@color/text_primary" />
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="8dp"
+        android:layout_weight="1">
+
+        <ListView
+            android:id="@+id/blockedList"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:divider="@null"
+            android:dividerHeight="0dp"
+            android:scrollbars="none" />
+
+        <include
+            android:id="@+id/blockedEmptyView"
+            layout="@layout/view_empty_state"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+    </FrameLayout>
+</LinearLayout>

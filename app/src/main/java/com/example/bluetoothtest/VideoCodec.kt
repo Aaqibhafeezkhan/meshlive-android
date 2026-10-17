@@ -90,9 +90,29 @@ data class VideoCodec(
             MediaFormat.MIMETYPE_VIDEO_VP9 to StreamProtocol.CODEC_VP9,
         )
 
-        fun availableEncoders(): List<VideoCodec> {
+        /** Protocol id of the bench-only HEVC/AVC entries: not a stream codec, never negotiated or sent. */
+        const val BENCH_ONLY_PROTOCOL_ID = -1
+
+        private val benchOnlyTypes = listOf(
+            MediaFormat.MIMETYPE_VIDEO_HEVC to BENCH_ONLY_PROTOCOL_ID,
+            MediaFormat.MIMETYPE_VIDEO_AVC to BENCH_ONLY_PROTOCOL_ID,
+        )
+
+        /**
+         * Every MediaCodec AV1 and VP9 encoder this phone offers, in the app's own order (hardware first).
+         * The app uses the best one per codec ([availableEncoders]); the DEBUG encoder bench may name any.
+         */
+        fun allMediaCodecEncoders(): List<VideoCodec> = mediaCodecEncoders(desiredTypes)
+
+        /**
+         * HEVC and AVC MediaCodec encoders for the DEBUG radio-free encoder bench only (Q39 ladder preparation).
+         * They carry [BENCH_ONLY_PROTOCOL_ID] and appear in no product list, negotiation or stream header.
+         */
+        fun benchOnlyMediaCodecEncoders(): List<VideoCodec> = mediaCodecEncoders(benchOnlyTypes)
+
+        private fun mediaCodecEncoders(types: List<Pair<String, Int>>): List<VideoCodec> {
             val codecInfos = MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos
-            val compatible = desiredTypes.flatMap { (mime, protocolId) ->
+            return types.flatMap { (mime, protocolId) ->
                 codecInfos.mapNotNull { info ->
                     if (!info.isEncoder || info.isAlias ||
                         info.supportedTypes.none { it.equals(mime, ignoreCase = true) }
@@ -127,7 +147,12 @@ data class VideoCodec(
                         ) -> MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
                         else -> null
                     }
-                    val codecLabel = if (mime == MediaFormat.MIMETYPE_VIDEO_AV1) "AV1" else "VP9"
+                    val codecLabel = when (mime) {
+                        MediaFormat.MIMETYPE_VIDEO_AV1 -> "AV1"
+                        MediaFormat.MIMETYPE_VIDEO_HEVC -> "HEVC"
+                        MediaFormat.MIMETYPE_VIDEO_AVC -> "AVC"
+                        else -> "VP9"
+                    }
                     val encoderType = if (info.isHardwareAccelerated) {
                         "hardware"
                     } else {
@@ -156,6 +181,10 @@ data class VideoCodec(
                     .thenBy { if (it.usesSurfaceInput) 0 else 1 }
                     .thenBy { encoderTieBreakRank(it.encoderName) },
             )
+        }
+
+        fun availableEncoders(): List<VideoCodec> {
+            val compatible = allMediaCodecEncoders()
             val bestMediaCodecEncoders = compatible
                 .groupBy(VideoCodec::protocolId)
                 .values

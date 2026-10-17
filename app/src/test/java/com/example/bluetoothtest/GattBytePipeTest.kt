@@ -222,4 +222,25 @@ class GattBytePipeTest {
         assertEquals(7, pipe.read())
     }
 
+
+    @Test
+    fun aBacklogOfSmallAudioRecordsDoesNotOverflowTheDefaultPipe() {
+        // b1-a5a8f056 stalled2m d2: 17 s of 80 byte Opus records (850 chunks) arrived while the receive loop paced audio at real time;
+        // the old 512-chunk bound overflowed after 11 s. The default pipe is bounded by bytes.
+        val failures = mutableListOf<String>()
+        val pipe = GattBytePipe(onFailure = failures::add)
+        repeat(850) { assertTrue(pipe.offer(ByteArray(80))) }
+        assertEquals(emptyList<String>(), failures)
+        assertEquals(850 * 80, pipe.available())
+    }
+
+    @Test
+    fun theByteBoundStillOverflowsAndClosesTheInput() {
+        val failures = mutableListOf<String>()
+        val pipe = GattBytePipe(onFailure = failures::add, maxQueuedBytes = 1_000)
+        repeat(10) { assertTrue(pipe.offer(ByteArray(100))) }
+        assertFalse(pipe.offer(ByteArray(100)))
+        assertEquals(listOf("input queue overflowed"), failures)
+        assertEquals(-1, pipe.read())
+    }
 }

@@ -1,84 +1,117 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One person or live stream in the nearby lists. -->
-<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- One live stream or contact in a list: plain row, no card. Leading 44 dp circle, title (+ verified
+     check), subtitle for a state, LIVE badge on streams, chevron. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
-    style="@style/Widget.App.Card"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:descendantFocusability="blocksDescendants">
+    android:background="?attr/selectableItemBackground"
+    android:descendantFocusability="blocksDescendants"
+    android:gravity="center_vertical"
+    android:minHeight="72dp"
+    android:orientation="horizontal"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:minHeight="72dp"
-        android:orientation="horizontal"
-        android:paddingStart="16dp"
-        android:paddingTop="12dp"
-        android:paddingEnd="12dp"
-        android:paddingBottom="12dp">
+    <FrameLayout
+        android:layout_width="44dp"
+        android:layout_height="44dp">
 
         <ImageView
             android:id="@+id/rowIcon"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
             android:background="@drawable/icon_circle_background"
             android:importantForAccessibility="no"
-            android:padding="12dp"
+            android:padding="10dp"
             android:src="@drawable/ic_person"
             app:tint="@color/text_primary" />
 
+        <!-- A contact's initial replaces the icon. -->
+        <TextView
+            android:id="@+id/rowInitial"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:importantForAccessibility="no"
+            android:textAppearance="@style/TextAppearance.App.RowLabel"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
-            android:layout_weight="1"
-            android:orientation="vertical">
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
             <TextView
                 android:id="@+id/rowTitle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:textAppearance="@style/TextAppearance.App.Title"
-                tools:text="Pixel 7" />
-
-            <TextView
-                android:id="@+id/rowSubtitle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:drawablePadding="4dp"
-                android:gravity="center_vertical"
-                android:textAppearance="@style/TextAppearance.App.Body"
-                tools:text="Nearby · direct" />
-
-            <TextView
-                android:id="@+id/rowBadge"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:background="@drawable/badge_background"
-                android:drawablePadding="4dp"
-                android:gravity="center_vertical"
-                android:paddingStart="8dp"
-                android:paddingTop="2dp"
-                android:paddingEnd="8dp"
-                android:paddingBottom="2dp"
-                android:textSize="14sp"
-                android:textStyle="bold"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:textAppearance="@style/TextAppearance.App.RowLabel"
+                tools:text="Rahul is live" />
+
+            <ImageView
+                android:id="@+id/rowVerified"
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:layout_marginStart="6dp"
+                android:contentDescription="@string/verification_verified"
+                android:src="@drawable/ic_check_circle"
                 android:visibility="gone"
-                tools:text="Verified"
+                app:tint="@color/success"
                 tools:visibility="visible" />
         </LinearLayout>
 
-        <ImageView
-            android:id="@+id/rowAction"
-            android:layout_width="24dp"
-            android:layout_height="24dp"
-            android:importantForAccessibility="no"
-            android:src="@drawable/ic_chevron_right"
-            app:tint="@color/text_secondary" />
+        <TextView
+            android:id="@+id/rowSubtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textAppearance="@style/TextAppearance.App.Body"
+            tools:text="Nearby" />
+
+        <TextView
+            android:id="@+id/rowBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:background="@drawable/badge_background"
+            android:drawablePadding="4dp"
+            android:gravity="center_vertical"
+            android:paddingStart="8dp"
+            android:paddingTop="2dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="2dp"
+            android:textAppearance="@style/TextAppearance.App.Label"
+            android:visibility="gone"
+            tools:text="Does not match" />
     </LinearLayout>
-</com.google.android.material.card.MaterialCardView>
+
+    <TextView
+        android:id="@+id/rowLiveBadge"
+        style="@style/Widget.App.LiveBadge"
+        android:layout_marginStart="8dp"
+        android:visibility="gone"
+        tools:visibility="visible" />
+
+    <ImageView
+        android:id="@+id/rowAction"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_marginStart="8dp"
+        android:importantForAccessibility="no"
+        android:src="@drawable/ic_chevron_right"
+        app:tint="@color/text_secondary" />
+</LinearLayout>

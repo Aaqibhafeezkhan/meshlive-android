@@ -303,7 +303,7 @@ internal object Bmh3Policy {
         if (layer == Layer.LINK && selected.routeCost > 0) return
         val result = DiscoverySelectionCheck.check(
             selected,
-            RotatingDiscoveryIds.ROLE_CALL_OFFER,
+            RotatingDiscoveryIds.roleFor(selected),
             peer.nodeId.toByteArray(),
             peer.openingEntries(),
         )
@@ -329,8 +329,25 @@ internal object Bmh3Policy {
         pseudonymKeys: Bmh3PseudonymKeys = Bmh3Policy.pseudonymKeys,
         /** The caller's throwaway for this attempt when the link and end-to-end handshakes must show one stranger. */
         strangerIdentity: SigningIdentity? = null,
+        /**
+         * BVMID2: this connection scans a verification code. The tag is the code's `K_tag` (both layers), the scanner
+         * presents its real key, a pseudonym answer is refused and the answerer's fingerprint must equal the code's.
+         */
+        qrScan: Bvmid2Payload? = null,
     ): Bmh3InitiatorOptions {
         val towardRelay = layer == Layer.LINK && selected != null && selected.routeCost > 0
+        if (qrScan != null) {
+            return Bmh3InitiatorOptions(
+                contactTag = QrScanPolicy.tag(qrScan),
+                checkResponder = { peer ->
+                    QrScanPolicy.checkResponder(qrScan, peer)
+                    if (selected != null) checkSelected(selected, layer, peer)
+                    pinResult?.invoke(peer)
+                },
+                entropy = entropy,
+                log = log,
+            )
+        }
         return Bmh3InitiatorOptions(
             contactTag = Bmh3ContactTags.initiatorTag(selected, wallEpoch, leaseSource, toAdvertOwner = !towardRelay),
             checkResponder = { peer ->
@@ -372,6 +389,12 @@ internal object Bmh3Policy {
         /** The phone's current discovery epoch; scopes the replay cache and the budget in pseudonym mode. */
         epoch: Long? = null,
         guards: Bmh3EpochGuards = epochGuards,
+        /**
+         * BVMID2: the displayed verification code and this connection's gate (one per connection, shared by its link and
+         * end-to-end handshakes). While a code is on screen its `K_tag` is one more tag check.
+         */
+        qrDisplay: QrCodeDisplay? = null,
+        qrGate: QrConnectionGate? = null,
     ): Bmh3ResponderOptions {
         val contactsOnly = Bmh3Feature.contactsOnly
         // Rule P fails closed (review PR4): in pseudonym mode every untagged connection meets a throwaway, with or
@@ -380,17 +403,24 @@ internal object Bmh3Policy {
         val scoped = if (stranger != null && epoch != null) guards.forEpoch(epoch) else null
         val connectionBudget = scoped?.budget ?: budget
         // Tags decide the presentation (rule P) as well as the order, so they are checked in Everyone mode too.
+        val qrCheck = if (qrDisplay != null && qrGate != null) qrDisplay.tagCheck(qrGate) else null
         val checkTags = contactsOnly || stranger != null
         return Bmh3ResponderOptions(
             mode = if (contactsOnly) Bmh3ResponderMode.CONTACTS_ONLY else Bmh3ResponderMode.EVERYONE,
-            tagChecks = if (checkTags) Bmh3ContactTags.responderChecks(opening, fixedPrefix, wallEpoch, leaseSource) else emptyList(),
+            tagChecks = (if (checkTags) Bmh3ContactTags.responderChecks(opening, fixedPrefix, wallEpoch, leaseSource) else emptyList()) +
+                listOfNotNull(qrCheck),
             opening = openingValue(opening),
             replayCache = scoped?.replayCache ?: replayCache,
             beforeReply = { matched -> if (!matched) connectionBudget.spend() },
             admitInitiator = { peer, matched ->
-                // A tag only a contact of this phone can compute: anyone else holding it means a lease reached
-                // someone unintended (the DEBUG fixed lease is shared by design and exempt).
-                if (matched && Bmh3Feature.testLeaseKey == null && leaseSource != null && !leaseSource.deliveredTo(peer.nodeId)) {
+                val qrAttempt = qrGate?.linkReserved == true
+                if (qrDisplay?.screenOnlyReachable == true && !qrAttempt) {
+                    // This phone is call-ready only because the Meet screen is open: it accepts nothing but the code.
+                    log("bmh3: event=qr_screen_only_refused")
+                    false
+                } else if (!qrAttempt && matched && Bmh3Feature.testLeaseKey == null && leaseSource != null && !leaseSource.deliveredTo(peer.nodeId)) {
+                    // A tag only a contact of this phone can compute: anyone else holding it means a lease reached
+                    // someone unintended (the DEBUG fixed lease is shared by design and exempt). A code tag is not a lease.
                     log("bmh3: event=lease_misuse")
                     false
                 } else {

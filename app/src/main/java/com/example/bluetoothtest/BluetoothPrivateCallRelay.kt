@@ -762,6 +762,7 @@ class BluetoothPrivateCallRelay(
                     if (parentWaitMs != null && running.get()) throw noParent(error)
                     throw error
                 }
+                ClassicRfcommCap.note(socket)
                 socketConnection(socket).also {
                     // CoC and GATT already leave the air once their one parent connects. A Classic
                     // relay kept advertising, so a chain's caller could pick this hop and skip the

@@ -15,13 +15,16 @@ import com.example.bluetoothtest.PolicySourceStatus.PARTIAL
  * Entries here join DevicePolicyRegistry.entries (one registry). Use DevicePolicyRegistry matchers
  * and constants freely, but never DevicePolicyRegistry.entries (initialisation order).
  *
- * Nothing here keeps the app alive by force: no wake-lock loops, no restarting services, no
- * REQUEST_IGNORE_BATTERY_OPTIMIZATIONS prompt. The entries only (1) detect Android's documented
- * restriction states and (2) tell the user, per phone maker, which settings keep a call or relay
- * running with the screen off. [BackgroundReliability] turns the active entries into UI issues.
+ * Nothing here keeps the app alive by force: no wake-lock loops, no restarting services, no hidden-API
+ * autostart toggling. The entries (1) detect Android's documented restriction states, (2) tell the user, per
+ * phone maker, which settings keep a call or relay running with the screen off, and (3) point at the one
+ * system action Android offers for this: the battery-optimisation exemption prompt
+ * (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS), which the app offers in onboarding, in Settings and when an
+ * always-on role is turned on (design decision Q38, 2026-10-14; the pure rules are in BatteryExemptionPolicy).
+ * [BackgroundReliability] turns the active entries into UI issues.
  * Phone-maker steps are condensed from Don't Kill My App (community-maintained, dontkillmyapp.com,
- * repo commit [DKMA_COMMIT]); they are upstream-documented, not locally tested. Off-switch for each
- * entry: DEBUG `test_device_policy_off=<id>`.
+ * repo commit [DKMA_COMMIT]) and, for makers it does not cover, from [BackgroundOem]; they are
+ * upstream-documented, not locally tested. Off-switch for each entry: DEBUG `test_device_policy_off=<id>`.
  */
 internal object BackgroundPolicy {
     private const val REVIEWED = "2026-10-10"
@@ -42,6 +45,7 @@ internal object BackgroundPolicy {
         confidence: PolicyConfidence,
         fallback: String,
         evidence: String = "none: diagnostics only; upstream-documented, not locally tested",
+        confidenceNote: String = "Android's documented API reports the state; its effect on calls and relaying is not measured on the six benchmark phones.",
     ) = DevicePolicyEntry(
         id = id,
         title = title,
@@ -52,6 +56,7 @@ internal object BackgroundPolicy {
         sourceStatus = OFFICIAL,
         evidence = listOf(evidence),
         confidence = confidence,
+        confidenceNote = confidenceNote,
         reviewed = REVIEWED,
         origin = "Background/OEM audit 2026-10-10: the app never told the user why it stopped in the background.",
         area = PolicyArea.BACKGROUND,
@@ -64,14 +69,21 @@ internal object BackgroundPolicy {
         title = "Battery optimisation is on for this app",
         kind = BackgroundCheckKind.BATTERY_OPTIMIZATION,
         matcher = DeviceMatcher(),
-        behaviour = "Reports PowerManager.isIgnoringBatteryOptimizations()==false and links the battery optimisation list.",
+        behaviour = "Reports PowerManager.isIgnoringBatteryOptimizations()==false. The app now offers the system's one-tap " +
+            "exemption prompt (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS) in onboarding, from Settings and when an " +
+            "always-on role (relaying, background availability) is turned on (design decision Q38); the issue's first action " +
+            "is that prompt and the battery-optimisation list screen is the fallback. The issue is ADVISORY, and " +
+            "ACTION_NEEDED while an always-on role is on and the app is not exempt.",
         sources = listOf(
             PolicySource(API_REFERENCE, "https://developer.android.com/reference/android/os/PowerManager#isIgnoringBatteryOptimizations(java.lang.String)",
                 "true when the app is on the device-idle allow list"),
+            PolicySource(API_REFERENCE, "https://developer.android.com/reference/android/provider/Settings#ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+                "shows the system dialog that asks to let the app ignore battery optimisations; needs the REQUEST_IGNORE_BATTERY_OPTIMIZATIONS permission"),
             DOZE_DOC,
         ),
         confidence = HIGH,
         fallback = "No battery-optimisation notice.",
+        confidenceNote = "API behaviour is documented; Play review treats the prompt as restricted (sideload build), and a few makers hide the prompt, hence the list-screen fallback.",
     )
 
     val BACKGROUND_RESTRICTED = check(
@@ -194,6 +206,7 @@ internal object BackgroundPolicy {
         confidence: PolicyConfidence,
         killerPackages: List<String>,
         vendorIntents: List<SettingsIntentSpec>,
+        extraSources: List<PolicySource> = emptyList(),
     ) = DevicePolicyEntry(
         id = "bg-oem-$key",
         title = "$vendor background restrictions (Don't Kill My App)",
@@ -217,7 +230,7 @@ internal object BackgroundPolicy {
             PolicySource(VENDOR_DOC, "$DKMA_BLOB/$dkmaFile.md",
                 "Don't Kill My App (community-maintained, not the vendor): $osCovered"),
             DOZE_DOC,
-        ),
+        ) + extraSources,
         sourceStatus = PARTIAL,
         evidence = listOf("none: guidance only; upstream-documented, not locally tested"),
         confidence = confidence,
@@ -241,14 +254,32 @@ internal object BackgroundPolicy {
         steps = listOf(
             "Settings > Apps > (your app) > Battery > set Unrestricted, or Battery optimization > All apps > (your app) > Don't optimize.",
             "Settings > Battery > Background usage limits: turn off Put unused apps to sleep and Auto-disable unused apps; remove the app from Sleeping/Deep sleeping apps.",
-            "Add the app to Never sleeping apps (Battery > Background usage limits) so it is not put back to sleep after about 3 days.",
-            "Optionally turn off Adaptive battery (Battery > More battery settings) and lock the app in Recent apps (long-press its icon > Keep open).",
+            "Add the app to Never auto sleeping apps (Battery > Background usage limits) so it is not put back to sleep after about 3 days.",
+            "Turn off Adaptive battery (Battery > More battery settings): on a Galaxy A13 it kept sleeping apps set to Unrestricted. Lock the app in Recent apps (long-press its icon > Keep open).",
             "Re-check these settings after firmware updates; Samsung may re-add apps to the sleeping lists.",
         ),
-        note = "Since Android 11 Samsung blocks wake locks in foreground services and sleeps unused apps after about 3 days; settings can be reset by updates. Samsung says that from One UI 6.0 foreground services of apps targeting Android 14 are guaranteed per Android's FGS policy; the page has no developer-side solution.",
+        note = "Since Android 11 Samsung blocks wake locks in foreground services and sleeps unused apps after about 3 days; settings can be reset by updates. " +
+            "Field reports (bitchat issue 124: Galaxy S24 Ultra, S25, Tab S9, A13) show phones still stopping a locked or idle app on recent One UI versions, " +
+            "and turning off Adaptive battery fixed one of them even with the app set to Unrestricted. A foreground service is therefore not assumed to be enough. " +
+            "The page has no developer-side solution.",
         confidence = MEDIUM,
         killerPackages = listOf(),
-        vendorIntents = listOf(),
+        vendorIntents = listOf(
+            SettingsIntentSpec(
+                label = "Open Never auto sleeping apps (Samsung deep link)",
+                action = "com.samsung.android.sm.ACTION_OPEN_CHECKABLE_LISTACTIVITY",
+                packageName = "com.samsung.android.lool",
+                intExtras = mapOf("activity_type" to 2),
+            ),
+        ),
+        extraSources = listOf(
+            PolicySource(VENDOR_DOC, "https://www.samsung.com/ae/support/mobile-devices/how-to-manage-sleeping-apps-to-save-battery-life-on-your-galaxy-device",
+                "Samsung: Put unused apps to sleep, Sleeping apps, Never auto sleeping apps"),
+            PolicySource(VENDOR_DOC, "https://developer.samsung.com/mobile/app-management.html",
+                "documents the deep link to the sleeping lists (activity_type 2 = never sleeping); its statement about One UI 6 foreground services is NOT relied on"),
+            PolicySource(VENDOR_DOC, "https://github.com/permissionlesstech/bitchat-android/issues/124",
+                "community issue report (not the vendor): S24 Ultra/S25/Tab S9 stop when asleep or locked; disabling Adaptive battery fixed a Galaxy A13 that was already Unrestricted"),
+        ),
     ),
     oem(
         key = "xiaomi",
@@ -263,10 +294,16 @@ internal object BackgroundPolicy {
             "In recent apps drag the app card down or tap the padlock to lock it; or Security > Boost speed > Settings > Lock apps.",
             "If available, turn off Battery saver / Ultra battery saver and set Keep running after screen off for the app.",
         ),
-        note = "MIUI has no documented APIs for autostart or background limits; default settings break background work. The page links an open-source MIUI-autostart library that can read whether Autostart is enabled (tested on MIUI 10-14); HyperOS is not covered by the page text.",
+        note = "MIUI has no documented APIs for autostart or background limits; default settings break background work. The page links an open-source MIUI-autostart library that can read whether Autostart is enabled (tested on MIUI 10-14); this app does not use it (hidden-API reflection). HyperOS is not covered by the page text: its steps come from Xiaomi's HyperOS developer documentation and are chosen by BackgroundOem when the phone looks like HyperOS. Community reports say some Xiaomi settings go back to default after a restart.",
         confidence = MEDIUM,
         killerPackages = listOf(),
         vendorIntents = listOf(),
+        extraSources = listOf(
+            PolicySource(VENDOR_DOC, "https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1628",
+                "HyperOS: Settings > Battery > App smart power saving; 'No restrictions' lifts the restriction"),
+            PolicySource(VENDOR_DOC, "https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1624",
+                "HyperOS: apps cannot autostart by default; the user allows it per app"),
+        ),
     ),
     oem(
         key = "huawei",
@@ -301,10 +338,14 @@ internal object BackgroundPolicy {
             "Disable App Auto-Launch restrictions for the app and check the Recent-apps clear behaviour so swiping does not kill it.",
             "Re-check after firmware updates; OnePlus resets these settings.",
         ),
-        note = "OnePlus introduced one of the severest limits since the 5/6 and resets battery-optimization exemptions after firmware updates or randomly unless the app is locked in Recent apps. The page has no developer-side solution.",
+        note = "OnePlus introduced one of the severest limits since the 5/6 and resets battery-optimization exemptions after firmware updates or randomly unless the app is locked in Recent apps. The page has no developer-side solution. From OxygenOS 12 the system shares ColorOS code; BackgroundOem then shows ColorOS-style steps taken from the realme page (an inference, menu names not confirmed).",
         confidence = MEDIUM,
         killerPackages = listOf(),
         vendorIntents = listOf(),
+        extraSources = listOf(
+            PolicySource(VENDOR_DOC, "$DKMA_BLOB/realme.md",
+                "Don't Kill My App (community-maintained): realme UI (ColorOS lineage) App battery management steps used for OxygenOS/ColorOS 12+"),
+        ),
     ),
     oem(
         key = "meizu",
@@ -355,28 +396,36 @@ internal object BackgroundPolicy {
             "App info > Battery usage > Run in background (or choose a Power Saver mode that allows background).",
             "Turn off battery optimizations and give the service a persistent foreground notification; all four steps are needed.",
         ),
-        note = "Only the Oppo F1S is documented: background and accessibility services are killed every time the screen turns off. No developer-side fix beyond a foreground notification.",
+        note = "Only the Oppo F1S (ColorOS 6) is documented: background and accessibility services are killed every time the screen turns off. No developer-side fix beyond a foreground notification. For ColorOS 12 and newer BackgroundOem shows ColorOS-style steps taken from the realme page (an inference, menu names not confirmed).",
         confidence = MEDIUM,
         killerPackages = listOf(),
         vendorIntents = listOf(SettingsIntentSpec(label = "Open the startup manager (DKMA, unverified)", packageName = "com.coloros.safecenter", className = "com.coloros.safecenter.permission.Permission")),
+        extraSources = listOf(
+            PolicySource(VENDOR_DOC, "$DKMA_BLOB/realme.md",
+                "Don't Kill My App (community-maintained): realme UI (ColorOS lineage) App battery management steps used for ColorOS 12+"),
+        ),
     ),
     oem(
         key = "vivo",
-        vendor = "Vivo",
-        manufacturers = setOf("vivo"),
+        vendor = "vivo and iQOO",
+        manufacturers = setOf("vivo", "iqoo"),
         dkmaFile = "vivo",
         dkmaAward = 3,
         osCovered = "Funtouch OS (Android 13 layout mentioned); no OriginOS section",
         steps = listOf(
             "Settings > More settings > Applications > Autostart: turn the app on (Funtouch OS 2.6 and older: i Manager > App manager > Autostart manager).",
-            "Settings > Battery > Background power consumption management (or High background power consumption): enable the app.",
+            "Settings > Battery > Background power consumption management (High background power consumption on older versions) > (your app) > Allow background usage > Unrestricted, not Optimised.",
             "App info > Battery > Battery optimization: set the app to Not optimized (or Unrestricted battery usage).",
             "In Recent apps lock the app (swipe it down or use its menu > Lock/Lockdown).",
         ),
-        note = "System restrictions on Vivo are not fully uncovered; apps started from the background need the Autostart permission. No developer-side solution known.",
+        note = "System restrictions on Vivo are not fully uncovered; apps started from the background need the Autostart permission. iQOO phones are made by vivo and normally report vivo as the maker. One report (react-native-ble-plx issue 1172, Android 15) says Bluetooth search paused with the screen off until this setting was Unrestricted. No developer-side solution known.",
         confidence = LOW,
         killerPackages = listOf(),
         vendorIntents = listOf(),
+        extraSources = listOf(
+            PolicySource(VENDOR_DOC, "https://github.com/dotintent/react-native-ble-plx/issues/1172",
+                "community issue report (not the vendor): vivo scan paused with the screen off; Background power consumption management > Unrestricted fixed it"),
+        ),
     ),
     oem(
         key = "realme",
@@ -462,7 +511,7 @@ internal object BackgroundPolicy {
             "Phone Master > Power Marathon: disable Power Boost; add the app to App Booster (max 4 apps).",
             "Lock the app in Recent apps; turn off Sleep Mode Optimization and Smart Scenes > Short Video Optimization.",
         ),
-        note = "The aggressive battery setting freezes timers, services and foreground services of the app until it is opened manually. No developer-side solution.",
+        note = "The aggressive battery setting freezes timers, services and foreground services of the app until it is opened manually. Sleep Mode Optimization turns airplane mode on at night (DKMA), which would cut every Bluetooth link: a possible cause of unexplained overnight link loss, not confirmed on a phone. No developer-side solution.",
         confidence = LOW,
         killerPackages = listOf(),
         vendorIntents = listOf(),
@@ -600,11 +649,11 @@ internal object BackgroundPolicy {
         POWER_SAVE_MODE,
         FGS_START_FALLBACK,
         SONY_STAMINA,
-    ) + OEM_GUIDANCE
+    ) + OEM_GUIDANCE + BackgroundOem.entries
 
     /**
-     * Shown when no phone-maker entry matches (Honor, Infinix, itel, ZTE and others have no DKMA page),
-     * condensed from DKMA's general page.
+     * Shown when no phone-maker entry matches (ZTE, Nothing, Gigaset and others have no usable page; Honor,
+     * Infinix and itel have their own entries in [BackgroundOem]), condensed from DKMA's general page.
      */
     val GENERIC_STEPS: List<String> = listOf(
         "Settings > Apps > (this app) > Battery: choose Unrestricted or Not optimized.",
@@ -642,6 +691,10 @@ data class SettingsIntentSpec(
     val packageName: String? = null,
     val className: String? = null,
     val withPackageUri: Boolean = false,
+    /** Int extras for a documented deep link (e.g. Samsung's sleeping-apps list takes activity_type). */
+    val intExtras: Map<String, Int> = emptyMap(),
+    /** With [withPackageUri]: another app's details page (e.g. the system Bluetooth app) instead of this app's. */
+    val targetPackage: String? = null,
 )
 
 internal data class OemBackgroundGuidance(

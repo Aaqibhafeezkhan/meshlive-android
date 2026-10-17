@@ -320,7 +320,16 @@ internal interface SustainedRateMemory {
  * (regress-57484598 vs callrate-454cf485). The ladder now starts below the lower of the two; null keeps
  * the request-scaled floor (DEBUG experiment `test_call_ladder_from_request`).
  */
-internal data class FrameRateLadder(val requestedFps: Int, val minimumFps: Int, val floorBps: Int? = null) {
+internal data class FrameRateLadder(
+    val requestedFps: Int,
+    val minimumFps: Int,
+    val floorBps: Int? = null,
+    /**
+     * Measured Auto ladder only (AutoQualityFeature): the frame rate for a video target replaces the
+     * proportional floor rule ([AutoQualityLadder.fpsForVideoKbps]); null keeps the floor rule.
+     */
+    val curve: ((Int) -> Int)? = null,
+) {
     companion object {
         /** Bits per pixel per frame below which a call trades frame rate for per-frame bits. */
         const val FLOOR_BITS_PER_PIXEL = 0.1
@@ -360,9 +369,35 @@ internal class LinkRateController(
      * is remembered as the peer's start rate. Default false: only clean sustained windows teach it.
      */
     private val rememberCuts: Boolean = false,
+    /**
+     * Measured Auto ladder (AutoQualityFeature): its request is only a climb bound (up to the transport
+     * maximum), so the usual step of a tenth of the request (104 kbps of a 1037 kbps bound) overshot a
+     * ~170 kbps link by 34% in one step, built a 4.9 s no-loss queue and froze the viewer (first phone
+     * A/B, stream ASUS to S24 GATT). True: a step is a tenth of the current target (at most a tenth of
+     * the request), the same step a request near the target gives. Default false keeps every other mode.
+     */
+    private val smallClimbSteps: Boolean = false,
+    /**
+     * Measured Auto ladder (AutoQualityFeature): a climb needs windows that carried at least
+     * [AUTO_LOADED_FRACTION] of the target (not the usual 60%), and the rate remembered for the peer
+     * is what the clean windows demonstrably carried, not the target (first phone A/B: the remembered
+     * 300 kbps was a target the dark-scene encoder never filled, so the next start overshot a link that
+     * carried about 170). Default false keeps every other mode.
+     */
+    private val deliveredEvidence: Boolean = false,
 ) {
     private class LinkState(var targetBps: Int) {
         var clean = 0
+
+        /** Auto evidence: media bytes and window time of the loaded clean windows since the last reset. */
+        var cleanSentBytes = 0L
+        var cleanWindowNs = 0L
+
+        fun resetClean() {
+            clean = 0
+            cleanSentBytes = 0L
+            cleanWindowNs = 0L
+        }
         var lastSampleNs = 0L
         var lastBacklogAgeMs = 0
         var lastDecreaseNs = Long.MIN_VALUE
@@ -424,8 +459,31 @@ internal class LinkRateController(
     var effectiveVideoBps = requestedVideoBps
         private set
 
+    /**
+     * The link under every peer changed (its PHY moved): what was learned about it is stale. Clears the
+     * climb and the learned ceiling, blocks a cut for one decrease interval so the queue left by the old
+     * link can drain, and raises a target that fell below [restartBps] back to it (never lowers one).
+     * Returns the new effective rate when it changes. The backlog and queue ages are kept: they are real.
+     */
+    @Synchronized
+    fun restartAfterLinkChange(restartBps: Int, nowNs: Long): Int? {
+        val restart = restartBps.coerceIn(lowestBps, requestedVideoBps)
+        links.values.forEach { state ->
+            state.resetClean()
+            state.ceilingBps = 0L
+            state.probeFromBps = 0
+            state.overused = false
+            state.lastDecreaseNs = nowNs
+            if (state.targetBps < restart) state.targetBps = restart
+        }
+        return refresh(nowNs)
+    }
+
     /** The video rate is already at the lowest the controller sends (no further cut is possible). */
     val atRateFloor: Boolean get() = effectiveVideoBps <= minimumBps
+
+    /** The video rate is at [lowestBps], the frame-rate ladder's floor when there is one (calls). */
+    val atLowestRate: Boolean get() = effectiveVideoBps <= lowestBps
 
     /** Experimental burst-aware drain: windows whose child lateness was attributed to a burst. */
     var burstAttributedSamples = 0
@@ -446,6 +504,22 @@ internal class LinkRateController(
     private fun stateFor(link: Any, peer: String): LinkState = links.getOrPut(link) {
         val learned = peer.takeIf { it.isNotEmpty() }?.let { memory?.startBps(it) }
         LinkState(learned?.coerceIn(lowestBps, requestedVideoBps) ?: requestedVideoBps)
+    }
+
+    /**
+     * The video rate remembered after a sustained clean stretch: the target, or with [deliveredEvidence]
+     * at most what those windows carried (media bytes per second less the audio), never below the lowest.
+     */
+    private fun rememberedBps(state: LinkState): Int {
+        if (!deliveredEvidence || state.cleanWindowNs <= 0L) return state.targetBps
+        val carried = (state.cleanSentBytes * 8 * 1_000_000_000L / state.cleanWindowNs - audioBps).toInt()
+        return minOf(state.targetBps, carried).coerceAtLeast(lowestBps)
+    }
+
+    /** One clean climb: a tenth of the request, or with [smallClimbSteps] at most a tenth of [targetBps]. */
+    private fun climbStep(targetBps: Int): Int {
+        val fromRequest = requestedVideoBps / 10
+        return if (smallClimbSteps) minOf(fromRequest, maxOf(targetBps / 10, AUTO_MIN_CLIMB_STEP_BPS)) else fromRequest
     }
 
     /** Records [sample] for [link]; returns the new effective video bitrate when it changes. */
@@ -499,7 +573,8 @@ internal class LinkRateController(
         // camera-off or a scene far below the target says nothing about the link (review 2026-10-09:
         // camera-off windows climbed to and remembered the full request for 24 h).
         val loaded = sample.windowNs > 0 &&
-            sample.offeredBytes * 8 * 1_000_000_000L / sample.windowNs >= (state.targetBps + audioBps) * LOADED_FRACTION
+            sample.offeredBytes * 8 * 1_000_000_000L / sample.windowNs >=
+            (state.targetBps + audioBps) * (if (deliveredEvidence) AUTO_LOADED_FRACTION else LOADED_FRACTION)
         state.lastBacklogAgeMs = sample.backlogAgeMs
         val previousMeasuredQueueMs = state.lastQueueMs
         state.lastQueueMs = if (measured) queueMs else -1
@@ -511,7 +586,7 @@ internal class LinkRateController(
             )
         when {
             probeFailed -> {
-                state.clean = 0
+                state.resetClean()
                 state.targetBps = minOf(state.targetBps, state.probeFromBps)
                 state.probeFromBps = 0
                 state.probeHoldWindows = (state.probeHoldWindows * 2).coerceAtMost(MAX_PROBE_HOLD_WINDOWS)
@@ -520,7 +595,7 @@ internal class LinkRateController(
                 state.lastDecreaseNs = nowNs
             }
             overuse -> {
-                state.clean = 0
+                state.resetClean()
                 if (deliveryProbing && deliveredBps > 0) state.onOveruse(deliveredBps)
                 val sinceDecrease = nowNs - state.lastDecreaseNs
                 val interval = if (deliveryProbing && deliveredBps > 0) FAST_DECREASE_INTERVAL_NS else MIN_DECREASE_INTERVAL_NS
@@ -548,7 +623,11 @@ internal class LinkRateController(
             }
             clean -> {
                 // Unloaded clean windows hold: they neither count toward a climb nor teach the memory.
-                if (loaded) state.clean++
+                if (loaded) {
+                    state.clean++
+                    state.cleanSentBytes += sample.sentBytes
+                    state.cleanWindowNs += sample.windowNs
+                }
                 state.overused = false
                 val probing = deliveryProbing && state.ceilingBps > 0
                 val cap = if (probing) capBps(state.ceilingBps) else requestedVideoBps
@@ -561,21 +640,22 @@ internal class LinkRateController(
                     // Sustained cleanly: remember it, then climb. A target held only by this session's
                     // request is not the link's limit, so it may raise the remembered rate but never
                     // lower it (a clean 300 kbps call must not start the next 1200 kbps one at 300).
-                    if (state.targetBps < requestedVideoBps || (memoryStart(sample.peer) ?: 0) < state.targetBps) {
-                        remember(sample.peer, state.targetBps)
+                    val rememberedBps = rememberedBps(state)
+                    if (state.targetBps < requestedVideoBps || (memoryStart(sample.peer) ?: 0) < rememberedBps) {
+                        remember(sample.peer, rememberedBps)
                     }
                     if (state.targetBps < requestedVideoBps) {
                         state.targetBps = when {
-                            !probing -> state.targetBps + requestedVideoBps / 10
+                            !probing -> state.targetBps + climbStep(state.targetBps)
                             state.probeFromBps > 0 -> {
                                 // A probe past the last overuse point held cleanly: the link improved
                                 // and that ceiling is stale. Climb normally until the next overuse.
                                 state.ceilingBps = 0L
                                 state.probeFromBps = 0
                                 state.probeHoldWindows = PROBE_HOLD_WINDOWS
-                                state.targetBps + requestedVideoBps / 10
+                                state.targetBps + climbStep(state.targetBps)
                             }
-                            state.targetBps < cap -> minOf(state.targetBps + requestedVideoBps / 10, cap)
+                            state.targetBps < cap -> minOf(state.targetBps + climbStep(state.targetBps), cap)
                             else -> {
                                 // Held cleanly at the cap: probe a step past the last overuse point.
                                 state.probeFromBps = state.targetBps
@@ -583,11 +663,11 @@ internal class LinkRateController(
                             }
                         }.coerceAtMost(requestedVideoBps)
                     }
-                    state.clean = 0
+                    state.resetClean()
                 }
             }
             // A backlog still draining after a decrease: hold.
-            else -> state.clean = 0
+            else -> state.resetClean()
         }
         return refresh(nowNs)
     }
@@ -595,6 +675,7 @@ internal class LinkRateController(
     /** Frame rate that keeps the floor's bits per frame at [videoBps] (the request without a ladder). */
     fun frameRateFor(videoBps: Int): Int {
         val ladder = frameRateLadder ?: return Int.MAX_VALUE
+        ladder.curve?.let { return it(videoBps).coerceIn(ladder.minimumFps, ladder.requestedFps) }
         if (videoBps >= ladderFloorBps) return ladder.requestedFps
         return (ladder.requestedFps.toLong() * videoBps / ladderFloorBps).toInt().coerceIn(ladder.minimumFps, ladder.requestedFps)
     }
@@ -642,6 +723,7 @@ internal class LinkRateController(
          * least this fraction of target + audio: encoders run below target on easy scenes.
          */
         const val LOADED_FRACTION = 0.6
+        const val AUTO_LOADED_FRACTION = 0.8
         /** Delivery reports: the measured queue fell by at least this since the last sample (draining). */
         const val QUEUE_DRAIN_MS = 50
         /** Experimental probing: a measured queue this deep that is not draining is overuse. */
@@ -660,6 +742,14 @@ internal class LinkRateController(
         const val PROBE_CONFIRM_WINDOWS = 6
         /** Experimental probing: one probe aims this fraction past the last overuse delivery. */
         const val PROBE_STEP = 0.10
+        const val MIN_CLIMB_STEP_BPS = 10_000
+
+        /**
+         * Auto's smallest climb step. Lane 4: from the 40 kbps floor a step of 10 kbps per three clean windows
+         * took 30 s to reach 100 kbps on a link that carries 100-150; 20 kbps halves that and is still a tenth
+         * of any target from 200 kbps up.
+         */
+        const val AUTO_MIN_CLIMB_STEP_BPS = 20_000
         /**
          * A child's lateness report trails the late frame by its arrival (up to ~3.1 s for a 135 KB
          * GATT frame), the report interval (~1 s) and the late hold (1.5 s).

@@ -34,4 +34,15 @@ class VideoStreamDecoderTest {
         assertEquals(1, selected.size)
         assertArrayEquals(configuration, selected.single())
     }
+
+    @Test
+    fun aTransientEmptyOutputSizeIsIgnoredAndRealSizesPass() {
+        assertEquals(null, validOutputSize(0, 0))
+        assertEquals(null, validOutputSize(640, 0))
+        assertEquals(null, validOutputSize(0, 480))
+        assertEquals(null, validOutputSize(-1, 480))
+        assertEquals(640 to 480, validOutputSize(640, 480))
+        // A crop rectangle that collapses (right < left) is not a picture either.
+        assertEquals(null, validOutputSize(10 - 20 + 1, 100))
+    }
 }

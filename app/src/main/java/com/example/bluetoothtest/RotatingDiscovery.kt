@@ -24,7 +24,7 @@ object RotatingDiscoveryFeature {
     const val PREF = "experimental_rotating_ids"
 
     /**
-     * The one default constant (README register "Rotating discovery IDs"): what a user launch without a stored choice
+     * The one default constant (docs/SWITCHES.md register "Rotating discovery IDs"): what a user launch without a stored choice
      * uses. A DEBUG benchmark launch (any `test_` extra) never reads it and uses [EXTRA] only, as every promoted feature
      * does ([FeatureCatalog.resolve]). The neutral Bluetooth name is a separate option and stays off by default.
      */
@@ -66,6 +66,12 @@ object RotatingDiscoveryIds {
     const val ROLE_CALL_OFFER = 0
     const val ROLE_STREAM_OFFER = 1
     const val ROLE_VIEWER_REQUEST = 2
+
+    /** Naming v2 (Visible by name): the dedicated window ID, reserved for the window offer; unlinkable to roles 0 and 1. */
+    const val ROLE_WINDOW_OFFER = 3
+
+    /** The role whose ID [selected] carries: the window offer's role 3, else the call offer's role 0. */
+    fun roleFor(selected: DiscoveryAnnouncement): Int = if (selected.isWindowOffer) ROLE_WINDOW_OFFER else ROLE_CALL_OFFER
 
     /** Link hello transport-mask bit 3: "sends and accepts `BDO1` as the first hop record". */
     const val LINK_HELLO_BIT = 1 shl 3
@@ -242,9 +248,13 @@ object DiscoverySelectionCheck {
  * last tick, or [ELAPSED_TICK_MS] of elapsedRealtime passed since it (a stuck or rewound wall
  * clock still rotates). At a tick E = max(wallEpoch, lastEpoch + 1); any other call reuses E, so
  * restarts after calls, retries and defers never push E ahead. After a reboot (elapsed time not
- * comparable) E is reused only while the wall still shows the epoch of the last tick. A forward
- * offset E - wallEpoch above [MAX_AHEAD_EPOCHS] that lasts [AHEAD_RECOVERY_MS] of consistent wall
- * time starts a new presence generation and resets E to the wall epoch.
+ * comparable) E is reused only while the wall still shows the epoch of the last tick. An offset
+ * E - wallEpoch above [MAX_AHEAD_EPOCHS] (the opening tolerance, 2 epochs: Q33, 2026-10-14; it was one day
+ * before) that lasts [AHEAD_RECOVERY_MS] of consistent wall time starts a new presence generation and
+ * resets E to the wall epoch. E never goes down, so a backward wall-clock step (a manual fix, a time zone or
+ * NITZ correction, an NTP step) leaves E ahead for good; beyond the tolerance every opening would fail
+ * OPENING_STALE and contacts could not recognise the phone, so the new generation (contacts re-sync) is
+ * the recovery. A lead within the tolerance, or a wall clock that is itself still changing, starts nothing.
  */
 data class EpochClockState(
     val lastEpoch: Long = -1L,
@@ -290,7 +300,15 @@ class DiscoveryEpochClock(
         val wall = RotatingDiscoveryIds.wallEpoch(Math.floorDiv(wallMs, 1000L))
         var current = state
         var newGeneration = false
-        if (current.lastEpoch >= 0 && current.lastEpoch - wall > MAX_AHEAD_EPOCHS) {
+        val tick = when {
+            current.lastEpoch < 0 -> true
+            current.bootId != bootId -> wall != current.tickWallEpoch
+            else -> wall != current.tickWallEpoch || elapsedMs - current.tickElapsedMs >= ELAPSED_TICK_MS
+        }
+        // The lead is measured on the epoch this read would advertise: the first read after a wall boundary sees
+        // the lead one epoch short before it ticks, which would otherwise restart the hour at every boundary.
+        val advertised = if (tick) maxOf(wall, current.lastEpoch + 1) else current.lastEpoch
+        if (current.lastEpoch >= 0 && advertised - wall > MAX_AHEAD_EPOCHS) {
             val offset = wallMs - elapsedMs
             val since = aheadSinceElapsedMs
             if (since == null || Math.abs(offset - aheadWallOffsetMs) > CONSISTENT_WALL_TOLERANCE_MS) {
@@ -307,11 +325,6 @@ class DiscoveryEpochClock(
         } else {
             aheadSinceElapsedMs = null
         }
-        val tick = when {
-            current.lastEpoch < 0 -> true
-            current.bootId != bootId -> wall != current.tickWallEpoch
-            else -> wall != current.tickWallEpoch || elapsedMs - current.tickElapsedMs >= ELAPSED_TICK_MS
-        }
         if (!tick) {
             if (current.bootId != bootId) {
                 // Same wall epoch after a reboot: keep E, adopt this boot's elapsed base.
@@ -321,7 +334,7 @@ class DiscoveryEpochClock(
             }
             return Reading(current.lastEpoch, ticked = false, newGeneration = newGeneration)
         }
-        val epoch = maxOf(wall, current.lastEpoch + 1)
+        val epoch = advertised
         current = current.copy(lastEpoch = epoch, tickWallEpoch = wall, tickElapsedMs = elapsedMs, bootId = bootId)
         state = current
         persist(current)
@@ -332,8 +345,12 @@ class DiscoveryEpochClock(
         /** One epoch plus a minute, so a normal wall boundary always ticks first (no early double tick). */
         val ELAPSED_TICK_MS: Long get() = (RotatingDiscoveryIds.epochSeconds + 60L) * 1000L
 
-        /** A day of epochs (96 at 900 s; the same real time at a DEBUG short epoch). */
-        val MAX_AHEAD_EPOCHS: Long get() = RotatingDiscoveryIds.epochsPerDay
+        /**
+         * The lead of E over the wall epoch that starts the recovery clock: the verifier's opening tolerance in
+         * epochs (2), because beyond it this phone's own openings are stale (RD4). Counted in epochs at every
+         * epoch length, like the tolerance.
+         */
+        val MAX_AHEAD_EPOCHS: Long get() = DiscoverySelectionCheck.EPOCH_TOLERANCE
         const val AHEAD_RECOVERY_MS = 3_600_000L
         const val CONSISTENT_WALL_TOLERANCE_MS = 120_000L
     }

@@ -73,6 +73,9 @@ def render(ledger_path, output, root=ROOT, ledger=None, state_bytes=None):
         path, audit = verified(ledger["media_retirement"])
         media_notice = (f"<p>{audit['privacy_cleanup']['removed_files']:,} benchmark media files were retired for privacy or obsolete diagnostics. "
             "Recorded scores and logs remain; pixel metrics that depended on those files cannot be recomputed. "
+            + "".join(f"Later, {section['retired_files']:,} raw media/log files of {section['runs']:,} closed runs no record cites "
+                      "were retired; their results and scores remain and the protected backup keeps the files. "
+                      for key, section in sorted(audit.items()) if key.startswith("evidence_retirement_")) +
             f"{link(path, 'Media retirement evidence')}</p>")
     status = " · ".join(f"{html.escape(name)}: {count:,}" for name, count in sorted(counts.items()))
     data_links = " · ".join(link(path, key.replace("_", " ").title()) for key, (path, _) in pointers.items())

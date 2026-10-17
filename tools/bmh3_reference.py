@@ -37,6 +37,7 @@ PURPOSE_LINK, PURPOSE_ENDPOINT = 1, 2
 PURPOSE_NAME = {PURPOSE_LINK: b"Link", PURPOSE_ENDPOINT: b"EndToEnd"}
 ROOT = b"BluetoothVideoMesh/BMH3/"
 TAG_INFO = b"BluetoothVideoMesh/BMH3/ContactTag/1"
+QR_TAG_INFO = b"BluetoothVideoMesh/BMH3/QrTag/1"      # Naming v2 / BVMID2: K_tag for the secret K_qr of a verification code
 
 F1_MAY_REVEAL_FIRST = 0x01         # msg1 flag: the initiator would accept I_FIRST (a hint only)
 F2_R_FIRST = 0x01                  # msg2 flag: 1 = the responder's block follows (SIGMA-I), 0 = I_FIRST (SIGMA-R)
@@ -268,6 +269,13 @@ def check_placement(ext: dict[int, bytes], *, responder_block: bool, msg: int, o
 def contact_tag_key(lease_key: bytes) -> bytes:
     """K_tag = HKDF-Expand(L_d, "BluetoothVideoMesh/BMH3/ContactTag/1", 32). L_d is the responder's day lease key."""
     return hkdf_expand(lease_key, TAG_INFO, 32)
+
+
+def qr_tag_key(k_qr: bytes) -> bytes:
+    """BVMID2: K_tag = HKDF-Expand(K_qr, "BluetoothVideoMesh/BMH3/QrTag/1", 32). K_qr is 32 fresh random bytes held by
+    the phone that displays the code; the tag is used exactly like a lease tag, bound to the displayer's role-0 RDI."""
+    assert len(k_qr) == 32
+    return hkdf_expand(k_qr, QR_TAG_INFO, 32)
 
 
 def advert_binding(selected6: bytes, role: int, wall_epoch: int | None) -> bytes:
@@ -611,6 +619,7 @@ LINK_CAPS_R = bytes.fromhex("01" "0a" "03" "03" "05dc" "01")   # LE CoC + bit 3 
 E2E_CAPS_I = bytes.fromhex("01" "02" "01" "83" "0190" "00")    # VP9 encode, VP9+AV1 decode + prefer-VP9 bit 7, 400 kbps
 E2E_CAPS_R = bytes.fromhex("01" "0a" "03" "03" "0190" "00")
 LEASE_KEY = bytes(range(0x40, 0x60))                            # the responder's day lease key L_d in the vectors
+K_QR = bytes(range(0x80, 0xa0))                                 # BVMID2 vector: the secret of the displayed code
 OPENING_ENTRY = bytes.fromhex("44e69c0a7a7d001e600000d8cbe82b78824c1ba08d0c4eed26502189e19ccccd180e46c4826c5ba47e7167")
 ZERO_RANDOM_TAG = bytes.fromhex("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")
 BUILD_TAG_I = bytes.fromhex("0006")                                   # release 6, not signed with the release key
@@ -960,12 +969,24 @@ def build_vectors() -> dict:
     record = vector_record("endpoint_pseudonyms", PURPOSE_ENDPOINT, "R_FIRST", ini, res, msgs)
     record["reveal"] = reveal_vectors(ini, res)
     vectors.append(record)
+    # 5. BVMID2 (Naming v2): link, Contacts-only responder that has the live code on screen. The scanner's tag is K_tag
+    #    derived from K_qr and bound to the displayer's role-0 RDI (the lease check is also present and does not match).
+    qr_key = qr_tag_key(K_QR)
+    ini, res = make_pair(PURPOSE_LINK, "v5", mode="CONTACTS_ONLY", init_tag=(qr_key, VECTOR_BINDING),
+                         resp_tag_checks=[(tag_key, VECTOR_BINDING), (qr_key, VECTOR_BINDING)],
+                         r_ext=ext_area([(EXT_OPENING, opening_value([OPENING_ENTRY]))]))
+    msgs = run(ini, res)
+    assert res.tag_matched
+    vectors.append(vector_record("link_qr_tag", PURPOSE_LINK, "R_FIRST", ini, res, msgs))
     constants = {
         "domain_link": domain(PURPOSE_LINK).hex(),
         "domain_endpoint": domain(PURPOSE_ENDPOINT).hex(),
         "contact_tag_info": TAG_INFO.hex(),
         "lease_key": LEASE_KEY.hex(),
         "k_tag": tag_key.hex(),
+        "qr_tag_info": QR_TAG_INFO.hex(),
+        "k_qr": K_QR.hex(),
+        "k_tag_qr": qr_key.hex(),
         "vector_binding": VECTOR_BINDING.hex(),
         "sig_context_prefix_link_initiator": sig_context(PURPOSE_LINK, "Initiator", b"").hex(),
         "sig_context_prefix_endpoint_responder": sig_context(PURPOSE_ENDPOINT, "Responder", b"").hex(),
@@ -987,6 +1008,8 @@ def kotlin_fixture(doc: dict) -> str:
         "internal object Bmh3Vectors {",
         f'    const val LEASE_KEY = "{doc["constants"]["lease_key"]}"',
         f'    const val K_TAG = "{doc["constants"]["k_tag"]}"',
+        f'    const val K_QR = "{doc["constants"]["k_qr"]}"',
+        f'    const val K_TAG_QR = "{doc["constants"]["k_tag_qr"]}"',
         f'    const val BINDING = "{doc["constants"]["vector_binding"]}"',
         f'    const val OPENING_ENTRY = "{OPENING_ENTRY.hex()}"',
         "",

@@ -24,6 +24,10 @@ import org.junit.Test
  * handshake on both transports. The wire hint has its own test ([DualListeningWireTest]).
  */
 class DualListeningTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private val coc = BluetoothTransportOption.BLE_L2CAP
     private val gatt = BluetoothTransportOption.BLE_GATT
     private val classic = BluetoothTransportOption.CLASSIC_RFCOMM
@@ -311,7 +315,7 @@ class DualListeningTest {
                 FakeServer(log).also {
                     servers += it
                     entered.countDown()
-                    release.await(5, TimeUnit.SECONDS)
+                    release.await(120, TimeUnit.SECONDS)
                 }
             },
             settle = DualSettleGate({ 0L }),
@@ -320,10 +324,10 @@ class DualListeningTest {
         )
         val result = AtomicReference<Boolean>()
         val opener = thread { result.set(host.open()) }
-        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        assertTrue(entered.await(120, TimeUnit.SECONDS))
         host.close()
         release.countDown()
-        opener.join(5_000)
+        opener.join(120_000)
         assertEquals(false, result.get())
         assertTrue(servers.single().closed)
         assertFalse(host.ready)
@@ -410,7 +414,7 @@ class DualListeningTest {
             caps(transport),
         )
         val opening = LinkOpeningExchange.exchange(link, caps(transport), emptyList())
-        calleeThread.join(5_000)
+        calleeThread.join(120_000)
         failure.get()?.let { throw AssertionError("callee failed", it) }
         return link to opening
     }

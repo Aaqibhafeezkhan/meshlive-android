@@ -179,7 +179,7 @@ distributions, never lowered to make a failure pass.
 | --- | --- | --- |
 | Longest stall | Every link | Calls at most 500 ms, streams at most 1 s. The largest gap between rendered surface updates from the receiver's rolling 256-gap report window; PASS needs every report interval to add at most 256 gaps, otherwise UNMEASURED. The tail after the last frame is not included |
 | Frozen-time share | Every link | At most 1% of scored rendered time in unexpected freezes (gaps beyond the freeze threshold, less one frame period each); planned actions overlapping a freeze make it UNMEASURED |
-| Effective-profile cadence | Every link | Slowest clean report interval at least 95% of the FPS in force (from the received stream header, time-weighted across a change; the requested FPS before any header). Requested-profile shortfall and share of time degraded are diagnostics |
+| Effective-profile cadence | Every link | At most 5% of the clean report time below 95% of the FPS in force (from the received stream header, time-weighted across a change; the requested FPS before any header), judged together with the longest-stall gate. The time resolution is the report interval. The earlier rule (the slowest clean report interval at least 95%) stays in the row as `legacy_slowest_window`, a labelled comparison that never decides. Requested-profile shortfall and share of time degraded are diagnostics |
 | Audio continuity | Every link | Zero audio drops. Speech-gap metrics need an accepted-PCM adapter and stay UNMEASURED (`acoustic`) |
 | Media age | Every link | Capture to release or surface acknowledgement of the same source PTS across two phones, only through measured clock anchors (`score_pipeline_trace.py` `media_age` plan; compared as a value plus clock uncertainty). No target is decided yet, so the value is reported and the gate stays UNMEASURED. Local queue ages are proxies, never media age |
 | Unexpected freezes, loss counters, p95/p99 frame intervals | Healthy link only | Zero, and the v3 targets. On an impaired link they are DIAGNOSTIC |
@@ -568,7 +568,7 @@ replay (their runner has none) and never silently fall back to Camera2.
 Current raw phone input is tightly packed 8-bit I420 with even geometry and an integer profile FPS: `width * height *
 3 / 2 * frame_count` bytes. Broadcasts use `raw_fixture_file`, calls use `raw_fixture_files` keyed by each endpoint, and
 chains bind the original source. Other formats or fractional FPS need a declared conversion and transformed hashes;
-they are not reinterpreted. A correct file size alone does not validate colour, geometry or display. Each variant
+they are not reinterpreted. A correct file size alone does not validate colour, geometry or display: the runner passes the declared geometry as `test_raw_width` and `test_raw_height`, and the app refuses (`BENCHMARK raw_source: status=REFUSED`) a file that is not a whole number of those frames or an encoder that runs at another size, never reinterpreting or rescaling. The refusal also logs `BENCHMARK setup_refused: reason=raw_fixture_geometry | requested=WxH | effective=WxH | detail=...` on the sender (the receiver only sees a stream end: the lifecycle record carries no reason). A DEBUG launch that names an encoder (`test_codec`) or bitrate allocation (`test_rate_control`) the phone lacks logs `BENCHMARK setup_refused: reason=encoder_unavailable|rate_control_unavailable|rate_control_unknown|...` and finishes the task; it never substitutes another encoder or mode. A DEBUG `voice_call`/`call`/`invite` control waits up to 10 s for the target's next sighting and always ends in a `BENCHMARK call_invite:` line (`refreshing_address`, `waiting`, `peer_seen`, `refused`, `failed` with `reason=refresh_timeout|peer_not_seen|scanner_unavailable|...`); a user tap on a person uses the same 10 s wait, survives a discovery restart (onResume) and logs the same lines in DEBUG builds (`userDial=true` on `refreshing_address`); an "applied" control line means the dial was accepted, not that an invite started. Each variant
 needs:
 
 - a stable pattern ID, generator and version, seed, parameters, provenance and licence, and a reproducible schedule;
@@ -836,6 +836,12 @@ to the phones they use and do not replace suite eligibility, frozen-build checks
   nominal Low Energy does not approve unplugged efficiency or endurance.
 - Diagnostic payload and write-buffer overrides do not change acceptance; larger buffers or delays need explicit
   latency evidence.
+
+## Message transfer measurement (Design M phase 0, v1 store-and-forward)
+
+Measures what the v1 Messages exchange actually delivers, so the time table, the 1 MB inline limit and the chunk size in DECISIONS "Design M" rest on numbers instead of call-stream rates, and records whether messages arrive while the app is in the background (T-M8). It needs no taps (adb taps are ignored on the M31 and A15s) and runs on the v1 code: `test_messaging_v2` is absent or false. It is not part of the benchmark suite inventory and creates no case IDs; a lane that uses it owns the phones exclusively and keeps its logs in a run-owned folder.
+
+## Messaging v2 phone procedure
 
 ## Running several people or sessions in parallel
 

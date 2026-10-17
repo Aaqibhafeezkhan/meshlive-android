@@ -3,15 +3,15 @@
      Names are prefixed feat_ so they never collide with the call features' feature_* strings. -->
 <resources>
     <!-- LE CoC to GATT safety net (CocAutoGatt.kt, phone test T6) -->
-    <string name="feat_coc_auto_gatt">Switch to Bluetooth LE (GATT) when L2CAP fails</string>
+    <string name="feat_coc_auto_gatt">Fall back to compatible link</string>
     <string name="feat_coc_auto_gatt_description">Some older phones stop accepting the fast Bluetooth LE (L2CAP) link after about 15 uses, until Bluetooth is restarted. With this on, when L2CAP stops working this phone moves its calls to the slower, more compatible GATT link and tells you. Phones that already use GATT also appear in your call list. It only matters if you chose the L2CAP link under Advanced.</string>
 
     <!-- Dual listening (DualListening.kt, phone test T12) -->
-    <string name="feat_dual_listening">Reachable over both Bluetooth LE links</string>
+    <string name="feat_dual_listening">Listen on both links</string>
     <string name="feat_dual_listening_description">Lets phones that can only use the slower, more compatible Bluetooth LE (GATT) link call this phone, and retries a call over GATT when the fast L2CAP link will not connect. While this phone is available for calls it also keeps a second Bluetooth service ready, and its announcement carries one more capability bit that anyone nearby can read. Every call is still encrypted and checked the same way. It only matters if you chose the L2CAP link under Advanced.</string>
 
     <!-- Classic without pairing (ClassicBondFree.kt, phone test T7) -->
-    <string name="feat_classic_bond_free">Connect without pairing</string>
+    <string name="feat_classic_bond_free">Classic Bluetooth without pairing</string>
     <string name="feat_classic_bond_free_description">Classic Bluetooth calls and streams work without pairing the phones in Android settings. The app\'s own signed handshake and encryption protect the link. Turn it on in both phones. A first call to a phone this one has not met needs that phone to be visible to nearby Bluetooth devices for about two minutes; Android asks before it does that.</string>
     <string name="feat_classic_dialog_title">Connect without pairing</string>
     <string name="feat_classic_dialog_message">When this is on, a phone that is ready for Classic calls may ask Android to make it visible to nearby Bluetooth devices for two minutes, so another phone can find it the first time. While it is visible, anyone nearby can see its Bluetooth name. Android always asks you first, and the app still authenticates every connection.\n\nBoth phones need this turned on. Streams reach only phones this one has already met.</string>
@@ -29,10 +29,10 @@
     <string name="feat_native_opus">Call audio with loss recovery</string>
     <string name="feat_native_opus_description">Calls use the Opus speech codec built into the app, set for voice, with error correction and concealment when packets are lost. The other phone needs nothing new. It uses a little more processor time, and calls fall back to the phone\'s own codec if the library cannot start. Applies to calls started after you change it.</string>
     <!-- Hidden identities, the BMH3 handshake (Bmh3.kt, phone test T14). On by default since 0.2.0-beta. -->
-    <string name="feat_bmh3">Hidden identities</string>
+    <string name="feat_bmh3">Hide my ID from strangers</string>
     <string name="feat_bmh3_description">Calls and message exchanges with a phone that also has this turned on hide both phones\' identity keys from anyone listening to the Bluetooth link, and the caller reveals itself only after it has checked who answered. On by default. A phone without it (an older version, or with this turned off) is reached by the old handshake, which shows both identity keys to a listener; with rotating discovery IDs on, this phone does not speak the old handshake to such a phone, so they cannot call each other. A phone that accepts calls from anyone still shows its identity to someone who connects to it on purpose. Your announcement carries one more capability bit that anyone nearby can read.</string>
     <!-- Pseudonymous stranger identities on top of the BMH3 handshake (Bmh3Pseudonyms.kt, phone test T15). On by default since 0.2.0-beta. -->
-    <string name="feat_bmh3_pseudonyms">Pseudonymous toward strangers</string>
+    <string name="feat_bmh3_pseudonyms">New identity for each stranger</string>
     <string name="feat_bmh3_pseudonyms_description">On by default; needs Hidden identities and rotating discovery IDs. A phone that is not one of your verified contacts meets a throwaway identity that changes every 15 minutes instead of your real one, and you meet theirs the same way. Your real identity goes only to verified contacts, or to the person whose call you accept. Both phones need this turned on; a call from a phone that has Hidden identities but not this will not connect to you while it is on. Calls relayed through other phones, message exchanges and relay requests work only with verified contacts while this is on. Live streams still show a stream source\'s identity to every viewer. Accepting a call from someone you have not verified tells them who you are; declining tells them nothing.</string>
     <string name="call_verify_after_reveal">You can verify this person once they have answered and their identity is confirmed.</string>
 </resources>

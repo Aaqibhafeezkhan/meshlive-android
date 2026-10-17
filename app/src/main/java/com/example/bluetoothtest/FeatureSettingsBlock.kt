@@ -2,10 +2,9 @@ package com.example.bluetoothtest
 
 import android.content.SharedPreferences
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
-import androidx.core.content.ContextCompat
-import androidx.core.widget.TextViewCompat
 import com.google.android.material.materialswitch.MaterialSwitch
 
 /**
@@ -51,20 +50,24 @@ internal class FeatureSettingsBlock(
     fun bind() {
         if (rows.isEmpty()) {
             val inflater = LayoutInflater.from(container.context)
-            specs.forEachIndexed { index, spec ->
+            // A spec with no title (titleRes 0) has no Settings row: it is still registered and follows its default.
+            specs.filter { it.titleRes != 0 }.forEachIndexed { index, spec ->
                 val view = inflater.inflate(R.layout.item_feature_switch, container, false)
                 val switch = view.findViewById<MaterialSwitch>(R.id.featureRowSwitch)
-                switch.setText(spec.titleRes)
+                // Settings redesign (2026-10-17): icon, then the label (a tap opens the explanation), then the switch
+                // alone at the right edge, so every switch in a card lines up.
+                view.findViewById<TextView>(R.id.featureRowInfo).setText(spec.titleRes)
+                switch.contentDescription = view.context.getString(spec.titleRes)
                 if (spec.iconRes != 0) {
-                    // Same look as the calls card: icon, 16 dp gap, secondary tint.
-                    switch.setCompoundDrawablesRelativeWithIntrinsicBounds(spec.iconRes, 0, 0, 0)
-                    switch.compoundDrawablePadding = (16 * switch.resources.displayMetrics.density).toInt()
-                    TextViewCompat.setCompoundDrawableTintList(
-                        switch,
-                        ContextCompat.getColorStateList(switch.context, R.color.text_secondary),
-                    )
+                    view.findViewById<android.widget.ImageView>(R.id.featureRowIcon).apply {
+                        setImageResource(spec.iconRes)
+                        visibility = View.VISIBLE
+                    }
                 }
                 view.findViewById<TextView>(R.id.featureRowDescription).setText(spec.descriptionRes)
+                view.findViewById<View>(R.id.featureRowInfo).setOnClickListener {
+                    SettingsInfo.show(view.context, spec.titleRes, spec.descriptionRes)
+                }
                 if (index == 0) {
                     (switch.layoutParams as? ViewGroup.MarginLayoutParams)?.topMargin = 0
                 }

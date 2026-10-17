@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Go live choice (audio-only live, Design AL): Video and audio | Audio only. The last choice is the white
+     button. Styled per the UI spec; opened by AudioLiveController from the pinned Go live button. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingStart="24dp"
+    android:paddingTop="16dp"
+    android:paddingEnd="24dp"
+    android:paddingBottom="24dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:accessibilityHeading="true"
+        android:text="@string/go_live_choice_title"
+        android:textAppearance="@style/TextAppearance.App.Readout" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/goLiveChoiceVideo"
+        style="@style/Widget.App.Button.Secondary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="@string/go_live_choice_video"
+        app:icon="@drawable/ic_videocam"
+        app:iconGravity="textStart"
+        app:iconPadding="10dp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/goLiveChoiceAudio"
+        style="@style/Widget.App.Button.Secondary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/go_live_choice_audio"
+        app:icon="@drawable/ic_radio"
+        app:iconGravity="textStart"
+        app:iconPadding="10dp" />
+
+    <TextView
+        android:id="@+id/goLiveChoiceHint"
+        style="@style/Widget.App.Description"
+        android:layout_marginTop="12dp"
+        android:text="@string/go_live_choice_hint"
+        android:textColor="@color/text_secondary" />
+</LinearLayout>

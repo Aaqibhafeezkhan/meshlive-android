@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Audio-only live (Design AL) additions. Everything else reuses the "Plain Signal" styles. -->
+<resources>
+    <!-- One option of the three-way quality row; the selected one is a white pill (set by AudioLiveController). -->
+    <style name="Widget.App.QualityOption" parent="">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textAppearance">@style/TextAppearance.App.Button</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+</resources>

@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A saved contact: voice and video call, rename, block, remove. The full ID is shown only here. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:scrollbars="none">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="24dp"
+        android:paddingTop="16dp"
+        android:paddingEnd="24dp"
+        android:paddingBottom="24dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/contactSheetName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:accessibilityHeading="true"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textAppearance="@style/TextAppearance.App.Readout"
+                tools:text="Priya" />
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_marginStart="8dp"
+                android:visibility="gone"
+                android:contentDescription="@string/verification_verified"
+                android:src="@drawable/ic_check_circle"
+                app:tint="@color/success" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/contactSheetDetail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textAppearance="@style/TextAppearance.App.Body"
+            android:textIsSelectable="true"
+            tools:text="Verified by QR code, 12 Oct 2026" />
+
+        <!-- Naming v2: what they call themselves (never the title) and the one-time change note. -->
+        <TextView
+            android:id="@+id/contactSheetClaim"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textAppearance="@style/TextAppearance.App.Body"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/contactRowUseClaim"
+            style="@style/Widget.App.Row"
+            android:visibility="gone">
+
+            <TextView
+                style="@style/Widget.App.RowTitle"
+                android:text="@string/contact_claim_use" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/contactRowIgnoreClaim"
+            style="@style/Widget.App.Row"
+            android:visibility="gone">
+
+            <TextView
+                style="@style/Widget.App.RowTitle"
+                android:text="@string/contact_claim_ignore" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/contactRowScanConfirm"
+            style="@style/Widget.App.Row"
+            android:visibility="gone">
+
+            <TextView
+                style="@style/Widget.App.RowTitle"
+                android:text="@string/contact_scan_confirm" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/contactRowVoice"
+            android:visibility="gone"
+            style="@style/Widget.App.Row"
+            android:layout_marginTop="12dp">
+
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_call"
+                app:tint="@color/text_primary" />
+
+            <TextView
+                style="@style/Widget.App.RowTitle"
+                android:layout_marginStart="16dp"
+                android:text="@string/contact_sheet_voice" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/contactRowVideo"
+            android:visibility="gone"
+            style="@style/Widget.App.Row">
+
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_videocam"
+                app:tint="@color/text_primary" />
+
+            <TextView
+                style="@style/Widget.App.RowTitle"
+                android:layout_marginStart="16dp"
+                android:text="@string/contact_sheet_video" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/contactRowRename"
+            style="@style/Widget.App.Row">
+
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_person"
+                app:tint="@color/text_primary" />
+
+            <TextView
+                style="@style/Widget.App.RowTitle"
+                android:layout_marginStart="16dp"
+                android:text="@string/contacts_rename" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/contactRowBlock"
+            style="@style/Widget.App.Row">
+
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_warning"
+                app:tint="@color/text_primary" />
+
+            <TextView
+                android:id="@+id/contactRowBlockTitle"
+                style="@style/Widget.App.RowTitle"
+                android:layout_marginStart="16dp"
+                android:text="@string/block_action" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/contactRowRemove"
+            style="@style/Widget.App.Row">
+
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_close"
+                app:tint="@color/text_primary" />
+
+            <TextView
+                style="@style/Widget.App.RowTitle"
+                android:layout_marginStart="16dp"
+                android:text="@string/contacts_forget" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

@@ -147,3 +147,78 @@ class RelayDualRoleSnoopTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def swapped_scenario(delta_s, child_events, end_reason, silent_s=None, last_s=3.9, parent_until=None):
+    """Measurement 7: the phone is central on the parent link and peripheral on the child link.
+
+    The parent's events show as completed packets, the child's as received bursts one air time after the anchor.
+    """
+    parent_anchor = 0.0042
+    air = snoop.air_ms(251) / 1000
+    child_final = 1.0
+    rows = [conn_complete(T0, PARENT, 0, 15.0), conn_complete(T0 + 0.5, CHILD, 1, 45.0),
+            conn_update(T0 + child_final, CHILD, 15.0), data_length(T0 + child_final + 0.016, CHILD)]
+    first_child_anchor = T0 + parent_anchor + 0.015 * 70 + delta_s
+    for k in range(child_events):
+        rows.append(acl(first_child_anchor + 0.015 * k + air, CHILD, 251, True))
+        rows.append(acl(first_child_anchor + 0.015 * k + air + 0.0012, CHILD, 251, True))
+    end = T0 + last_s
+    if silent_s is not None:
+        end = first_child_anchor + 0.015 * (child_events - 1) + silent_s
+    k = 0
+    while True:
+        stamp_s = T0 + parent_anchor + 0.015 * k + 0.00045
+        k += 1
+        if stamp_s < T0 + 0.1:
+            continue
+        if stamp_s > (T0 + parent_until if parent_until is not None else end):
+            break
+        rows.append(completed(stamp_s, PARENT))
+    rows.append(disconnect(end, CHILD, end_reason))
+    return write_log(rows)
+
+
+class RelayDualRoleSnoopSwappedTest(unittest.TestCase):
+    def analyze_one(self, path):
+        try:
+            reports = snoop.analyze(path, swapped=True)
+        finally:
+            Path(path).unlink(missing_ok=True)
+        self.assertEqual(1, len(reports))
+        return reports[0]
+
+    def test_a_dead_phase_child_dies_silent_while_the_central_parent_link_keeps_completing(self):
+        report = self.analyze_one(swapped_scenario(delta_s=0.0115, child_events=5, end_reason=0x08, silent_s=5.04))
+        self.assertEqual("silent_timeout", report["verdict"])
+        stage = report["stages"][-1]
+        self.assertAlmostEqual(11.5, stage["delta_ms"], delta=0.3)
+        self.assertAlmostEqual(3.5, stage["gap_after_ms"], delta=0.3)
+        self.assertTrue(report["swapped"])
+        self.assertFalse(report["parent_stalled"])
+        self.assertLess(report["parent_max_ncp_gap_s"], 0.05)
+
+    def test_a_child_that_keeps_receiving_is_carried_and_measured_by_its_received_rate(self):
+        report = self.analyze_one(swapped_scenario(delta_s=0.0100, child_events=190, end_reason=0x16))
+        self.assertEqual("carried", report["verdict"])
+        stage = report["stages"][-1]
+        self.assertAlmostEqual(10.0, stage["delta_ms"], delta=0.3)
+        self.assertGreater(stage["rx_kbps"], 50)
+        self.assertEqual(0.0, stage["tx_kbps"])
+        self.assertFalse(report["parent_stalled"])
+
+    def test_a_child_that_receives_too_little_is_low_rate(self):
+        report = self.analyze_one(swapped_scenario(delta_s=0.0100, child_events=5, end_reason=0x16))
+        self.assertEqual("low_rate", report["verdict"])
+
+    def test_a_parent_link_that_stops_completing_while_the_child_lives_is_flagged_as_stalled(self):
+        report = self.analyze_one(swapped_scenario(delta_s=0.0100, child_events=190, end_reason=0x16, parent_until=1.2))
+        self.assertTrue(report["parent_stalled"])
+        self.assertGreaterEqual(report["parent_max_ncp_gap_s"], 1.0)
+
+    def test_the_swapped_flag_is_a_command_line_option(self):
+        path = swapped_scenario(delta_s=0.0100, child_events=190, end_reason=0x16)
+        try:
+            self.assertEqual(0, snoop.main([path, "--swapped"]))
+        finally:
+            Path(path).unlink(missing_ok=True)

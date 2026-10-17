@@ -36,9 +36,33 @@ enum class StreamLifecycleState(val wireValue: Int) {
     LIVE(1),
     PAUSED(2),
     ENDED(3),
+
+    /**
+     * Media-state records (experimental, `live_media_state`; PROTOCOL "Experimental live media state"): the
+     * stream is live, but the broadcaster has muted the microphone and/or turned the camera off. One record per
+     * change, carried like PAUSED/LIVE; media packets are untouched. Older builds reject the unknown value, so a
+     * broadcaster sends them only with the switch on.
+     */
+    LIVE_MUTED(4),
+    LIVE_CAMERA_OFF(5),
+    LIVE_MUTED_CAMERA_OFF(6),
     ;
 
+    val micMuted: Boolean get() = this == LIVE_MUTED || this == LIVE_MUTED_CAMERA_OFF
+    val cameraOff: Boolean get() = this == LIVE_CAMERA_OFF || this == LIVE_MUTED_CAMERA_OFF
+
+    /** The stream is not paused or ended (plain LIVE or a media-state record). */
+    val isLiveFamily: Boolean get() = this != PAUSED && this != ENDED
+
     companion object {
+        /** The live-family record that describes which of microphone/camera are off. */
+        fun live(micMuted: Boolean, cameraOff: Boolean): StreamLifecycleState = when {
+            micMuted && cameraOff -> LIVE_MUTED_CAMERA_OFF
+            micMuted -> LIVE_MUTED
+            cameraOff -> LIVE_CAMERA_OFF
+            else -> LIVE
+        }
+
         fun decode(payload: ByteArray): StreamLifecycleState {
             require(payload.size == 1) { "Invalid stream-state message length" }
             val wireValue = payload[0].toInt() and 0xff
@@ -240,6 +264,8 @@ data class EndToEndVideoSession(
      * throwaway key; it holds the reveal rules and, once the peer's reveal verified, the peer's real identity.
      */
     val reveal: Bmh3RevealSession? = null,
+    /** BVMID2 (responder): the handshake's tag was the displayed verification code's; the session is verify-only. */
+    val qrTagMatched: Boolean = false,
 ) : Closeable {
     /** True while the peer is only a declared throwaway key: show "unverified stranger", never a node ID. */
     val peerIsPseudonym: Boolean get() = reveal?.peerPseudonymous == true && reveal.revealed == null
@@ -293,11 +319,39 @@ class EndToEndStreamWriter(
         EndToEndStreamProtocol.encodeHeader(codecId, settings, rotationDegrees, includeAudio),
     )
 
-    fun writePacket(flags: Int, presentationTimeUs: Long, payload: ByteArray): Int = writeSealed(
-        EndToEndContentType.MEDIA_PACKET,
-        flags,
-        EndToEndStreamProtocol.encodePacket(flags, presentationTimeUs, payload),
-    )
+    /**
+     * Audio-only live stream header (BTL1, with the signer's key block), in place of [writeHeader]; exactly one per
+     * stream. After it the writer refuses [writePacket] and only sends [writeAudioLiveRecord]: every record of the
+     * stream is signed by the source.
+     */
+    fun writeAudioLiveHeader(signer: AudioLiveSigner): Int {
+        require(signer.streamId == (streamId ?: AudioLive.ZERO_STREAM_ID)) {
+            "The audio signer is bound to another stream ID"
+        }
+        audioLive = true
+        return writeSealed(EndToEndContentType.STREAM_HEADER, 0, signer.headerBytes)
+    }
+
+    /** One record signed once by the source ([AudioLiveSigner.sign]); the signature is shared by every child. */
+    fun writeAudioLiveRecord(record: AudioLiveSignedRecord): Int {
+        require(audioLive) { "The audio-only header has not been written" }
+        return writeSealed(
+            EndToEndContentType.MEDIA_PACKET,
+            record.flags,
+            EndToEndStreamProtocol.encodePacket(record.flags, record.presentationTimeUs, record.payload),
+        )
+    }
+
+    @Volatile private var audioLive = false
+
+    fun writePacket(flags: Int, presentationTimeUs: Long, payload: ByteArray): Int {
+        require(!audioLive) { "An audio-only stream sends only signed records" }
+        return writeSealed(
+            EndToEndContentType.MEDIA_PACKET,
+            flags,
+            EndToEndStreamProtocol.encodePacket(flags, presentationTimeUs, payload),
+        )
+    }
 
     fun writeState(state: StreamLifecycleState): Int = writeSealed(
         EndToEndContentType.STREAM_STATE,
@@ -342,7 +396,13 @@ class EndToEndStreamReader(
     private val expectedSourceNodeId: NodeId,
     private val onMeshEnvelope: (MeshEnvelope) -> Unit = {},
 ) {
+    /** Clock for the audio-only arrival budgets; replaceable in tests (set before [readHeader]). */
+    internal var audioClockMs: () -> Long = { System.nanoTime() / 1_000_000L }
+
     private enum class WireMode { DIRECT, MESH }
+
+    /** Non-null once an audio-only (BTL1) header was read: every media record then passes it or the stream fails. */
+    private var audioGuard: AudioLiveStreamGuard? = null
 
     private var wireMode: WireMode? = null
     private var streamId: UUID? = null
@@ -359,12 +419,33 @@ class EndToEndStreamReader(
      */
     internal val delivery = LinkDeliveryCounter()
 
-    fun readHeader(): StreamProtocol.Header {
+    /**
+     * [allowAudioOnly] false: a `BTL1` header fails as "Unsupported stream header" like a build without
+     * audio-only streams. True: the returned header may be audio-only ([StreamProtocol.Header.isAudioOnly]) and
+     * the reader then enforces the audio-only media rules and the media-clock bound.
+     */
+    fun readHeader(allowAudioOnly: Boolean = false): StreamProtocol.Header {
+        // A reader that may meet an audio-only stream bounds its first record to a header-sized allocation.
+        if (allowAudioOnly) linkReader.maxCiphertextBytes = AudioLive.MAX_HEADER_CIPHERTEXT_BYTES
         val content = readContent()
         require(content.type == EndToEndContentType.STREAM_HEADER) {
             "Expected an end-to-end stream header"
         }
-        return EndToEndStreamProtocol.decodeHeader(content.payload)
+        return EndToEndStreamProtocol.decodeHeader(content.payload, allowAudioOnly).also { header ->
+            audioGuard = if (header.isAudioOnly) {
+                // Fails closed here when the certificate does not name the expected source or does not verify.
+                AudioLiveStreamGuard(
+                    AudioLiveVerifier.fromHeader(header, streamId ?: AudioLive.ZERO_STREAM_ID, expectedSourceNodeId),
+                    audioClockMs,
+                ).also {
+                    it.label = (streamId ?: AudioLive.ZERO_STREAM_ID).toString().take(8)
+                    linkReader.maxCiphertextBytes = AudioLive.MAX_RECORD_CIPHERTEXT_BYTES
+                }
+            } else {
+                if (allowAudioOnly) linkReader.maxCiphertextBytes = Int.MAX_VALUE
+                null
+            }
+        }
     }
 
     fun readStreamContent(): ReceivedStreamContent {
@@ -372,18 +453,25 @@ class EndToEndStreamReader(
         val content = readContent()
         return when (content.type) {
             EndToEndContentType.MEDIA_PACKET -> {
-                val packet = EndToEndStreamProtocol.decodePacket(content)
-                delivery.add(packet.payload.size)
+                val guard = audioGuard
+                if (guard != null) guard.checkSealedSize(content.payload.size)
+                val received = EndToEndStreamProtocol.decodePacket(content)
+                // Audio-only: verifies the source's signature and strips it; the packet then looks like any audio.
+                val packet = guard?.open(received) ?: received
+                delivery.add(received.payload.size)
                 if (packet.flags and StreamProtocol.FLAG_AUDIO_PAIR != 0) {
                     val split = StreamProtocol.splitAudioPair(packet)
-                    pendingMedia.addLast(split[1])
+                    split.drop(1).forEach(pendingMedia::addLast) // a pair has one more unit, a batch up to 19
                     ReceivedStreamContent.Media(split[0])
                 } else {
                     ReceivedStreamContent.Media(packet)
                 }
             }
-            EndToEndContentType.STREAM_STATE ->
+            EndToEndContentType.STREAM_STATE -> {
+                // A pause or resume may leave a timestamp gap; the media-clock baseline starts again.
+                audioGuard?.onLifecycleRecord()
                 ReceivedStreamContent.State(StreamLifecycleState.decode(content.payload))
+            }
             EndToEndContentType.PRIVATE_CALL_SIGNAL ->
                 error("Private-call signals are not broadcast stream content")
             else -> error("Unexpected end-to-end stream content ${content.type}")
@@ -541,9 +629,11 @@ object EndToEndStreamProtocol {
         StreamProtocol.writeHeader(it, codecId, settings, rotationDegrees, includeAudio)
     }.toByteArray()
 
-    fun decodeHeader(payload: ByteArray): StreamProtocol.Header {
+
+    /** [allowAudioOnly] is true only for a broadcast-stream reader; calls and video-only callers keep the default. */
+    fun decodeHeader(payload: ByteArray, allowAudioOnly: Boolean = false): StreamProtocol.Header {
         val input = ByteArrayInputStream(payload)
-        return StreamProtocol.readHeader(input).also {
+        return StreamProtocol.readHeader(input, allowAudioOnly).also {
             require(input.available() == 0) { "Trailing end-to-end stream header data" }
         }
     }

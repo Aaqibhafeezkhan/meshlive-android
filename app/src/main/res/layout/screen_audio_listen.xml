@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The listening screen of an audio-only live stream (Design AL): no video area. Title, route, state, a moving
+     level meter, elapsed time, Mute and Stop. Volume is the phone's media volume; the app never changes it.
+     Added over the activity by AudioLiveController while an audio-only stream is joined. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/audioListenRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/app_background"
+    android:clickable="true"
+    android:focusable="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/screen_gutter"
+        android:paddingEnd="@dimen/screen_gutter">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/audioListenBack"
+                style="@style/Widget.App.TopIconButton"
+                android:contentDescription="@string/audio_live_back"
+                android:src="@drawable/ic_arrow_back" />
+
+            <TextView
+                android:id="@+id/audioListenScreenTitle"
+                style="@style/Widget.App.TopBarTitle"
+                android:layout_marginStart="4dp"
+                android:text="@string/audio_live_listen_title" />
+
+            <TextView
+                android:id="@+id/audioListenBadge"
+                style="@style/Widget.App.LiveBadge"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/audioListenTimer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:text="@string/audio_live_timer_zero"
+                android:textAppearance="@style/TextAppearance.App.Label"
+                android:textColor="@color/text_primary"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="vertical">
+
+            <ImageView
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:layout_gravity="center_horizontal"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_radio"
+                app:tint="@color/text_primary" />
+
+            <TextView
+                android:id="@+id/audioListenName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:gravity="center_horizontal"
+                android:maxLines="3"
+                android:ellipsize="end"
+                android:textAppearance="@style/TextAppearance.App.Headline" />
+
+            <TextView
+                android:id="@+id/audioListenRoute"
+                style="@style/Widget.App.StatusLine"
+                android:gravity="center_horizontal"
+                android:textColor="@color/text_secondary" />
+
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/audioListenMeter"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:contentDescription="@string/audio_live_listen_meter_description"
+                android:max="100"
+                app:indicatorColor="@color/white"
+                app:trackColor="@color/surface_raised"
+                app:trackCornerRadius="4dp"
+                app:trackThickness="8dp" />
+
+            <TextView
+                android:id="@+id/audioListenState"
+                style="@style/Widget.App.StatusLine"
+                android:layout_marginTop="8dp"
+                android:gravity="center_horizontal"
+                android:textColor="@color/text_primary" />
+
+            <TextView
+                android:id="@+id/audioListenInfo"
+                style="@style/Widget.App.Description"
+                android:gravity="center_horizontal"
+                android:text="@string/audio_live_listen_info"
+                android:textColor="@color/text_secondary" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="24dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/audioListenMute"
+                    style="@style/Widget.App.RoundControl"
+                    android:contentDescription="@string/audio_live_listen_mute"
+                    app:icon="@drawable/ic_volume_up" />
+
+                <TextView
+                    android:id="@+id/audioListenMuteLabel"
+                    style="@style/Widget.App.RoundControlLabel"
+                    android:text="@string/audio_live_listen_mute" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/audioListenStop"
+                    style="@style/Widget.App.RoundControl"
+                    android:contentDescription="@string/audio_live_listen_stop"
+                    app:backgroundTint="@color/live_red"
+                    app:icon="@drawable/ic_stop"
+                    app:iconTint="@color/white" />
+
+                <TextView
+                    style="@style/Widget.App.RoundControlLabel"
+                    android:text="@string/audio_live_listen_stop" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/audioListenBlock"
+            style="@style/Widget.App.Button.Text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            android:text="@string/audio_live_listen_block"
+            android:visibility="gone" />
+    </LinearLayout>
+</FrameLayout>

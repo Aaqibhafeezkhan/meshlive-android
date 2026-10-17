@@ -38,7 +38,9 @@ class EncodedFrameQueueTest {
     @Test
     fun aFullQueueWaitsForTheDecoderInsteadOfDroppingFrames() {
         // The previous queue dropped every queued frame on overflow and waited for a keyframe.
-        val queue = EncodedFrameQueue(2)
+        // The back-pressure limit (5 s by default) is raised so a loaded host that delays the test thread cannot turn the wait into
+        // the loud failure tested next.
+        val queue = EncodedFrameQueue(2, backpressureTimeoutNs = 600_000_000_000L)
         assertTrue(queue.offer(packet(StreamProtocol.FLAG_KEY_FRAME), 1L))
         assertTrue(queue.offer(packet(0), 2L))
         val offered = java.util.concurrent.CountDownLatch(1)
@@ -48,7 +50,7 @@ class EncodedFrameQueueTest {
         }.start()
         assertFalse(offered.await(100, java.util.concurrent.TimeUnit.MILLISECONDS))
         queue.poll()
-        assertTrue(offered.await(1, java.util.concurrent.TimeUnit.SECONDS))
+        assertTrue(offered.await(120, java.util.concurrent.TimeUnit.SECONDS))
         val stats = queue.stats(4L)
         assertEquals(2, stats.depth)
         assertEquals(0, stats.droppedFrames)

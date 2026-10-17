@@ -12,6 +12,8 @@ import android.os.Looper
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 /**
  * A legacy (BLE 4.x format) advertisement whose low-latency -> balanced step keeps the same
@@ -44,6 +46,13 @@ import java.util.concurrent.TimeUnit
  * start (feature unsupported, internal error, or an exception) gets the set started discoverable again,
  * visibly and logged, so a privacy flag never costs reachability; a refusal that is not an internal error is
  * remembered for the process.
+ *
+ * Device-family batch A (backlog A-01..A-03, entries in [AdvertisingPolicy]): the start never throws into the
+ * caller ([AdvertisingStart]: an oversize payload or an adapter that is off becomes a failure status); a refused
+ * start (TOO_MANY_ADVERTISERS) teaches [AdvertisingBudget], releases a lower-priority title or reach set and
+ * retries once; starts wait for stops still in flight, because the stack frees an instance asynchronously; and a
+ * set that stops without being asked, or stays disabled past the stack's address-rotation window, is restarted by
+ * [AdvertisingWatchdog] with back-off. The stable set always runs with duration 0 and no event limit.
  */
 internal class StableAdvertisingSet(
     private val adapter: BluetoothAdapter,
@@ -60,9 +69,30 @@ internal class StableAdvertisingSet(
     private val onLost: (String) -> Unit,
     /** Decided once per set object (one per epoch while rotating): non-discoverable on API 34+ with the switch on. */
     private val nonDiscoverable: Boolean = false,
+    /**
+     * Connections this phone holds as peripheral right now. Only used to record whether a connectable set could be
+     * (re)started while connected (`adv-while-connected-le-states`); the default reports none.
+     */
+    private val peripheralLinks: () -> Int = { 0 },
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var current: SetCallback? = null
+    private val budget get() = AdvertisingBudget.shared
+    private val watchdog = AdvertisingWatchdog()
+
+    /** Serialises set starts (owner starts and watchdog restarts) so two never race for the same instance. */
+    private val startLock = Any()
+
+    /** The owner asked for the set to stop: nothing restarts it. Reset by [start]. */
+    @Volatile private var ownerStopped = false
+
+    /** Bumped by every owner [start] and [stop]: a recovery that began before the change gives up. */
+    @Volatile private var generation = 0
+
+    /** The last request failed locally (threw) rather than through the stack's callback. */
+    @Volatile private var requestThrew = false
+    private var stuckAnnounced = false
+    private val quiesceHandler = Handler(Looper.getMainLooper())
 
     /** The value the parameters carry now: the decision, unless this process saw a stack refuse it. */
     private fun discoverableOff(): Boolean = nonDiscoverable && !NonDiscoverableAdvertising.rejected && !discoverableFallback
@@ -76,12 +106,17 @@ internal class StableAdvertisingSet(
      */
     @SuppressLint("MissingPermission")
     fun start(lowLatency: Boolean, timeoutSeconds: Long): Int? {
+        ownerStopped = false
+        generation++
         if (!discoverableOff()) return startOnce(lowLatency, timeoutSeconds)
+        requestThrew = false
         val outcome = runCatching { startOnce(lowLatency, timeoutSeconds) }
         val error = outcome.exceptionOrNull()
         if (error is IOException) throw error
         val status = outcome.getOrNull()
-        if (!NonDiscoverableAdvertising.refusedBy(status, error != null)) return outcome.getOrThrow()
+        // A request that threw counts as a refusal of the hidden parameters (as before), except an adapter that is off.
+        val threw = error != null || (requestThrew && status != AdvertisingStart.STATUS_ADAPTER_OFF)
+        if (!NonDiscoverableAdvertising.refusedBy(status, threw)) return outcome.getOrThrow()
         // The stack refused the non-discoverable parameters: this set starts discoverable, and a refusal that is
         // not transient (unsupported feature, an exception) is remembered for the process.
         discoverableFallback = true
@@ -96,8 +131,24 @@ internal class StableAdvertisingSet(
     }
 
     @SuppressLint("MissingPermission")
-    private fun startOnce(lowLatency: Boolean, timeoutSeconds: Long): Int? {
+    private fun startOnce(lowLatency: Boolean, timeoutSeconds: Long): Int? =
+        synchronized(startLock) { startOnceLocked(lowLatency, timeoutSeconds) }
+
+    @SuppressLint("MissingPermission")
+    private fun startOnceLocked(lowLatency: Boolean, timeoutSeconds: Long): Int? {
         val advertiser = adapter.bluetoothLeAdvertiser ?: throw IOException("BLE advertising is unavailable")
+        var status = attempt(advertiser, lowLatency, timeoutSeconds)
+        if (status == AdvertisingSetCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS && AdvertisingPolicy.budgetOn()) {
+            // No instance is free. Make room by releasing a title or reach set, or wait once and ask again (a leaked
+            // or still-releasing instance can come free); then try one more time.
+            if (relieveBudget()) status = attempt(advertiser, lowLatency, timeoutSeconds)
+        }
+        return status
+    }
+
+    /** One start request and its wait. Returns the status, or null on timeout. */
+    @SuppressLint("MissingPermission")
+    private fun attempt(advertiser: android.bluetooth.le.BluetoothLeAdvertiser, lowLatency: Boolean, timeoutSeconds: Long): Int? {
         // The value is fixed for this set's life: the in-place step must pass the same one (a refusal by another set
         // in between must not flip a running set).
         val callback = SetCallback(nonDiscoverable = discoverableOff())
@@ -105,17 +156,101 @@ internal class StableAdvertisingSet(
             stopLocked()
             current = callback
         }
-        advertiser.startAdvertisingSet(parameters(lowLatency, callback.nonDiscoverable), data, scanResponse, null, null, callback)
+        // The stack frees an instance asynchronously after a stop: do not race it (never on the main thread).
+        if (AdvertisingPolicy.stopSettleOn()) budget.awaitPendingStops()
+        val ownedBefore = budget.owned()
+        requestThrew = false
+        EncoderBenchGuard.check("StableAdvertisingSet.start")
+        if (AdvertisingPolicy.budgetOn() && budget.simulatedRefusal()) {
+            // Experimental test_adv_budget_cap: behave like a controller whose instances are all in use.
+            callback.status = AdvertisingSetCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS
+            callback.started.countDown()
+        } else {
+            logPayload(callback)
+            val refused = request(advertiser, callback, lowLatency)
+            if (refused != null) {
+                requestThrew = true
+                callback.status = refused
+                callback.started.countDown()
+            }
+        }
         if (!callback.started.await(timeoutSeconds, TimeUnit.SECONDS)) {
-            stop()
+            stopInternal()
             logChurn("start_timeout", callback)
             return null
         }
         val status = callback.status
         logChurn(if (status == AdvertisingSetCallback.ADVERTISE_SUCCESS) "start" else "start_failed_$status", callback)
-        if (status != AdvertisingSetCallback.ADVERTISE_SUCCESS) stop()
+        if (status == AdvertisingSetCallback.ADVERTISE_SUCCESS) {
+            budget.acquire(callback, AdvertisingSetRole.STABLE)
+        } else {
+            val verdict = budget.noteRefused(AdvertisingSetRole.STABLE, status, ownedBefore, Build.VERSION.SDK_INT)
+            stopInternal()
+            if (verdict.stuck && AdvertisingPolicy.stuckReportOn() && !stuckAnnounced) {
+                stuckAnnounced = true
+                budget.stuck()?.let { onStatus("$label advertising: ${it.message}") }
+            }
+        }
         return status
     }
+
+    /** The platform call: guarded by the non-throwing entry, direct (exceptions propagate) when it is switched off. */
+    @SuppressLint("MissingPermission")
+    private fun request(advertiser: android.bluetooth.le.BluetoothLeAdvertiser, callback: SetCallback, lowLatency: Boolean): Int? {
+        val params = parameters(lowLatency, callback.nonDiscoverable)
+        if (!AdvertisingPolicy.nonThrowingStart()) {
+            advertiser.startAdvertisingSet(params, data, scanResponse, null, null, callback)
+            return null
+        }
+        return AdvertisingStart.request(
+            advertiser, params, data, scanResponse, callback,
+            duration = AdvertisingStart.UNLIMITED_DURATION, maxEvents = AdvertisingStart.UNLIMITED_EVENTS,
+        )
+    }
+
+    /** DEBUG: the platform-formula sizes against the budget of this SDK (ADV-01), so a phone log shows the margin. */
+    private fun logPayload(callback: SetCallback) {
+        if (!BuildConfig.DEBUG) return
+        val primary = AdvertisingPayloadMeter.measure(data)
+        val scan = AdvertisingPayloadMeter.measure(scanResponse)
+        val discoverable = !callback.nonDiscoverable
+        val fits = AdvertisingPayload.fits(primary, connectable, discoverable, Build.VERSION.SDK_INT) &&
+            scan <= AdvertisingPayload.scanResponseBudget()
+        android.util.Log.i(
+            "BluetoothVideo",
+            "BENCHMARK adv_payload: label=$label | " +
+                AdvertisingPayload.describe(primary, scan, connectable, discoverable, Build.VERSION.SDK_INT) +
+                " | sdk=${Build.VERSION.SDK_INT} | connectable=$connectable | fits=$fits",
+        )
+    }
+
+    /**
+     * Frees an instance for this (session-critical) set: stops the lowest-priority title or reach set and waits for
+     * the stack to confirm, else waits once when the app owns nothing (a still-releasing or leaked instance). True
+     * when a retry is worth making.
+     */
+    private fun relieveBudget(): Boolean {
+        if (AdvertisingPolicy.preemptOn()) {
+            val victim = budget.preemptFor(AdvertisingSetRole.STABLE)
+            if (victim != null) {
+                onStatus("$label advertising: no free advertising slot; the ${victim.label} advertisement stopped to make room")
+                budget.awaitPendingStops(PREEMPT_SETTLE_MS)
+                return true
+            }
+        }
+        if (budget.owned() == 0) {
+            if (currentThreadIsMain()) return false
+            return try {
+                Thread.sleep(EMPTY_RETRY_MS)
+                true
+            } catch (_: InterruptedException) {
+                false
+            }
+        }
+        return false
+    }
+
+    private fun currentThreadIsMain(): Boolean = Looper.myLooper() == Looper.getMainLooper()
 
     /**
      * Asks the running set to move to balanced parameters in place. Non-blocking; safe on the main
@@ -132,8 +267,17 @@ internal class StableAdvertisingSet(
         return true
     }
 
+    /** The owner stops the set: nothing restarts it until the owner starts it again. */
     @Synchronized
-    fun stop() = stopLocked()
+    fun stop() {
+        ownerStopped = true
+        generation++
+        stopLocked()
+    }
+
+    /** A stop the set decided on itself (failed start, timeout): the owner's intent is unchanged. */
+    @Synchronized
+    private fun stopInternal() = stopLocked()
 
     @SuppressLint("MissingPermission")
     private fun stopLocked() {
@@ -141,8 +285,36 @@ internal class StableAdvertisingSet(
         current = null
         callback.stopped = true
         handler.removeCallbacksAndMessages(null)
-        runCatching { adapter.bluetoothLeAdvertiser?.stopAdvertisingSet(callback) }
+        val startedSet = callback.set
+        // A started set keeps its instance until the stack confirms the stop; a start that never worked has none.
+        val holdsInstance = startedSet != null && !callback.deadByStack
+        budget.release(callback)
+        if (holdsInstance) budget.noteStopRequested(callback)
+        if (holdsInstance && AdvertisingSwitches.quiesceStop) {
+            quiesceThenStop(callback, startedSet!!)
+        } else {
+            runCatching { adapter.bluetoothLeAdvertiser?.stopAdvertisingSet(callback) }
+        }
         logChurn("stop", callback)
+    }
+
+    /**
+     * Experimental (test_adv_quiesce_stop, ADV-03): disable the set, and stop it when that is confirmed (or after
+     * [QUIESCE_FALLBACK_MS]). The stack's address rotation does nothing for a set that is not enabled, so a removal
+     * cannot meet the rotation's set-random-address command.
+     */
+    @SuppressLint("MissingPermission")
+    private fun quiesceThenStop(callback: SetCallback, startedSet: AdvertisingSet) {
+        val done = AtomicBoolean(false)
+        val stopNow = Runnable {
+            if (done.compareAndSet(false, true)) {
+                quiesceHandler.removeCallbacksAndMessages(callback)
+                runCatching { adapter.bluetoothLeAdvertiser?.stopAdvertisingSet(callback) }
+            }
+        }
+        callback.quiesced = stopNow
+        quiesceHandler.postDelayed(stopNow, callback, QUIESCE_FALLBACK_MS)
+        if (runCatching { startedSet.enableAdvertising(false, 0, 0) }.isFailure) stopNow.run()
     }
 
     /**
@@ -175,9 +347,34 @@ internal class StableAdvertisingSet(
         current = replacement
         // Bounded: no start callback within the timeout counts as a failed replacement.
         handler.postDelayed({ onReplacementResult(replacement, null) }, REPLACEMENT_TIMEOUT_MS)
-        runCatching {
-            advertiser.startAdvertisingSet(parameters(false, replacement.nonDiscoverable), data, scanResponse, null, null, replacement)
-        }.onFailure { onReplacementResult(replacement, START_THREW) }
+        EncoderBenchGuard.check("StableAdvertisingSet.replace")
+        // This runs on the main thread: it must not block for the stop to be confirmed, so it polls on the handler.
+        whenStopsSettled(android.os.SystemClock.elapsedRealtime() + AdvertisingBudget.SETTLE_MAX_MS) {
+            if (current === replacement && !replacement.stopped) {
+                val refused = if (AdvertisingPolicy.nonThrowingStart()) {
+                    AdvertisingStart.request(
+                        advertiser, parameters(false, replacement.nonDiscoverable), data, scanResponse, replacement,
+                        duration = AdvertisingStart.UNLIMITED_DURATION, maxEvents = AdvertisingStart.UNLIMITED_EVENTS,
+                    )
+                } else {
+                    runCatching {
+                        advertiser.startAdvertisingSet(parameters(false, replacement.nonDiscoverable), data, scanResponse, null, null, replacement)
+                    }.exceptionOrNull()?.let { START_THREW }
+                }
+                if (refused != null) onReplacementResult(replacement, refused)
+            }
+        }
+    }
+
+    /** Runs [action] once no requested stop is outstanding, or at [deadlineMs]; polls on the main handler. */
+    private fun whenStopsSettled(deadlineMs: Long, action: () -> Unit) {
+        val waiting = AdvertisingPolicy.stopSettleOn() && budget.pendingStopCount() > 0 &&
+            android.os.SystemClock.elapsedRealtime() < deadlineMs
+        if (!waiting) {
+            action()
+            return
+        }
+        handler.postDelayed({ whenStopsSettled(deadlineMs, action) }, AdvertisingBudget.SETTLE_POLL_MS)
     }
 
     /** Settles a fallback replacement once: success keeps it; any failure stops it and reports [onLost]. */
@@ -187,8 +384,12 @@ internal class StableAdvertisingSet(
         replacement.settled = true
         val failure = replacementFailure(status)
         if (failure == null) {
+            budget.acquire(replacement, AdvertisingSetRole.STABLE)
             onStatus("$label advertising restarted in balanced mode (new set)")
             return
+        }
+        if (status == AdvertisingSetCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS) {
+            budget.noteRefused(AdvertisingSetRole.STABLE, status, budget.owned(), Build.VERSION.SDK_INT)
         }
         stopLocked()
         lost(failure)
@@ -197,6 +398,77 @@ internal class StableAdvertisingSet(
     private fun lost(reason: String) {
         onStatus("$label is not advertising: $reason")
         handler.post { onLost(reason) }
+    }
+
+    // ----- watchdog (A-03) -----
+
+    /** Acts on a watchdog decision about [failed]. Main thread (callbacks) or the grace timer. */
+    private fun applyDecision(failed: SetCallback, decision: AdvertisingWatchdog.Decision, signal: String) {
+        if (failed.stopped) return
+        val at = generation
+        when (decision) {
+            AdvertisingWatchdog.Decision.None -> Unit
+            is AdvertisingWatchdog.Decision.WaitGrace -> handler.postDelayed({
+                if (!failed.stopped && current === failed) applyDecision(failed, watchdog.onGraceElapsed(), signal)
+            }, decision.ms)
+            is AdvertisingWatchdog.Decision.Restart -> {
+                logWatchdog("restart_planned", "signal=$signal | reason=${decision.reason} | delayMs=${decision.delayMs} | enabled=${AdvertisingPolicy.watchdogOn()}")
+                if (AdvertisingPolicy.watchdogOn() && !ownerStopped) {
+                    onStatus("$label advertising stopped unexpectedly ($signal); restarting")
+                    thread(name = "AdvertisingWatchdog", isDaemon = true) { recover(at, decision) }
+                }
+            }
+            is AdvertisingWatchdog.Decision.GiveUp -> {
+                logWatchdog("give_up", "signal=$signal | reason=${decision.reason}")
+                if (AdvertisingPolicy.watchdogOn() && !ownerStopped) {
+                    lost("advertising stopped unexpectedly and could not be restarted (${decision.reason})")
+                }
+            }
+        }
+    }
+
+    /** Worker thread: waits out the back-off, restarts as a new balanced set, repeats per the watchdog's decisions. */
+    private fun recover(generationAtLoss: Int, first: AdvertisingWatchdog.Decision.Restart) {
+        var decision: AdvertisingWatchdog.Decision = first
+        while (true) {
+            val restart = when (val next = decision) {
+                is AdvertisingWatchdog.Decision.Restart -> next
+                is AdvertisingWatchdog.Decision.GiveUp -> {
+                    logWatchdog("give_up", "reason=${next.reason}")
+                    if (generation == generationAtLoss && !ownerStopped) lost("advertising could not be restarted (${next.reason})")
+                    return
+                }
+                else -> return
+            }
+            try {
+                Thread.sleep(restart.delayMs)
+            } catch (_: InterruptedException) {
+                return
+            }
+            val links = peripheralLinks()
+            val status = synchronized(startLock) {
+                if (generation != generationAtLoss || ownerStopped) return
+                runCatching { startOnceLocked(lowLatency = false, RESTART_TIMEOUT_SECONDS) }.getOrNull()
+            }
+            logWatchdog("restart_result", "status=${status ?: "timeout"} | links=$links | reason=${restart.reason}")
+            if (links > 0) budget.noteConnectedAdvertising(status == AdvertisingSetCallback.ADVERTISE_SUCCESS)
+            if (status == AdvertisingSetCallback.ADVERTISE_SUCCESS) {
+                if (ownerStopped || generation != generationAtLoss) {
+                    stopInternal()
+                } else {
+                    onStatus("$label advertising restarted by the watchdog (new set)")
+                }
+                return
+            }
+            decision = watchdog.onRestartFailed()
+        }
+    }
+
+    private fun logWatchdog(event: String, detail: String) {
+        android.util.Log.i(
+            "BluetoothVideo",
+            (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "adv_watchdog: label=$label | event=$event | $detail",
+        )
     }
 
     private fun parameters(lowLatency: Boolean, hidden: Boolean): AdvertisingSetParameters =
@@ -227,11 +499,22 @@ internal class StableAdvertisingSet(
         var settled = false
         val steps = BalancedSwitchSteps()
 
+        /** The stack reported this set stopped (or gone): its instance is free, there is nothing left to stop. */
+        @Volatile var deadByStack = false
+
+        /** The stack confirmed the set started successfully (the watchdog only watches such a set). */
+        @Volatile var startedOk = false
+
+        /** Experimental quiesce-then-stop: runs the real stop once the disable is confirmed. */
+        @Volatile var quiesced: Runnable? = null
+
         @SuppressLint("MissingPermission")
         override fun onAdvertisingSetStarted(advertisingSet: AdvertisingSet?, txPower: Int, status: Int) {
             set = advertisingSet
             this.status = status
+            startedOk = status == ADVERTISE_SUCCESS
             if (stopped && status == ADVERTISE_SUCCESS) {
+                budget.noteStopRequested(this)
                 runCatching { adapter.bluetoothLeAdvertiser?.stopAdvertisingSet(this) }
             }
             started.countDown()
@@ -240,10 +523,33 @@ internal class StableAdvertisingSet(
 
         @SuppressLint("MissingPermission")
         override fun onAdvertisingEnabled(advertisingSet: AdvertisingSet?, enable: Boolean, status: Int) {
+            if (!enable) quiesced?.run()
             if (stopped) return
             val success = status == ADVERTISE_SUCCESS && advertisingSet != null
+            val stepBefore = steps.step
             act(steps.onEnabled(enable, success), advertisingSet, "enable($enable) status $status")
             if (success && enable) logChurn("balanced_in_place", this)
+            watch(enable, success, status, stepBefore)
+        }
+
+        /**
+         * Watchdog input (A-03): a disable nobody asked for starts a grace period (the stack's own address rotation
+         * disables and re-enables a connectable set within milliseconds); an enable that failed, or the stack's
+         * report that the set is gone, asks for a restart. Our own in-place balanced step is not watched.
+         */
+        private fun watch(enable: Boolean, success: Boolean, status: Int, stepBefore: BalancedSwitchSteps.Step) {
+            if (!startedOk) return
+            if (enable && success) {
+                watchdog.onEnabled()?.let { gap -> logWatchdog("enable_gap", "ms=$gap | note=address_rotation_or_reenable") }
+                return
+            }
+            val ownStep = stepBefore != BalancedSwitchSteps.Step.IDLE && stepBefore != BalancedSwitchSteps.Step.DONE
+            if (ownStep) return
+            if (!enable && success) {
+                applyDecision(this, watchdog.onUnexpectedDisable(), "disabled")
+            } else if (enable) {
+                applyDecision(this, watchdog.onUnexpectedStop(), "enable_failed_$status")
+            }
         }
 
         @SuppressLint("MissingPermission")
@@ -253,7 +559,13 @@ internal class StableAdvertisingSet(
             act(steps.onParametersUpdated(success), advertisingSet, "parameters status $status")
         }
 
-        override fun onAdvertisingSetStopped(advertisingSet: AdvertisingSet?) = Unit
+        override fun onAdvertisingSetStopped(advertisingSet: AdvertisingSet?) {
+            deadByStack = true
+            budget.noteStopped(this)
+            if (stopped || !startedOk) return
+            // The stack dropped a set MeshLive did not stop: the advertisement is gone.
+            applyDecision(this, watchdog.onUnexpectedStop(), "set_stopped")
+        }
 
         fun onStepTimeout() {
             if (!stopped) act(steps.onTimeout(), set, "timeout")
@@ -280,7 +592,19 @@ internal class StableAdvertisingSet(
         const val REPLACEMENT_TIMEOUT_MS = 8_000L
 
         /** Pseudo status: startAdvertisingSet itself threw. */
-        const val START_THREW = -2
+        const val START_THREW = AdvertisingStart.STATUS_THREW
+
+        /** After making room for the stable set, wait at most this for the stack to confirm the stop. */
+        private const val PREEMPT_SETTLE_MS = 1_000L
+
+        /** Nothing owned and TOO_MANY: wait this once before asking again (an instance may still be releasing). */
+        private const val EMPTY_RETRY_MS = 1_500L
+
+        /** A watchdog restart must report started within this. */
+        private const val RESTART_TIMEOUT_SECONDS = 8L
+
+        /** Quiesce-then-stop: stop anyway if the disable is not confirmed by then. */
+        private const val QUIESCE_FALLBACK_MS = 500L
 
         /** Why a fallback replacement left nothing advertising, or null when it started (null status: timed out). */
         fun replacementFailure(status: Int?): String? = when (status) {

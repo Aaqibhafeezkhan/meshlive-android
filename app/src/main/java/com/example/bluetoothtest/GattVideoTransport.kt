@@ -19,6 +19,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.ParcelUuid
 import android.util.Log
 import java.io.Closeable
@@ -42,6 +43,10 @@ class GattVideoConnection(
     val phySummary: () -> String,
     val receiveQueueState: () -> Pair<Int, Int>,
     val requestConnectionPriority: (BleConnectionPriority) -> Boolean = { false },
+    /** GATT status of the link's disconnect callback, -1 while no disconnect was reported (see [StreamPhyLoss]). */
+    val disconnectStatus: () -> Int = { -1 },
+    /** Asks the link for [BlePhyPreference] now (used when the setup deferred the PHY request, `test_phy_after_auth`). */
+    val requestPhy: (BlePhyPreference) -> Boolean = { false },
     private val closeAction: () -> Unit,
 ) : Closeable {
     private val closed = AtomicBoolean(false)
@@ -56,6 +61,11 @@ class GattVideoConnection(
 
 internal class GattBytePipe(
     capacity: Int = PIPE_CHUNKS,
+    /**
+     * Unread bytes the pipe holds before it overflows. The queue is bounded by bytes first: a chunk is one GATT value, and a
+     * backlog of small audio records (about 80 B each) used to hit the old 512-chunk bound after only 40 KB.
+     */
+    private val maxQueuedBytes: Int = MAX_QUEUED_BYTES,
     private val onFailure: (String) -> Unit,
 ) : InputStream() {
     private data class Chunk(val bytes: ByteArray, val start: Int, val end: Int)
@@ -70,14 +80,23 @@ internal class GattBytePipe(
     private val recentPacketSequences = LinkedHashSet<Int>()
     private val pendingPackets = TreeMap<Int, ByteArray>()
 
+    @Volatile private var lastInboundNs = 0L
+
+    /** True when data arrived from the peer within [windowMs] (any record, so a quiet peer's heartbeats count). */
+    fun heardWithin(windowMs: Long): Boolean {
+        val last = lastInboundNs
+        return last != 0L && System.nanoTime() - last <= windowMs * 1_000_000L
+    }
+
     fun offer(bytes: ByteArray): Boolean = offer(bytes, 0, bytes.size)
 
     fun offer(bytes: ByteArray, start: Int, length: Int): Boolean {
         require(start >= 0 && length >= 0 && start + length <= bytes.size)
         if (closed.get() || length == 0) return false
+        lastInboundNs = System.nanoTime()
         val ownedBytes = bytes.copyOfRange(start, start + length)
-        queuedBytes.addAndGet(ownedBytes.size)
-        if (!chunks.offer(Chunk(ownedBytes, 0, ownedBytes.size))) {
+        val queuedNow = queuedBytes.addAndGet(ownedBytes.size)
+        if (queuedNow > maxQueuedBytes || !chunks.offer(Chunk(ownedBytes, 0, ownedBytes.size))) {
             queuedBytes.addAndGet(-ownedBytes.size)
             onFailure("input queue overflowed")
             close()
@@ -89,6 +108,7 @@ internal class GattBytePipe(
     @Synchronized
     fun offerPacket(packet: ByteArray): Boolean {
         if (closed.get()) return false
+        lastInboundNs = System.nanoTime()
         if (packet.size < GATT_CHUNK_HEADER_BYTES || packet[0] != TYPE_DATA) {
             onFailure("received an invalid chunk header")
             close()
@@ -168,7 +188,10 @@ internal class GattBytePipe(
     }
 
     private companion object {
-        const val PIPE_CHUNKS = 512
+        const val PIPE_CHUNKS = 4_096
+
+        /** About 16 s of a 500 kbps stream, or 1 MiB of small records: far above a healthy reader's backlog. */
+        const val MAX_QUEUED_BYTES = 1_048_576
         const val RECENT_PACKET_HISTORY = 4_096
         const val MAX_REORDERED_PACKETS = 4_096
         const val MAX_REORDERED_PACKET_DISTANCE = 4_096
@@ -181,6 +204,12 @@ internal abstract class ChunkedGattOutputStream : OutputStream() {
     protected abstract fun sendPacket(value: ByteArray)
     private var nextPacketSequence = 0
 
+    /**
+     * SDK whose LE ACL segment miscount the packet sizes must avoid (Experimental `test_gatt_payload`, SDK 31-32), or 0
+     * for no guard. See [gattMiscountSafeValueBytes].
+     */
+    protected open val miscountGuardSdk: Int = 0
+
     @Synchronized
     override fun write(value: Int) = write(byteArrayOf(value.toByte()))
 
@@ -190,7 +219,11 @@ internal abstract class ChunkedGattOutputStream : OutputStream() {
         var sourceOffset = offset
         var remaining = length
         while (remaining > 0) {
-            val count = minOf(remaining, payloadBytes)
+            val wanted = minOf(remaining, payloadBytes)
+            val count = if (miscountGuardSdk == 0) wanted else {
+                (gattMiscountSafeValueBytes(wanted + GATT_CHUNK_HEADER_BYTES, miscountGuardSdk) - GATT_CHUNK_HEADER_BYTES)
+                    .coerceIn(1, wanted)
+            }
             val packet = ByteArray(count + GATT_CHUNK_HEADER_BYTES)
             packet[0] = TYPE_DATA
             encodeChunkSequence(nextPacketSequence, packet)
@@ -220,8 +253,16 @@ private class GattClientOutputStream(
     mtu: Int,
     private val acknowledgedWrites: Boolean,
     onWriteTiming: ((String) -> Unit)?,
+    private val peerAddress: String? = null,
+    /** Called once when a busy answer with nothing in flight shows the client is wedged (see [BusyWedgeCheck]). */
+    private val onWedged: (String) -> Unit = {},
 ) : ChunkedGattOutputStream() {
-    override val payloadBytes = gattChunkPayloadBytes(mtu, DebugTunables.experimentalAlignedGattWrites)
+    override val payloadBytes = gattChunkPayloadBytes(mtu, DebugTunables.experimentalAlignedGattWrites, GattSwitches.payload)
+    override val miscountGuardSdk: Int =
+        if (GattSwitches.payload != GattSwitches.Payload.DEFAULT) Build.VERSION.SDK_INT else 0
+    /** Writes the stack accepted whose callback has not arrived: this client's own share of the write permit. */
+    private val inFlight = AtomicInteger()
+    private val byteWindow = GattByteWindow.fromSwitches()
     @Volatile private var writeLatch: CountDownLatch? = null
     @Volatile private var writeStatus = BluetoothGatt.GATT_FAILURE
     private val closed = AtomicBoolean(false)
@@ -230,6 +271,7 @@ private class GattClientOutputStream(
     @Volatile private var writeCallbackAtNs = 0L
 
     fun onWrite(status: Int) {
+        inFlight.decrementAndGet()
         if (writeTiming != null) writeCallbackAtNs = System.nanoTime()
         writeStatus = status
         writeLatch?.countDown()
@@ -257,6 +299,7 @@ private class GattClientOutputStream(
     @SuppressLint("MissingPermission")
     private fun writeOnce(value: ByteArray, writeType: Int): Int {
         paceWrite(value.size)
+        byteWindow?.acquire(value.size)
         val latch = CountDownLatch(1)
         writeLatch = latch
         writeStatus = BluetoothGatt.GATT_FAILURE
@@ -271,7 +314,16 @@ private class GattClientOutputStream(
             } else {
                 characteristic.writeType = writeType
                 characteristic.value = value
-                gatt.writeCharacteristic(characteristic)
+                gatt.writeCharacteristic(characteristic).also { accepted ->
+                    if (accepted) {
+                        inFlight.incrementAndGet()
+                    } else if (wedgeCheck?.wedged() == true) {
+                        // Before API 33 a refused write is a bare false; with nothing in flight and no other local holder
+                        // the client's busy flag is stuck (aosp-bt-versions GATT-02). The link ends either way.
+                        onWedged("false-return inFlight=${inFlight.get()} otherHolders=${otherLocalClients()}")
+                        throw IOException(GATT_CLIENT_WEDGED_MESSAGE)
+                    }
+                }
             }
             if (timing != null) apiReturnedNs = System.nanoTime()
             if (!queued) {
@@ -283,6 +335,7 @@ private class GattClientOutputStream(
                 throw IOException("GATT video write timed out")
             }
             writeLatch = null
+            byteWindow?.onSent(value.size)
             outcome = if (writeStatus == BluetoothGatt.GATT_SUCCESS) "success" else "status=$writeStatus"
             return writeStatus
         } finally {
@@ -306,13 +359,36 @@ private class GattClientOutputStream(
             sleepMs = { ms -> Thread.sleep(ms) },
             nowNs = System::nanoTime,
             closed = closed::get,
+            wedge = wedgeCheck,
         )
         if (outcome.retries > 0) Log.i("BluetoothVideo", "GATT write busy: retries=${outcome.retries} | result=${outcome.result}")
+        if (outcome.wedged) {
+            onWedged("busy=${outcome.result} inFlight=${inFlight.get()} otherHolders=${otherLocalClients()}")
+            throw IOException(GATT_CLIENT_WEDGED_MESSAGE)
+        }
+        if (outcome.result == BluetoothStatusCodes.SUCCESS) inFlight.incrementAndGet()
         return outcome.result
     }
 
+    private fun otherLocalClients(): Int = (GattResourceRegistry.shared.liveClientsFor(peerAddress) - 1).coerceAtLeast(0)
+
+    /**
+     * The registry step (the pre-batch 2 ms), or 25 ms in the Experimental `test_gatt_busy_wedge=recover` arm. The
+     * framework already retried 5 x 10 ms inside the call, so the faster loop only adds binder load.
+     */
     private val busyRetry: GattWriteBusyRetry? =
         runCatching { BluetoothTransportPolicy.writeBusyRetry() }.getOrNull()
+            ?.let { if (GattSwitches.busyWedgeRecovery) it.copy(stepMs = GattWriteBusyPolicy.STEP_MS) else it }
+
+    /** Wedge classification: registry entry android13-14-gatt-client-wedged-after-busy (SDK 33-34) and the switch. */
+    private val wedgeCheck: BusyWedgeCheck? =
+        if (!GattSwitches.busyWedgeRecovery) null
+        else runCatching { GattLinkPolicy.wedgeRecovery() }.getOrNull()?.let {
+            BusyWedgeCheck(
+                ownOutstanding = { inFlight.get() > 0 },
+                otherLocalHolder = { otherLocalClients() > 0 },
+            )
+        }
 
     private fun paceWrite(packetBytes: Int) {
         if (!acknowledgedWrites) return
@@ -352,9 +428,23 @@ private class GattClientOutputStream(
  * about 170 payload bytes per LL PDU, +12% airtime efficiency at 2M, up to +44% where a controller
  * caps PDUs per connection event. Links without data length extension (27-octet PDUs) are unaffected.
  */
-internal fun gattValueBytes(mtu: Int, alignToLePdus: Boolean): Int {
+internal fun gattValueBytes(
+    mtu: Int,
+    alignToLePdus: Boolean,
+    payload: GattSwitches.Payload = GattSwitches.Payload.DEFAULT,
+): Int {
     val maxValue = (mtu - ATT_OVERHEAD).coerceIn(1, MAX_ATTRIBUTE_BYTES)
-    if (!alignToLePdus) return maxValue
+    // Experimental `test_gatt_payload` (G-09): 244 = one full 251-octet LE data PDU, 495 = two; never above the MTU's value.
+    when (payload) {
+        GattSwitches.Payload.ONE_PDU ->
+            return minOf(maxValue, LE_MAX_DATA_PDU_OCTETS - ATT_OVERHEAD - L2CAP_BASIC_HEADER_BYTES)
+        GattSwitches.Payload.TWO_PDUS ->
+            if (maxValue >= 2 * LE_MAX_DATA_PDU_OCTETS - ATT_OVERHEAD - L2CAP_BASIC_HEADER_BYTES) {
+                return 2 * LE_MAX_DATA_PDU_OCTETS - ATT_OVERHEAD - L2CAP_BASIC_HEADER_BYTES
+            }
+        GattSwitches.Payload.DEFAULT -> Unit
+    }
+    if (!alignToLePdus && payload == GattSwitches.Payload.DEFAULT) return maxValue
     val wholePdus = (maxValue + ATT_OVERHEAD + L2CAP_BASIC_HEADER_BYTES) / LE_MAX_DATA_PDU_OCTETS
     return if (wholePdus >= 1) {
         wholePdus * LE_MAX_DATA_PDU_OCTETS - ATT_OVERHEAD - L2CAP_BASIC_HEADER_BYTES
@@ -364,8 +454,31 @@ internal fun gattValueBytes(mtu: Int, alignToLePdus: Boolean): Int {
 }
 
 /** App payload bytes per GATT packet after the 5-byte chunk header. */
-internal fun gattChunkPayloadBytes(mtu: Int, alignToLePdus: Boolean): Int =
-    (gattValueBytes(mtu, alignToLePdus) - GATT_CHUNK_HEADER_BYTES).coerceAtLeast(1)
+internal fun gattChunkPayloadBytes(
+    mtu: Int,
+    alignToLePdus: Boolean,
+    payload: GattSwitches.Payload = GattSwitches.Payload.DEFAULT,
+): Int = (gattValueBytes(mtu, alignToLePdus, payload) - GATT_CHUNK_HEADER_BYTES).coerceAtLeast(1)
+
+/**
+ * Android 12 (SDK 31-32) counts the LE ACL segments of an L2CAP PDU from the buffer size including the 4-byte HCI
+ * header instead of the data size (AOSP ab2c1e84fc; android12 l2c_link.cc:1097-1135), so a PDU just over a multiple of
+ * the LE data buffer is counted one segment short and the host's controller-credit accounting drifts. Counting by D + 4 instead of D
+ * undercounts a PDU of length n whenever k*D < n <= k*(D+4) (252-255, then 503-510 octets for D = 251). An ATT value whose
+ * L2CAP PDU (value + 3 + 4) lands in such a window is shortened to k*D; the rest goes in the next packet. Other SDKs and
+ * the default sizes are untouched (Experimental `test_gatt_payload`).
+ */
+internal fun gattMiscountSafeValueBytes(valueBytes: Int, sdk: Int, dataPduOctets: Int = LE_MAX_DATA_PDU_OCTETS): Int {
+    if (sdk !in 31..32 || valueBytes <= 0) return valueBytes
+    val pdu = valueBytes + ATT_OVERHEAD + L2CAP_BASIC_HEADER_BYTES
+    if (pdu <= dataPduOctets) return valueBytes
+    val k = (pdu - 1) / dataPduOctets // pdu in (k*D, (k+1)*D]
+    return if (pdu <= k * (dataPduOctets + HCI_DATA_PREAMBLE_OCTETS)) {
+        (k * dataPduOctets - ATT_OVERHEAD - L2CAP_BASIC_HEADER_BYTES).coerceAtLeast(1)
+    } else {
+        valueBytes
+    }
+}
 
 internal fun gattWriteFallbackType(acknowledgedWrites: Boolean, status: Int): Int? =
     BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE.takeIf {
@@ -384,7 +497,10 @@ private class GattServerOutputStream(
     private val characteristic: BluetoothGattCharacteristic,
     mtu: Int,
 ) : ChunkedGattOutputStream() {
-    override val payloadBytes = gattChunkPayloadBytes(mtu, DebugTunables.experimentalAlignedGattWrites)
+    override val payloadBytes = gattChunkPayloadBytes(mtu, DebugTunables.experimentalAlignedGattWrites, GattSwitches.payload)
+    override val miscountGuardSdk: Int =
+        if (GattSwitches.payload != GattSwitches.Payload.DEFAULT) Build.VERSION.SDK_INT else 0
+    private val byteWindow = GattByteWindow.fromSwitches()
     @Volatile private var notifyLatch: CountDownLatch? = null
     @Volatile private var notifyStatus = BluetoothGatt.GATT_FAILURE
     private val closed = AtomicBoolean(false)
@@ -398,6 +514,7 @@ private class GattServerOutputStream(
     @SuppressLint("MissingPermission")
     override fun sendPacket(value: ByteArray) {
         if (closed.get()) throw IOException("GATT output is closed")
+        byteWindow?.acquire(value.size)
         val latch = CountDownLatch(1)
         notifyLatch = latch
         notifyStatus = BluetoothGatt.GATT_FAILURE
@@ -411,6 +528,7 @@ private class GattServerOutputStream(
         if (!queued) throw IOException("GATT notification queue rejected a packet")
         if (!latch.await(IO_TIMEOUT_SECONDS, TimeUnit.SECONDS)) throw IOException("GATT notification timed out")
         notifyLatch = null
+        byteWindow?.onSent(value.size)
         if (notifyStatus != BluetoothGatt.GATT_SUCCESS) {
             throw IOException("GATT notification failed (status $notifyStatus)")
         }
@@ -432,12 +550,31 @@ object GattVideoClient {
         acknowledgedWrites: Boolean = false,
         onWriteTiming: ((String) -> Unit)? = null,
         deferConnectionPriority: Boolean = false,
+        /** Relay child connect only: Experimental RelayEstablishBudget (test_relay_establish_budget). */
+        establishBudget: Boolean = false,
+        /** Experimental `test_phy_after_auth`: no PHY request at setup; the caller asks through [GattVideoConnection.requestPhy]. */
+        deferPhy: Boolean = false,
+        /** Experimental `test_phy_move_skip_backlog`: runs after this link moved itself from 2M to 1M (stream sender only). */
+        onPhyMove: () -> Unit = {},
     ): GattVideoConnection {
         var attempt = 1
         var extendedRetries = 0
+        var linkReached = false
+        val startedMs = SystemClock.elapsedRealtime()
+        val budget = if (establishBudget) RelayEstablishBudget(startedMs) else null
         while (true) {
+            // Break-before-make: a wedged client's peer (always) or a recent close (test_gatt_acl_wait) waits for the ACL.
+            awaitPreviousAcl(context, device)
+            // One BluetoothGatt per remote and no crossed connections (GATT-07/09: stack bugs fixed only in 15 QPR1+).
+            GattResourceRegistry.shared.dialWarnings(device.address).takeIf { it.isNotEmpty() }?.let { warnings ->
+                Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK gatt_dial_check: peer=...${device.address.takeLast(5)} | warnings=${warnings.joinToString(",")} | sdk=${Build.VERSION.SDK_INT}",
+                )
+            }
+            val attemptStartedMs = SystemClock.elapsedRealtime()
             try {
-                return openOnce(
+                val connection = openOnce(
                     context,
                     device,
                     phyPreference,
@@ -446,8 +583,54 @@ object GattVideoClient {
                     acknowledgedWrites,
                     onWriteTiming,
                     deferConnectionPriority,
+                    deferPhy,
+                    onPhyMove,
                 )
+                if (budget != null) {
+                    val nowMs = SystemClock.elapsedRealtime()
+                    Log.i(
+                        "BluetoothVideo",
+                        RelayEstablishBudget.logLine("gatt", attempt, nowMs - attemptStartedMs, null, null, nowMs - startedMs),
+                    )
+                }
+                PoolExhaustionPolicy.shared.onConnectSuccess()
+                GattPoolBackoff.recordSuccess(PoolSource.CLIENT)
+                return connection
             } catch (error: IOException) {
+                if (error is LinkReachedSetupFailure) linkReached = true
+                leSetupStatus(error.message)?.let { failedStatus ->
+                    val elapsedMs = SystemClock.elapsedRealtime() - attemptStartedMs
+                    val durationClass = ConnectDurationClass.classify(failedStatus, elapsedMs, TimeUnit.SECONDS.toMillis(CONNECTION_TIMEOUT_SECONDS))
+                    Log.i(
+                        "BluetoothVideo",
+                        "BENCHMARK gatt_connect_failure_class: peer=...${device.address.takeLast(5)} | status=$failedStatus | " +
+                            "elapsedMs=$elapsedMs | class=${durationClass.label} | sdk=${Build.VERSION.SDK_INT}",
+                    )
+                }
+                // A refused registration opens one backoff step (one log line); automatic callers consult the hold.
+                GattPoolBackoff.noteConnectFailure(error.message, "gatt-video-client")
+                if (poolFailureRetry(device, error.message, attempt, onStatus)) {
+                    attempt += 1
+                    Thread.sleep(GATT_OPEN_RETRY_DELAY_MS)
+                    continue
+                }
+                if (budget != null) {
+                    val nowMs = SystemClock.elapsedRealtime()
+                    val durationMs = nowMs - attemptStartedMs
+                    val decision = budget.onFailure(error.message, durationMs, nowMs)
+                    Log.i(
+                        "BluetoothVideo",
+                        RelayEstablishBudget.logLine("gatt", attempt, durationMs, error.message, decision, nowMs - startedMs),
+                    )
+                    if (decision.kind != RelayEstablishBudget.Kind.OTHER) {
+                        val delayMs = decision.retryAfterMs
+                            ?: throw EstablishmentBudgetExhausted(error.message, decision.attempt, decision.elapsedMs, error)
+                        attempt += 1
+                        onStatus(leSetupRetryNotice("GATT video", error.message, "retrying in place"))
+                        Thread.sleep(delayMs)
+                        continue
+                    }
+                }
                 val retryable = runCatching { BluetoothTransportPolicy.retryableConnectStatuses() }
                     .getOrDefault(setOf(BluetoothTransportPolicy.GATT_ERROR_133))
                 val allowed = leSetupRetryAllowed(
@@ -459,13 +642,76 @@ object GattVideoClient {
                     nextAttemptMs = GATT_OPEN_RETRY_DELAY_MS + TimeUnit.SECONDS.toMillis(CONNECTION_TIMEOUT_SECONDS),
                     remainingBudgetMs = LeSetupBudget.remainingMs(),
                 )
-                if (!allowed) throw error
+                if (!allowed) throw carryLinkReached(error, linkReached)
                 if (leSetupStatus(error.message)?.let { it != BluetoothTransportPolicy.GATT_ERROR_133 } == true) extendedRetries++
                 attempt += 1
                 onStatus(leSetupRetryNotice("GATT video", error.message, "retrying once"))
                 Thread.sleep(GATT_OPEN_RETRY_DELAY_MS)
             }
         }
+    }
+
+    /**
+     * Break-before-make (G-04a): waits (bounded 2 s, off the main thread) for the previous ACL to this peer to go down,
+     * when a wedged client or a recent close asks for it. Nothing to wait for costs nothing.
+     */
+    @SuppressLint("MissingPermission")
+    private fun awaitPreviousAcl(context: Context, device: BluetoothDevice) {
+        val reason = GattLinkLifetime.redialWaitReason(device.address) ?: return
+        val manager = runCatching { context.applicationContext.getSystemService(BluetoothManager::class.java) }.getOrNull()
+        GattLinkLifetime.awaitAclDown(
+            watch = GattLinkLifetime.watchAclDown(context, device),
+            mayBlock = Looper.myLooper() != Looper.getMainLooper(),
+            stillUp = { GattLinkLifetime.isGattConnected(manager, device.address) },
+            reason = reason,
+        )
+    }
+
+    /**
+     * Classifies a connect failure that names a pool (257: registration pool, 128: client pool) and feeds the
+     * consecutive-failure streak. Returns true when one retry is justified because idle clients of this app were closed
+     * (G-02); otherwise the failure is surfaced by the caller. Registry entry gatt-registration-pool-exhaustion.
+     */
+    private fun poolFailureRetry(device: BluetoothDevice, message: String?, attempt: Int, onStatus: (String) -> Unit): Boolean {
+        if (runCatching { GattLinkPolicy.poolGuard() }.getOrNull() == null) return false
+        val status = leSetupStatus(message) ?: return false
+        val registry = GattResourceRegistry.shared
+        val policy = PoolExhaustionPolicy.shared
+        val verdict = if (isRetryableLeSetupStatus(message, POOL_STATUSES, GATT_VIDEO_CONNECTION_FAILURES)) {
+            GattResourceRegistry.classifyStatus(status)
+        } else {
+            PoolVerdict.NONE
+        }
+        val action = policy.onConnectFailure(
+            status = if (verdict == PoolVerdict.NONE) -1 else status,
+            peer = device.address,
+            peerInRange = true,
+            ownIdleClients = registry.idleClosable(IDLE_CLIENT_AGE_MS),
+        )
+        if (verdict != PoolVerdict.NONE) {
+            Log.i("BluetoothVideo", registry.line("pool_failure") + " | verdict=${verdict.label} | status=$status | action=$action")
+        }
+        if (policy.restartGuidanceDue()) {
+            Log.i("BluetoothVideo", "BENCHMARK gatt_restart_guidance: ${PoolExhaustionPolicy.GUIDANCE}")
+        }
+        if (action != PoolExhaustionPolicy.Action.RETRY_AFTER_CLOSING_IDLE || attempt >= GATT_OPEN_ATTEMPTS) return false
+        val closedCount = registry.closeIdle(IDLE_CLIENT_AGE_MS)
+        Log.i("BluetoothVideo", "GATT pool exhausted: closed $closedCount idle client(s) of this app before one retry")
+        if (closedCount > 0) onStatus("GATT video: ${verdict.label}; retrying once after closing idle clients")
+        return closedCount > 0
+    }
+
+    /** A write came back busy with nothing in flight: end this client, the next connect to the peer waits for the ACL. */
+    @SuppressLint("MissingPermission")
+    private fun onClientWedged(gatt: BluetoothGatt, reason: String) {
+        val address = gatt.device?.address
+        GattLinkLifetime.requireAclDrop(address, "wedged-client")
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK gatt_client_wedged: peer=...${address?.takeLast(5) ?: "?"} | $reason | sdk=${Build.VERSION.SDK_INT} | " +
+                "action=end_link_then_wait_for_acl_drop_before_reconnect",
+        )
+        runCatching { gatt.disconnect() }
     }
 
     @SuppressLint("MissingPermission")
@@ -478,6 +724,8 @@ object GattVideoClient {
         acknowledgedWrites: Boolean,
         onWriteTiming: ((String) -> Unit)?,
         deferConnectionPriority: Boolean = false,
+        deferPhy: Boolean = false,
+        onPhyMove: () -> Unit = {},
     ): GattVideoConnection {
         val result = AtomicReference<GattVideoConnection?>()
         val error = AtomicReference<String?>()
@@ -500,15 +748,30 @@ object GattVideoClient {
             probeEnabled = DebugTunables.gattMtuProbe && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
         )
         val teardown = GattTeardownSignal()
+        val silence = LinkSilence()
+        val lastNonSuccessStatus = AtomicInteger(-1)
+        /** The GATT status of the disconnect callback (8 = link-layer connection timeout); -1 until one arrives. */
+        val disconnectStatus = AtomicInteger(-1)
         val input = GattBytePipe { failure -> onStatus("GATT video input $failure") }
         var mtu = DEFAULT_MTU
         var phySummary = "PHY pending"
         var gatt: BluetoothGatt? = null
         var output: GattClientOutputStream? = null
         val adaptivePhyRef = AtomicReference<AdaptivePhyLink?>()
+        // Experimental test_ll_gate (P-01): one MTU, discovery, PHY or connection-update request in flight on this link.
+        // A pass-through (requests start at once, as before) unless the switch is on.
+        val gate = newLinkGate("gatt-video", LeLinkRole.CENTRAL, device.address)
         fun adaptivePhy(gatt: BluetoothGatt): AdaptivePhyLink {
             adaptivePhyRef.get()?.let { return it }
-            adaptivePhyRef.compareAndSet(null, AdaptivePhyLink("gatt", gatt.device?.address, gatt, restorePriority = connectionPriority))
+            adaptivePhyRef.compareAndSet(
+                null,
+                AdaptivePhyLink(
+                    "gatt", gatt.device?.address, gatt, restorePriority = connectionPriority,
+                    peerHeard = { input.heardWithin(AdaptivePhyLink.PEER_HEARD_MS) },
+                    onMovedTo1M = onPhyMove,
+                    gate = gate,
+                ),
+            )
             LeChildInterval.register(gatt.device?.address, gatt)
             return adaptivePhyRef.get()!!
         }
@@ -521,6 +784,7 @@ object GattVideoClient {
             schedule = { delayMs, action -> Handler(Looper.getMainLooper()).postDelayed({ action() }, delayMs) },
             active = { !cancelled.get() && !teardown.disconnected },
             log = { line -> Log.i("BluetoothVideo", line) },
+            gate = gate,
         )
 
         fun logSetup(stage: String, details: String = "", terminal: Boolean = false) {
@@ -544,11 +808,25 @@ object GattVideoClient {
             latch.countDown()
         }
 
+        /** G-07: a CONNECTED callback for an attempt that was already cancelled must not leave a live client behind. */
+        fun cleanUpStaleConnected(stale: BluetoothGatt) {
+            if (!runCatching { GattLinkPolicy.staleConnectedCleanup() }.getOrDefault(false)) return
+            if (!GattResourceRegistry.shared.needsStaleCleanup(stale)) return
+            Log.i("BluetoothVideo", "GATT stale CONNECTED after cancel: closing the client | peer=...${stale.device?.address?.takeLast(5)}")
+            GattClientTeardown.disconnectAndClose(stale, teardown, "gatt-video-stale")
+        }
+
         fun discoverServicesOnce(activeGatt: BluetoothGatt) {
             if (cancelled.get()) return
             if (serviceDiscoveryStarted.compareAndSet(false, true)) {
+                if (GattSwitches.gattRefresh) {
+                    // Experimental `test_gatt_refresh` (G-15): hidden refresh() before the first discovery; fails closed.
+                    val refreshed = refreshGattServices(activeGatt)
+                    Log.i("BluetoothVideo", "GATT cache refresh before discovery: sdk=${Build.VERSION.SDK_INT} | refreshed=$refreshed")
+                }
+                silence.begin(LinkSilence.Stage.DISCOVERY)
                 logSetup("services_request", "cacheRefresh=false")
-                val queued = activeGatt.discoverServices()
+                val queued = gate.submit(LlProcedure.SERVICE_DISCOVERY, "gatt_video_discovery") { activeGatt.discoverServices() }.accepted
                 logSetup("services_return", "cacheRefresh=false queued=$queued")
                 if (!queued) finish(message = "Could not discover GATT video service")
             }
@@ -557,8 +835,17 @@ object GattVideoClient {
         val callback = object : BluetoothGattCallback() {
             @SuppressLint("MissingPermission")
             override fun onConnectionStateChange(activeGatt: BluetoothGatt, status: Int, newState: Int) {
-                if (newState == BluetoothProfile.STATE_DISCONNECTED) teardown.onDisconnected()
-                if (cancelled.get()) return
+                teardown.onCallback()
+                if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    disconnectStatus.compareAndSet(-1, status)
+                    teardown.onDisconnected()
+                    gate.onLinkClosed(status)
+                }
+                if (status != BluetoothGatt.GATT_SUCCESS) lastNonSuccessStatus.set(status)
+                if (cancelled.get()) {
+                    if (newState == BluetoothProfile.STATE_CONNECTED) cleanUpStaleConnected(activeGatt)
+                    return
+                }
                 logSetup("connection_callback", "status=$status state=$newState")
                 when {
                     newState == BluetoothProfile.STATE_DISCONNECTED -> {
@@ -585,17 +872,35 @@ object GattVideoClient {
                         // PHY update is deferred until the subscription completes: a PHY procedure
                         // started beside the connection update and the peer's own PHY request
                         // collided (status 42) and left a legacy stack without any callback.
-                        // Experimental DEBUG `test_gatt_request_mtu` (default 517).
-                        val requestedMtu = DebugTunables.gattRequestMtu ?: MAX_MTU
-                        logSetup("mtu_request", "requested=$requestedMtu")
-                        linkDiag.requestedMtu = requestedMtu
-                        mtuRequestedAtNs.set(System.nanoTime())
-                        mtuWait.onRequested(System.nanoTime() / 1_000_000L)
-                        val mtuQueued = activeGatt.requestMtu(requestedMtu)
-                        logSetup("mtu_return", "queued=$mtuQueued")
-                        if (!mtuQueued) {
-                            mtuRequestedAtNs.set(0L)
-                            discoverServicesOnce(activeGatt)
+                        silence.onConnected()
+                        val startAttSetup = {
+                            if (!cancelled.get() && !complete.get()) {
+                                // Experimental DEBUG `test_gatt_request_mtu` (default 517).
+                                // A peer whose last MTU change was followed by a lost link is asked for the smaller MTU (test_link_change_rollback).
+                                val requestedMtu = (DebugTunables.gattRequestMtu ?: MAX_MTU).let { wanted ->
+                                    LinkChangeRollbacks.mtuCap(AdaptivePhyMemory.peerKey(device.address))?.coerceAtMost(wanted) ?: wanted
+                                }
+                                logSetup("mtu_request", "requested=$requestedMtu")
+                                linkDiag.requestedMtu = requestedMtu
+                                mtuRequestedAtNs.set(System.nanoTime())
+                                mtuWait.onRequested(System.nanoTime() / 1_000_000L)
+                                silence.begin(LinkSilence.Stage.MTU)
+                                val mtuQueued = gate.submit(LlProcedure.MTU, "gatt_video_mtu") { activeGatt.requestMtu(requestedMtu) }.accepted
+                                logSetup("mtu_return", "queued=$mtuQueued")
+                                if (!mtuQueued) {
+                                    mtuRequestedAtNs.set(0L)
+                                    discoverServicesOnce(activeGatt)
+                                }
+                            }
+                        }
+                        // STATE_CONNECTED is posted before encryption and Service Changed finish (Gadgetbridge BtLEQueue):
+                        // Experimental `test_gatt_settle_ms` waits before the first GATT operation (default none).
+                        val settleMs = GattSwitches.settleMs
+                        if (settleMs > 0) {
+                            logSetup("settle_wait", "ms=$settleMs")
+                            Handler(Looper.getMainLooper()).postDelayed({ startAttSetup() }, settleMs.toLong())
+                        } else {
+                            startAttSetup()
                         }
                     }
                 }
@@ -604,8 +909,10 @@ object GattVideoClient {
             @SuppressLint("MissingPermission")
             override fun onMtuChanged(activeGatt: BluetoothGatt, newMtu: Int, status: Int) {
                 if (cancelled.get()) return
+                gate.onMtuChanged(status)
                 mtuRequestedAtNs.set(0L)
                 mtuWait.onMtuCallback()
+                silence.complete(LinkSilence.Stage.MTU)
                 mtu = if (status == BluetoothGatt.GATT_SUCCESS) newMtu else DEFAULT_MTU
                 linkDiag.onMtu(mtu, status)
                 logSetup("mtu_callback", "status=$status reported=$newMtu effective=$mtu")
@@ -620,7 +927,7 @@ object GattVideoClient {
                 linkDiag.onPhy(txPhy, rxPhy, status)
                 if (complete.get()) linkDiag.log("phy_update")
                 phySummary = phySummary(txPhy, rxPhy, status)
-                adaptivePhy(activeGatt).onPhy(txPhy, status)
+                adaptivePhy(activeGatt).onPhyUpdate(txPhy, status)
                 onStatus("GATT video $phySummary")
             }
 
@@ -631,7 +938,7 @@ object GattVideoClient {
                 linkDiag.onPhy(txPhy, rxPhy, status)
                 if (complete.get()) linkDiag.log("phy_read")
                 phySummary = phySummary(txPhy, rxPhy, status)
-                adaptivePhy(activeGatt).onPhy(txPhy, status)
+                adaptivePhy(activeGatt).onPhyRead(txPhy, status)
                 onStatus("GATT video $phySummary")
             }
 
@@ -646,14 +953,16 @@ object GattVideoClient {
                     linkDiag.onParams(interval, latency, timeout, status)
                     if (complete.get()) linkDiag.log("conn_params")
                 }
-                priorityKeeper.onConnectionUpdated(status)
+                priorityKeeper.onConnectionUpdated(status, interval)
             }
 
             @Suppress("DEPRECATION")
             @SuppressLint("MissingPermission")
             override fun onServicesDiscovered(activeGatt: BluetoothGatt, status: Int) {
                 if (cancelled.get()) return
+                gate.onServicesDiscovered(status)
                 logSetup("services_callback", "status=$status")
+                silence.complete(LinkSilence.Stage.DISCOVERY)
                 if (!serviceConfigured.compareAndSet(false, true)) return
                 val service = activeGatt.getService(GATT_DATA_SERVICE_UUID)
                 val writeCharacteristic = service?.getCharacteristic(WRITE_UUID)
@@ -672,7 +981,8 @@ object GattVideoClient {
                         {
                             if (!cancelled.get() && !complete.get()) {
                                 logSetup("services_request", "cacheRefresh=true")
-                                val queued = activeGatt.discoverServices()
+                                silence.begin(LinkSilence.Stage.DISCOVERY)
+                                val queued = gate.submit(LlProcedure.SERVICE_DISCOVERY, "gatt_video_rediscovery") { activeGatt.discoverServices() }.accepted
                                 logSetup("services_return", "cacheRefresh=true queued=$queued")
                                 if (!queued) finish(message = "Could not rediscover the GATT video service")
                             }
@@ -690,7 +1000,10 @@ object GattVideoClient {
                     finish(message = "GATT video service discovery failed (status $status)")
                     return
                 }
-                output = GattClientOutputStream(activeGatt, writeCharacteristic, mtu, acknowledgedWrites, onWriteTiming)
+                output = GattClientOutputStream(
+                    activeGatt, writeCharacteristic, mtu, acknowledgedWrites, onWriteTiming,
+                    activeGatt.device?.address,
+                ) { reason -> onClientWedged(activeGatt, reason) }
                 logSetup("notification_request", "enabled=true")
                 val notificationsEnabled = activeGatt.setCharacteristicNotification(notifyCharacteristic, true)
                 logSetup("notification_return", "enabled=$notificationsEnabled")
@@ -699,6 +1012,7 @@ object GattVideoClient {
                     return
                 }
                 logSetup("descriptor_request", "cccd=true")
+                silence.begin(LinkSilence.Stage.SUBSCRIBE)
                 val queued = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     activeGatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) ==
                         BluetoothStatusCodes.SUCCESS
@@ -717,6 +1031,7 @@ object GattVideoClient {
             ) {
                 if (cancelled.get()) return
                 logSetup("descriptor_callback", "cccd=${descriptor.uuid == CCCD_UUID} status=$status")
+                silence.complete(LinkSilence.Stage.SUBSCRIBE)
                 if (descriptor.uuid != CCCD_UUID || status != BluetoothGatt.GATT_SUCCESS) {
                     finish(message = "GATT video subscription failed (status $status)")
                     return
@@ -733,11 +1048,28 @@ object GattVideoClient {
                     )
                 }
                 if (!complete.get()) {
-                    logSetup("phy_update_request", "mask=${phyPreference.mask} option=${phyPreference.option} placement=subscribed")
-                    activeGatt.setPreferredPhy(phyPreference.mask, phyPreference.mask, phyPreference.option)
+                    if (deferPhy) {
+                        logSetup("phy_update_deferred", "mask=${phyPreference.mask} placement=after_auth")
+                    } else {
+                        logSetup("phy_update_request", "mask=${phyPreference.mask} option=${phyPreference.option} placement=subscribed")
+                        val phyMasks = phyRequestMasks(phyPreference, DebugTunables.experimentalPhySplit)
+                        if (phyMasks.txMask != phyMasks.rxMask) {
+                            Log.i("BluetoothVideo", "BENCHMARK gatt_phy_split: link=gatt-video | requested=${DebugTunables.experimentalPhySplit?.debugValue} | txMask=${phyMasks.txMask} | rxMask=${phyMasks.rxMask}")
+                        }
+                        gate.submit(
+                            LlProcedure.PHY,
+                            "gatt_video_phy",
+                            expectedTx = LePhy.valueForMask(phyMasks.txMask),
+                            fallback = { activeGatt.setPreferredPhy(LePhy.MASK_1M, LePhy.MASK_1M, phyMasks.option); true },
+                        ) {
+                            activeGatt.setPreferredPhy(phyMasks.txMask, phyMasks.rxMask, phyMasks.option)
+                            true
+                        }
+                    }
                     activeGatt.readPhy()
                 }
                 linkDiag.log("setup")
+                GattResourceRegistry.shared.setActive(activeGatt, true)
                 finish(
                     GattVideoConnection(
                         input,
@@ -745,8 +1077,18 @@ object GattVideoClient {
                         { phySummary },
                         input::queueState,
                         { priority -> priorityKeeper.request(priority) },
+                        { disconnectStatus.get() },
+                        { preference ->
+                            val masks = phyRequestMasks(preference, DebugTunables.experimentalPhySplit)
+                            gate.submit(LlProcedure.PHY, "gatt_video_phy_change", expectedTx = LePhy.valueForMask(masks.txMask)) {
+                                runCatching {
+                                    activeGatt.setPreferredPhy(masks.txMask, masks.rxMask, masks.option)
+                                }.isSuccess
+                            }.accepted
+                        },
                     ) {
                         cancelled.set(true)
+                        GattResourceRegistry.shared.setActive(activeGatt, false)
                         // Android 10/11: close only after the disconnect finished (GattClientTeardown).
                         GattClientTeardown.disconnectAndClose(activeGatt, teardown, "gatt-video")
                     },
@@ -786,7 +1128,8 @@ object GattVideoClient {
         return awaitGattSetup(
             awaitCompletion = {
                 logSetup("connect_request", "deferPriority=$deferPriority")
-                gatt = device.connectGatt(context.applicationContext, false, callback, BluetoothDevice.TRANSPORT_LE)
+                EncoderBenchGuard.check("GattVideoTransport.connectGatt")
+                gatt = GattConnectCompat.connect(device, context, callback, BluetoothDevice.TRANSPORT_LE, owner = "gatt-video")
                     ?: run {
                         logSetup("connect_return", "created=false")
                         throw IOException("Could not start GATT video connection")
@@ -796,6 +1139,24 @@ object GattVideoClient {
                 var completed = false
                 while (!completed && System.nanoTime() < deadlineNs) {
                     completed = latch.await(SETUP_POLL_MS, TimeUnit.MILLISECONDS)
+                    if (!completed) {
+                        silence.check()?.let { verdict ->
+                            val fingerprint = runCatching { LinkSilence.fingerprint(DeviceTraits.current()) }
+                                .getOrDefault("fingerprint=unavailable")
+                            Log.i(
+                                "BluetoothVideo",
+                                LinkSilence.logLine(
+                                    verdict, "gatt-video", device.address.takeLast(5),
+                                    lastNonSuccessStatus.get().takeIf { it >= 0 }, fingerprint, Build.VERSION.SDK_INT,
+                                ),
+                            )
+                            logSetup("link_silence", verdict.describe())
+                            if (verdict.kind == LinkSilence.Kind.REMOTE_GATT_FULL && GattSwitches.remoteFullFailFast) {
+                                finish(message = GATT_REMOTE_FULL_MESSAGE)
+                                completed = true
+                            }
+                        }
+                    }
                     val mtuRequested = mtuRequestedAtNs.get()
                     if (!completed && mtuRequested != 0L) {
                         val nowMs = System.nanoTime() / 1_000_000L
@@ -831,6 +1192,8 @@ object GattVideoClient {
             },
             connection = result::get,
             failure = error::get,
+            // Experimental relay_establish_keep_2m: the link existed once the connection callback reported connected.
+            linkReached = { connectionSetupStarted.get() },
             closeFailedSetup = {
                 cancelled.set(true)
                 complete.set(true)
@@ -844,6 +1207,7 @@ object GattVideoClient {
 
     private const val GATT_OPEN_ATTEMPTS = 2
     private const val GATT_OPEN_RETRY_DELAY_MS = 500L
+    private val POOL_STATUSES = setOf(GattResourceRegistry.STATUS_REGISTRATION_EXHAUSTED, GattResourceRegistry.STATUS_NO_RESOURCES)
 }
 
 internal fun awaitGattSetup(
@@ -851,6 +1215,7 @@ internal fun awaitGattSetup(
     connection: () -> GattVideoConnection?,
     failure: () -> String?,
     closeFailedSetup: () -> Unit,
+    linkReached: () -> Boolean = { false },
 ): GattVideoConnection {
     var handedOff = false
     try {
@@ -858,17 +1223,33 @@ internal fun awaitGattSetup(
         val accepted = connection() ?: throw IOException(failure() ?: "Could not connect GATT video")
         handedOff = true
         return accepted
+    } catch (error: IOException) {
+        throw carryLinkReached(error, linkReached())
     } finally {
         if (!handedOff) closeFailedSetup()
     }
 }
 
-internal data class BusyWriteOutcome(val result: Int, val retries: Int)
+internal data class BusyWriteOutcome(val result: Int, val retries: Int, val wedged: Boolean = false)
+
+/**
+ * What decides a busy answer is a wedged client rather than contention (Android 13-14, registry
+ * android13-14-gatt-client-wedged-after-busy). [ownOutstanding]: this client has a write the stack accepted whose callback
+ * has not arrived, so the busy flag is its own and waiting for the callback is correct. [otherLocalHolder]: another
+ * MeshLive client to the same peer exists and may hold the stack's per-peer write permit, so a short retry is right.
+ * With neither, the BluetoothGatt object itself is stuck (mDeviceBusy never cleared, AOSP cf66648aa2; or a permit leaked
+ * by a client that disconnected mid-write, 67158cb957) and no number of retries can succeed.
+ */
+internal class BusyWedgeCheck(val ownOutstanding: () -> Boolean, val otherLocalHolder: () -> Boolean) {
+    fun wedged(): Boolean = !ownOutstanding() && !otherLocalHolder()
+}
 
 /**
  * Issues one GATT write and repeats the same write while the stack answers [busyCode], every
  * [GattWriteBusyRetry.stepMs] until [GattWriteBusyRetry.maxWaitMs] (registry gatt-write-busy-retry).
  * Without [retry] the first answer is final (pre-audit behaviour). Never reorders or skips data.
+ * With [wedge] a busy answer that [BusyWedgeCheck] calls wedged is returned at once with [BusyWriteOutcome.wedged] set
+ * and no retry: the caller ends the link and a new client takes over.
  */
 internal fun retryBusyGattWrite(
     busyCode: Int,
@@ -877,8 +1258,10 @@ internal fun retryBusyGattWrite(
     sleepMs: (Long) -> Unit,
     nowNs: () -> Long,
     closed: () -> Boolean,
+    wedge: BusyWedgeCheck? = null,
 ): BusyWriteOutcome {
     var result = write()
+    if (result == busyCode && wedge != null && wedge.wedged()) return BusyWriteOutcome(result, 0, wedged = true)
     if (result != busyCode || retry == null) return BusyWriteOutcome(result, 0)
     val deadlineNs = nowNs() + TimeUnit.MILLISECONDS.toNanos(retry.maxWaitMs)
     var retries = 0
@@ -896,6 +1279,12 @@ internal fun retryBusyGattWrite(
 }
 
 internal const val GATT_MTU_STALLED_MESSAGE = "GATT video MTU exchange stalled"
+
+/** A write came back busy with nothing in flight on this client: the client is wedged (not retryable on the same ACL). */
+internal const val GATT_CLIENT_WEDGED_MESSAGE = "GATT video client wedged (write busy with nothing in flight)"
+
+/** Connected, but the peer never answered ATT: its GATT block pool is probably full (Experimental fail-fast only). */
+internal const val GATT_REMOTE_FULL_MESSAGE = "GATT video remote GATT full (no ATT answer)"
 
 /**
  * [retryableStatuses] defaults to the pre-audit rule (133 only); production passes
@@ -1076,6 +1465,7 @@ class GattVideoServer(
             }
             if (!valid) return
             activeDevice = device
+            GattResourceRegistry.shared.noteServerLink(device.address)
             stopAdvertising()
             if (!advertise) {
                 // Events heard before admission belonged to other centrals: start from this device's own state.
@@ -1085,10 +1475,16 @@ class GattVideoServer(
             }
             val characteristic = server?.getService(GATT_DATA_SERVICE_UUID)
                 ?.getCharacteristic(NOTIFY_UUID) ?: return
+            val activeServer = server ?: return
+            // Experimental `test_gatt_server_hold` (G-04b): mark the admitted link as in use by this app's server.
+            GattLinkLifetime.holdServerLink(activeServer, device)
             val activeInput = GattBytePipe { failure ->
                 onStatus("GATT video receiver $failure")
+                // A dead input on a live link leaves the sender writing into nothing while this phone's heartbeats keep telling
+                // it the child is fine (b1-a5a8f056 stalled2m d2: input queue overflowed, then 70 s without video or recovery).
+                // Ending the link lets the sender see the loss and the existing redial and re-request recover.
+                if (DebugTunables.gattInputFailureEndsLink) runCatching { activeServer.cancelConnection(device) }
             }
-            val activeServer = server ?: return
             val activeOutput = GattServerOutputStream(activeServer, device, characteristic, mtu)
             input = activeInput
             output = activeOutput
@@ -1137,9 +1533,28 @@ class GattVideoServer(
     @SuppressLint("MissingPermission")
     fun start() {
         check(!closed.get()) { "GATT video server is closed" }
+        EncoderBenchGuard.check("GattVideoTransport.gattServer")
         val activeServer = bluetoothManager.openGattServer(appContext, callback)
-            ?: throw IOException("Could not open GATT video server")
+        if (activeServer == null) {
+            // With Bluetooth on, a null server is the stack refusing the app registration (pool exhausted).
+            if (adapter.isEnabled) GattPoolBackoff.recordFailure(PoolSource.SERVER, null, "gatt-video-server")
+            throw IOException("Could not open GATT video server")
+        }
+        GattPoolBackoff.recordSuccess(PoolSource.SERVER)
         server = activeServer
+        GattResourceRegistry.shared.registerObject(activeServer, "gatt-video-server", GattResourceRegistry.Kind.SERVER)
+        try {
+            startOpened(activeServer)
+        } catch (error: Throwable) {
+            // The caller never receives this instance when start() throws (`gattServer = GattVideoServer(..).also(start)`),
+            // so a server opened here would keep its registration until process death. close() is idempotent.
+            close()
+            throw error
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startOpened(activeServer: BluetoothGattServer) {
         val writeCharacteristic = BluetoothGattCharacteristic(
                 WRITE_UUID,
                 BluetoothGattCharacteristic.PROPERTY_WRITE or
@@ -1236,6 +1651,7 @@ class GattVideoServer(
     }
 
     private fun closeConnection() {
+        GattResourceRegistry.shared.dropServerLink(activeDevice?.address)
         input?.close()
         input = null
         output?.close()
@@ -1252,6 +1668,7 @@ class GattVideoServer(
         stopAdvertising()
         activeDevice?.let { device -> runCatching { server?.cancelConnection(device) } }
         closeConnection()
+        server?.let { GattResourceRegistry.shared.releaseObject(it) }
         runCatching { server?.close() }
         server = null
     }
@@ -1321,3 +1738,7 @@ private const val CONTROL_TIMEOUT_SECONDS = 8L
 private const val LOW_LATENCY_ADVERTISE_BURST_MS = 10_000L
 private const val LEGACY_GATT_CALL_BYTES_PER_SECOND = 24_000
 private const val GATT_CACHE_REFRESH_DELAY_MS = 300L
+private const val HCI_DATA_PREAMBLE_OCTETS = 4
+
+/** Registrations of this process idle longer than this are leaked probes or abandoned setups (pool-exhaustion retry). */
+private const val IDLE_CLIENT_AGE_MS = 15_000L

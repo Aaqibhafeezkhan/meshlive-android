@@ -5,30 +5,29 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/app_background"
-    android:fillViewport="true">
+    android:fillViewport="true"
+    android:scrollbars="none">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingStart="24dp"
-        android:paddingTop="32dp"
-        android:paddingEnd="24dp"
+        android:paddingStart="@dimen/screen_gutter"
+        android:paddingTop="40dp"
+        android:paddingEnd="@dimen/screen_gutter"
         android:paddingBottom="24dp">
 
         <ImageView
-            android:layout_width="64dp"
-            android:layout_height="64dp"
-            android:background="@drawable/icon_circle_background"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
             android:importantForAccessibility="no"
-            android:padding="16dp"
-            android:src="@drawable/ic_cloud_off"
+            android:src="@drawable/ic_stat_meshlive"
             app:tint="@color/text_primary" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
+            android:layout_marginTop="24dp"
             android:accessibilityHeading="true"
             android:text="@string/onboarding_title"
             android:textAppearance="@style/TextAppearance.App.Display" />
@@ -38,7 +37,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="@string/onboarding_intro"
-            android:textAppearance="@style/TextAppearance.App.BodyLarge" />
+            android:textAppearance="@style/TextAppearance.App.BodyLarge"
+            android:textColor="@color/text_secondary" />
 
         <include
             android:id="@+id/onboardingPointCalls"
@@ -52,72 +52,36 @@
             android:id="@+id/onboardingPointRelay"
             layout="@layout/item_onboarding_point" />
 
-        <com.google.android.material.card.MaterialCardView
-            style="@style/Widget.App.Card"
+        <TextView
+            style="@style/Widget.App.SectionHeader"
+            android:layout_marginTop="32dp"
+            android:text="@string/onboarding_offline_title" />
+
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp">
+            android:text="@string/onboarding_offline_text"
+            android:textAppearance="@style/TextAppearance.App.Body" />
 
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="@dimen/card_padding">
+        <TextView
+            style="@style/Widget.App.SectionHeader"
+            android:text="@string/onboarding_permissions_title" />
 
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:accessibilityHeading="true"
-                    android:text="@string/onboarding_offline_title"
-                    android:textAppearance="@style/TextAppearance.App.Title" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:lineSpacingExtra="4dp"
-                    android:text="@string/onboarding_offline_text"
-                    android:textAppearance="@style/TextAppearance.App.Body" />
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-
-        <com.google.android.material.card.MaterialCardView
-            style="@style/Widget.App.Card"
+        <TextView
+            android:id="@+id/onboardingPermissionList"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp">
+            android:lineSpacingExtra="4dp"
+            android:textAppearance="@style/TextAppearance.App.Body" />
 
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="@dimen/card_padding">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:accessibilityHeading="true"
-                    android:text="@string/onboarding_permissions_title"
-                    android:textAppearance="@style/TextAppearance.App.Title" />
-
-                <TextView
-                    android:id="@+id/onboardingPermissionList"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:lineSpacingExtra="4dp"
-                    android:textAppearance="@style/TextAppearance.App.Body" />
-
-                <TextView
-                    android:id="@+id/onboardingPermissionResult"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:accessibilityLiveRegion="polite"
-                    android:textAppearance="@style/TextAppearance.App.BodyLarge"
-                    android:visibility="gone" />
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
+        <TextView
+            android:id="@+id/onboardingPermissionResult"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:accessibilityLiveRegion="polite"
+            android:textAppearance="@style/TextAppearance.App.BodyLarge"
+            android:visibility="gone" />
 
         <View
             android:layout_width="match_parent"
@@ -129,9 +93,7 @@
             android:id="@+id/onboardingPrimary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="56dp"
-            android:text="@string/onboarding_allow"
-            android:textSize="16sp" />
+            android:text="@string/onboarding_allow" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/onboardingSecondary"
@@ -139,7 +101,6 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:minHeight="48dp"
             android:text="@string/onboarding_skip" />
     </LinearLayout>
 </ScrollView>

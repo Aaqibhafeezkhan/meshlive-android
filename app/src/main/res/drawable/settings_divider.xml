@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Separator between rows inside a Settings card: starts where the row text starts (after the 24 dp icon). -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android" android:drawable="@drawable/list_divider" android:insetLeft="40dp" />

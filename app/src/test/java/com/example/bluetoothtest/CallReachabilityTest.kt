@@ -14,7 +14,11 @@ class CallReachabilityTest {
         bluetoothReady: Boolean = true,
         batteryLow: Boolean = false,
         batterySaver: Boolean = false,
-    ) = ReachabilityInputs(featureEnabled, screen, foreground, foregroundServiceHeld, bluetoothReady, batteryLow, batterySaver)
+        reachableWhileBrowsing: Boolean = true,
+    ) = ReachabilityInputs(
+        featureEnabled, screen, foreground, foregroundServiceHeld, bluetoothReady, batteryLow, batterySaver,
+        reachableWhileBrowsing,
+    )
 
     @Test
     fun homeInForegroundAdvertisesAndListensWithoutScanning() {
@@ -135,6 +139,132 @@ class CallReachabilityTest {
         assertFalse(CallReachabilityFeature.resolve(benchmarkLaunch = true) { false })
         assertTrue(CallReachabilityFeature.resolve(benchmarkLaunch = true) { it == CallReachabilityFeature.EXTRA })
         assertEquals("test_always_reachable", CallReachabilityFeature.EXTRA)
+    }
+
+    // ---- reachable while browsing (2026-10-12) ----
+
+    @Test
+    fun browsingTheLiveTabKeepsTheEndpointWithoutScanning() {
+        val plan = CallReachability.plan(inputs(ReachabilityScreen.LIVE_BROWSING))
+        assertEquals(AdvertisingRole.CALL_AVAILABLE, plan.role)
+        assertTrue(plan.endpoint)
+        assertTrue(plan.reachable)
+        // The endpoint adds no scan start (scan quota); the browser's own stream scan is not this plan's.
+        assertFalse(plan.discoveryScan)
+        assertEquals("live_browsing", plan.reason)
+    }
+
+    @Test
+    fun browsingWithTheSwitchOffIsExactlyWatching() {
+        val off = CallReachability.plan(inputs(ReachabilityScreen.LIVE_BROWSING, reachableWhileBrowsing = false))
+        assertEquals(CallReachability.plan(inputs(ReachabilityScreen.WATCH)), off)
+        assertFalse(off.endpoint)
+        assertFalse(off.reachable)
+        assertEquals(AdvertisingRole.WATCHING, off.role)
+    }
+
+    @Test
+    fun browsingFollowsTheSameGatesAsHome() {
+        // Reachability master flag off, no Bluetooth or permissions: no endpoint, same reasons as Home.
+        val flagOff = CallReachability.plan(inputs(ReachabilityScreen.LIVE_BROWSING, featureEnabled = false))
+        assertFalse(flagOff.endpoint)
+        assertEquals("flag_off", flagOff.reason)
+        val noBluetooth = CallReachability.plan(inputs(ReachabilityScreen.LIVE_BROWSING, bluetoothReady = false))
+        assertFalse(noBluetooth.endpoint)
+        assertEquals("bluetooth_or_permissions", noBluetooth.reason)
+    }
+
+    @Test
+    fun browsingInTheBackgroundNeedsTheConnectedDeviceService() {
+        val withService = CallReachability.plan(
+            inputs(ReachabilityScreen.LIVE_BROWSING, foreground = false, foregroundServiceHeld = true),
+        )
+        assertTrue(withService.endpoint)
+        assertTrue(withService.reachable)
+        assertEquals("live_browsing_background_service", withService.reason)
+        // Android 12+: without the service the frozen process could not answer, so the endpoint stops.
+        val without = CallReachability.plan(inputs(ReachabilityScreen.LIVE_BROWSING, foreground = false))
+        assertFalse(without.endpoint)
+        assertFalse(without.reachable)
+        assertEquals("background_without_foreground_service", without.reason)
+    }
+
+    @Test
+    fun browsingMatchesHomeInEveryInputCombination() {
+        for (feature in listOf(true, false)) for (fg in listOf(true, false)) for (service in listOf(true, false)) {
+            for (ready in listOf(true, false)) for (low in listOf(true, false)) for (saver in listOf(true, false)) {
+                val home = CallReachability.plan(inputs(ReachabilityScreen.HOME, feature, fg, service, ready, low, saver))
+                val browsing = CallReachability.plan(inputs(ReachabilityScreen.LIVE_BROWSING, feature, fg, service, ready, low, saver))
+                val label = "feature=$feature fg=$fg service=$service ready=$ready low=$low saver=$saver"
+                assertEquals(label, home.role, browsing.role)
+                assertEquals(label, home.endpoint, browsing.endpoint)
+                assertEquals(label, home.reachable, browsing.reachable)
+                assertEquals(label, home.discoveryScan, browsing.discoveryScan)
+            }
+        }
+    }
+
+    @Test
+    fun onlyTheCallScreenInTheForegroundScansForPeople() {
+        for (screen in ReachabilityScreen.values()) for (fg in listOf(true, false)) {
+            val plan = CallReachability.plan(inputs(screen, foreground = fg, foregroundServiceHeld = true))
+            assertEquals("$screen fg=$fg", screen == ReachabilityScreen.CALL_BROWSER && fg, plan.discoveryScan)
+        }
+    }
+
+    @Test
+    fun theLiveTabIsBrowsingUntilAStreamIsJoinedOrRejoined() {
+        assertEquals(ReachabilityScreen.LIVE_BROWSING, liveTabReachabilityScreen(true, streamJoinedOrRejoining = false))
+        // Join (connectToStream), rejoin after a loss, or relaying: the viewer owns the radio.
+        assertEquals(ReachabilityScreen.WATCH, liveTabReachabilityScreen(true, streamJoinedOrRejoining = true))
+        // Switch off: the old Watch rules from the first frame.
+        assertEquals(ReachabilityScreen.WATCH, liveTabReachabilityScreen(false, streamJoinedOrRejoining = false))
+        assertEquals(ReachabilityScreen.WATCH, liveTabReachabilityScreen(false, streamJoinedOrRejoining = true))
+    }
+
+    @Test
+    fun theEndpointFollowsTheUserThroughEveryLiveTabTransition() {
+        fun endpoint(screen: ReachabilityScreen) = CallReachability.plan(inputs(screen, foregroundServiceHeld = true)).endpoint
+        // Open the Live tab: browsing, endpoint stays (was closed here before).
+        assertTrue(endpoint(ReachabilityScreen.LIVE_BROWSING))
+        // Join a stream: closed, as today.
+        assertFalse(endpoint(ReachabilityScreen.WATCH))
+        // Leave the stream back to browsing: restored.
+        assertTrue(endpoint(ReachabilityScreen.LIVE_BROWSING))
+        // Go live: closed, as today; back to browsing: restored.
+        assertFalse(endpoint(ReachabilityScreen.LIVE))
+        assertTrue(endpoint(ReachabilityScreen.LIVE_BROWSING))
+        // An incoming call while browsing: the call keeps the endpoint and the people scan stays off.
+        val inCall = CallReachability.plan(inputs(ReachabilityScreen.CALL))
+        assertTrue(inCall.endpoint)
+        assertFalse(inCall.discoveryScan)
+        assertEquals(AdvertisingRole.IN_CALL, inCall.role)
+        // The call ends back on browsing: the Home-style idle plan again.
+        assertEquals(AdvertisingRole.CALL_AVAILABLE, CallReachability.plan(inputs(ReachabilityScreen.LIVE_BROWSING)).role)
+        // Calls tab and Home are unchanged by the new state.
+        assertTrue(endpoint(ReachabilityScreen.CALL_BROWSER))
+        assertTrue(endpoint(ReachabilityScreen.HOME))
+    }
+
+    @Test
+    fun browsingStatusLineIsTrueOnlyWhenTheEndpointAdvertises() {
+        val plan = CallReachability.plan(inputs(ReachabilityScreen.LIVE_BROWSING))
+        assertEquals(HomeReachability.REACHABLE, homeReachability(plan, endpointAvailable = true, endpointStarting = false))
+        assertEquals(HomeReachability.STARTING, homeReachability(plan, endpointAvailable = false, endpointStarting = true))
+        assertEquals(HomeReachability.NOT_REACHABLE, homeReachability(plan, endpointAvailable = false, endpointStarting = false))
+        val off = CallReachability.plan(inputs(ReachabilityScreen.LIVE_BROWSING, reachableWhileBrowsing = false))
+        assertEquals(HomeReachability.NOT_REACHABLE, homeReachability(off, endpointAvailable = false, endpointStarting = false))
+    }
+
+    @Test
+    fun browsingSwitchDefaultsOnForUsersAndOffForBenchmarkLaunches() {
+        assertTrue(ReachableWhileBrowsingFeature.resolve(benchmarkLaunch = false, hasExtra = false, extraValue = false))
+        // A DEBUG benchmark launch keeps the old behaviour (existing cases do not change) unless asked.
+        assertFalse(ReachableWhileBrowsingFeature.resolve(benchmarkLaunch = true, hasExtra = false, extraValue = false))
+        assertTrue(ReachableWhileBrowsingFeature.resolve(benchmarkLaunch = true, hasExtra = true, extraValue = true))
+        // The control arm.
+        assertFalse(ReachableWhileBrowsingFeature.resolve(benchmarkLaunch = true, hasExtra = true, extraValue = false))
+        assertEquals("test_reachable_while_browsing", ReachableWhileBrowsingFeature.EXTRA)
     }
 
     @Test

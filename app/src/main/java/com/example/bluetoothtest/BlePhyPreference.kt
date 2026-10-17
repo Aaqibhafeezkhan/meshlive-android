@@ -69,6 +69,77 @@ enum class ExperimentalBlePhy(
     }
 }
 
+/**
+ * Experimental (DEBUG `test_gatt_phy_split`, default off): a GATT client that asks for a different PHY per direction. Android's
+ * `setPreferredPhy(txPhy, rxPhy, options)` takes both masks, and the link layer may settle on an asymmetric pair (Core Vol 6 Part B
+ * 5.1.10 PHY Update Procedure). Why: with the A15s as GATT central to the ASUS, the peripheral -> central direction went silent
+ * on 2M (central -> peripheral kept delivering until the central gave up) while 1M was healthy
+ * (lane4-asus-a15s-m31-d8c7589c-20261013/b6-a15s-source-diag; DECISIONS "A15s as sender"). `tx2m-rx1m` is the arm that keeps the
+ * central's media direction on 2M; `tx1m-rx2m` is the mirror, so a pair of runs names the failing direction. Applies only to
+ * the 2M default preference: a remembered-bad peer ([BlePhyPreference.ONE_M_ADAPTIVE]) and a `test_ble_phy` arm keep their PHY.
+ */
+enum class GattPhySplit(val debugValue: String, val txMask: Int, val rxMask: Int) {
+    TX_2M_RX_1M("tx2m-rx1m", BluetoothDevice.PHY_LE_2M_MASK, BluetoothDevice.PHY_LE_1M_MASK),
+    TX_1M_RX_2M("tx1m-rx2m", BluetoothDevice.PHY_LE_1M_MASK, BluetoothDevice.PHY_LE_2M_MASK),
+    ;
+
+    companion object {
+        fun fromDebugValue(value: String?): GattPhySplit? =
+            entries.firstOrNull { it.debugValue.equals(value?.trim(), ignoreCase = true) }
+    }
+}
+
+/**
+ * `test_phy_after_auth`: the PHY to ask for once the hop peer is authenticated. The connect-time choice [connectPhy] already
+ * reflects a memory entry found under the advertised prefix; the authenticated node adds the entry a rotating pseudonym could
+ * never be matched to.
+ */
+internal fun phyAfterAuth(connectPhy: BlePhyPreference, peerBadOnTwoM: Boolean): BlePhyPreference =
+    if (connectPhy != BlePhyPreference.TWO_M || peerBadOnTwoM) BlePhyPreference.ONE_M_ADAPTIVE else BlePhyPreference.TWO_M
+
+/** The masks and option a GATT client passes to `setPreferredPhy`. */
+internal data class PhyRequestMasks(val txMask: Int, val rxMask: Int, val option: Int)
+
+internal fun phyRequestMasks(
+    preference: BlePhyPreference,
+    split: GattPhySplit?,
+    experimentalPhy: ExperimentalBlePhy? = DebugTunables.experimentalBlePhy,
+): PhyRequestMasks =
+    if (split != null && preference == BlePhyPreference.TWO_M && experimentalPhy == null) {
+        PhyRequestMasks(split.txMask, split.rxMask, BluetoothDevice.PHY_OPTION_NO_PREFERRED)
+    } else {
+        PhyRequestMasks(preference.mask, preference.mask, preference.option)
+    }
+
+/**
+ * Experimental adaptive split (DEBUG `test_adaptive_phy_split`, default off): when the adaptive PHY decision would move a GATT link
+ * from 2M to 1M (`one_pdu_per_event` or `stalled_one_way`), the central first asks for [arm] instead: only the peripheral -> central
+ * direction goes to 1M and the central's own transmit direction (the measured, media-carrying writer) keeps 2M. The split is
+ * tried once per link; a link that decides again after it moves to 1M and records the peer as before. Returns the split to
+ * request, or null for the existing full move to 1M, which is used when the switch is off, on any link but GATT ("gatt"; the
+ * CoC control link is untested), when the link already started split (`test_gatt_phy_split`) or on an experimental PHY arm
+ * (`test_ble_phy`), and when the split was already tried on this link.
+ */
+internal fun adaptiveSplitFor(
+    arm: GattPhySplit?,
+    link: String,
+    staticSplit: GattPhySplit?,
+    experimentalPhy: ExperimentalBlePhy?,
+    alreadySplit: Boolean,
+): GattPhySplit? =
+    if (arm != null && link == "gatt" && staticSplit == null && experimentalPhy == null && !alreadySplit) arm else null
+
+/** The `to=` value of the adaptive_phy line for a split move, e.g. `split-tx2m-rx1m`. */
+internal fun adaptiveSplitLabel(split: GattPhySplit): String = "split-${split.debugValue}"
+
+/**
+ * Whether the central's link still counts as a 2M link for the adaptive decision. After a split the transmit PHY is the one the
+ * split kept ([GattPhySplit.TX_2M_RX_1M]: 2M, so measuring continues) or the mirror, whose transmit PHY is 1M but whose receive
+ * direction is still 2M (a second failure escalates to full 1M, which changes that direction too).
+ */
+internal fun adaptiveLinkOnTwoM(txPhy: Int, splitApplied: GattPhySplit?): Boolean =
+    txPhy == LePhy.TWO_M || (splitApplied == GattPhySplit.TX_1M_RX_2M && txPhy == LePhy.ONE_M)
+
 /** Suffix that keeps capacity learned on an experimental LE PHY apart from the 2M default. */
 internal fun phyCapacityKey(transport: BluetoothTransportOption, phy: ExperimentalBlePhy?): String =
     if (phy == null || transport == BluetoothTransportOption.CLASSIC_RFCOMM) "" else ".phy-${phy.debugValue}"
@@ -120,7 +191,7 @@ internal fun forwarderGattPriority(
 }
 
 /**
- * Experimental (`test_relay_upstream_dck`, default off): the connection priority a central requests on the
+ * Default on since 2026-10-15 (`test_relay_upstream_dck=false` is the control arm): the connection priority a central requests on the
  * link to a child that can relay (`maxChildren > 0`). A relay is peripheral to this link and central to its
  * own child link, and both settle at HIGH (11.25-15 ms, 15 ms on every controller seen). Two links at the
  * same interval keep a fixed relative anchor phase for the whole connection, and on the Exynos 9611

@@ -73,6 +73,14 @@ class BenchmarkResultsTest(unittest.TestCase):
             generate(self.ledger_path, self.output, self.root)
         self.assertEqual(before, self.output.read_bytes())
 
+    def test_later_evidence_retirement_is_named_in_the_notice(self):
+        self.ledger["media_retirement"] = self.write_pointer("data/media-audit.json", {
+            "privacy_cleanup": {"removed_files": 39},
+            "evidence_retirement_20261016": {"retired_files": 3395, "runs": 130}})
+        self.save_ledger()
+        generate(self.ledger_path, self.output, self.root)
+        self.assertIn("3,395 raw media/log files of 130 closed runs", self.output.read_text(encoding="utf-8"))
+
     def test_stale_ledger_counts_cannot_show_completed_coverage(self):
         self.ledger["current_inventory"]["states"] = {"PASS": 1}
         self.save_ledger()

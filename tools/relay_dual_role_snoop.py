@@ -15,7 +15,13 @@ each received burst minus the air time of its first PDU, the child event is the 
 Packets of each burst minus 0.45 ms. Expect +-0.5-1 ms; the phase is only meaningful when the link has
 enough events (n_child / n_parent in the stage) and the circular concentration r is near 1.
 
-usage: python -B tools/relay_dual_role_snoop.py LOG [LOG ...] [--json OUT] [--gap-ms 3.3]
+With --swapped the roles are mirrored (measurement 7 of DECISIONS "Design RR"): the phone is the LE CENTRAL on the
+parent link (it dials its parent) and the LE PERIPHERAL on the child link (the child dials it). The child's anchor is
+then the start of each received burst and the parent's the first completed packet, and the report adds the parent
+link's longest completed-packet gap while the child lived (parent_max_ncp_gap_s, parent_stalled at >= 1 s), because
+the question there is whether a bad child phase starves the PARENT link.
+
+usage: python -B tools/relay_dual_role_snoop.py LOG [LOG ...] [--json OUT] [--gap-ms 3.3] [--swapped]
 Evidence: docs/DECISIONS.md "Relay dual-role scheduling (2026-10-11)"."""
 import argparse
 import datetime as dt
@@ -29,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hci_snoop import read_btsnoop, unix_seconds
 
 LOW_RATE_KBPS = 50.0
+PARENT_STALL_S = 1.0
 REASONS = {0x08: "timeout", 0x13: "remote_terminated", 0x16: "local_terminated", 0x22: "ll_response_timeout",
            0x3D: "mic_failure", 0x3E: "failed_to_establish"}
 CHILD_EVENT_OFFSET_MS = 0.45
@@ -142,18 +149,35 @@ def interval_at(timeline, when):
     return current
 
 
-def stage_report(ev, child, parent, start, stop, interval, parent_interval, gap_s):
+def central_marks(ev, handle, window_start, window_stop, gap_s):
+    """Event starts of a link this phone is central on: the first completed packet of each burst minus 0.45 ms."""
+    completed = [e for e in ev if e.get("h") == handle and e["k"] == "ncp" and window_start <= e["t"] <= window_stop]
+    return [c[0]["t"] - CHILD_EVENT_OFFSET_MS / 1000 for c in clusters(completed, gap_s, lambda e: e["t"])]
+
+
+def peripheral_marks(ev, handle, window_start, window_stop, gap_s):
+    """Event starts of a link this phone is peripheral on: each received burst minus the air time of its first PDU."""
+    received = [e for e in ev if e.get("h") == handle and e["k"] == "acl" and e["rx"] and window_start <= e["t"] <= window_stop]
+    return [c[0]["t"] - air_ms(c[0]["ln"]) / 1000 for c in clusters(received, gap_s, lambda e: e["t"])]
+
+
+def stage_report(ev, child, parent, start, stop, interval, parent_interval, gap_s, swapped=False):
     window_start, window_stop = start + 0.02, min(stop, start + 3.0)
     acl = [e for e in ev if e.get("h") == child["h"] and e["k"] == "acl" and start <= e["t"] <= stop]
+    span = max(stop - start, 1e-3)
     row = dict(start_s=round(start - child["t0"], 3), end_s=round(stop - child["t0"], 3), interval_ms=interval,
                parent_interval_ms=parent_interval,
-               tx_kbps=round(sum(e["ln"] for e in acl if not e["rx"]) * 8 / max(stop - start, 1e-3) / 1000, 1))
+               tx_kbps=round(sum(e["ln"] for e in acl if not e["rx"]) * 8 / span / 1000, 1))
+    if swapped:
+        row["rx_kbps"] = round(sum(e["ln"] for e in acl if e["rx"]) * 8 / span / 1000, 1)
     if interval != parent_interval or stop - start < 0.04:
         return row
-    completed = [e for e in ev if e.get("h") == child["h"] and e["k"] == "ncp" and window_start <= e["t"] <= window_stop]
-    child_marks = [c[0]["t"] - CHILD_EVENT_OFFSET_MS / 1000 for c in clusters(completed, gap_s, lambda e: e["t"])]
-    received = [e for e in ev if e.get("h") == parent["h"] and e["k"] == "acl" and e["rx"] and window_start <= e["t"] <= window_stop]
-    parent_marks = [c[0]["t"] - air_ms(c[0]["ln"]) / 1000 for c in clusters(received, gap_s, lambda e: e["t"])]
+    if swapped:
+        child_marks = peripheral_marks(ev, child["h"], window_start, window_stop, gap_s)
+        parent_marks = central_marks(ev, parent["h"], window_start, window_stop, gap_s)
+    else:
+        child_marks = central_marks(ev, child["h"], window_start, window_stop, gap_s)
+        parent_marks = peripheral_marks(ev, parent["h"], window_start, window_stop, gap_s)
     if len(child_marks) < MIN_CHILD_MARKS or len(parent_marks) < 3:
         row.update(n_child=len(child_marks), n_parent=len(parent_marks))
         return row
@@ -165,12 +189,22 @@ def stage_report(ev, child, parent, start, stop, interval, parent_interval, gap_
     return row
 
 
-def analyze(path, gap_ms=3.3):
+def parent_gap(ev, parent, start, end):
+    """Longest stretch without a completed packet on the parent link inside [start, end] (None without any)."""
+    stamps = sorted(e["t"] for e in ev if e.get("h") == parent["h"] and e["k"] == "ncp" and start <= e["t"] <= end)
+    if not stamps:
+        return None
+    points = [start] + stamps + [end]
+    return max(b - a for a, b in zip(points, points[1:]))
+
+
+def analyze(path, gap_ms=3.3, swapped=False):
     ev = events(path)
     eps = episodes(ev)
-    parents = [e for e in eps if e["role"] == 1]
+    parent_role, child_role = (0, 1) if swapped else (1, 0)
+    parents = [e for e in eps if e["role"] == parent_role]
     reports = []
-    for child in (e for e in eps if e["role"] == 0):
+    for child in (e for e in eps if e["role"] == child_role):
         end = child["t1"] if child["t1"] is not None else (ev[-1]["t"] if ev else child["t0"])
         overlapping = [p for p in parents if p["t0"] < end and child["t0"] < (p["t1"] if p["t1"] is not None else math.inf)]
         if not overlapping:
@@ -182,7 +216,7 @@ def analyze(path, gap_ms=3.3):
             stop = timeline[index + 1][0] if index + 1 < len(timeline) else end
             if stop - stamp >= MIN_STAGE_S:
                 stages.append(stage_report(ev, child, parent, stamp, stop, interval,
-                                           interval_at(parent_timeline, stamp), gap_ms / 1000))
+                                           interval_at(parent_timeline, stamp), gap_ms / 1000, swapped))
         link = [e for e in ev if e.get("h") == child["h"] and e["k"] in ("acl", "ncp") and child["t0"] <= e["t"] <= end]
         last = max((e["t"] for e in link), default=None)
         final = timeline[-1][0]
@@ -194,18 +228,24 @@ def analyze(path, gap_ms=3.3):
             verdict = "establish_failed"
         elif reason == 0x08 and silence is not None and silence >= 0.9 * child["timeout_ms"] / 1000:
             verdict = "silent_timeout"
-        elif stages and stages[-1]["end_s"] - stages[-1]["start_s"] >= 1.0 and stages[-1]["tx_kbps"] < LOW_RATE_KBPS:
+        elif (stages and stages[-1]["end_s"] - stages[-1]["start_s"] >= 1.0
+              and stages[-1]["rx_kbps" if swapped else "tx_kbps"] < LOW_RATE_KBPS):
             verdict = "low_rate"
         else:
             verdict = "carried"
-        reports.append(dict(
+        report = dict(
             handle=child["h"], parent_handle=parent["h"], connected=iso(child["t0"]),
             ended=iso(child["t1"]) if child["t1"] is not None else None, life_s=round(end - child["t0"], 2),
             end_reason=REASONS.get(reason, reason), intervals=[[round(t - child["t0"], 3), i] for t, i in timeline],
             dle_after_final_interval_s=after("dle"), phy_after_final_interval_s=after("phy"),
             set_phy_after_final_interval_s=after("setphy"),
             last_completed_s_after_connect=round(last - child["t0"], 3) if last is not None else None,
-            silence_before_end_s=silence, stages=stages, verdict=verdict))
+            silence_before_end_s=silence, stages=stages, verdict=verdict)
+        if swapped:
+            gap = parent_gap(ev, parent, child["t0"], end)
+            report.update(swapped=True, parent_max_ncp_gap_s=round(gap, 3) if gap is not None else None,
+                          parent_stalled=gap is None or gap >= PARENT_STALL_S)
+        reports.append(report)
     return reports
 
 
@@ -214,10 +254,12 @@ def main(argv=None):
     parser.add_argument("logs", nargs="+")
     parser.add_argument("--json", help="write the full report here")
     parser.add_argument("--gap-ms", type=float, default=3.3, help="idle gap that separates two events (default 3.3)")
+    parser.add_argument("--swapped", action="store_true",
+                        help="phone is central on the parent link and peripheral on the child link (Design RR measurement 7)")
     args = parser.parse_args(argv)
     full = {}
     for log in args.logs:
-        reports = analyze(log, args.gap_ms)
+        reports = analyze(log, args.gap_ms, args.swapped)
         full[log] = reports
         print(f"== {log}: {len(reports)} child connection(s)")
         for r in reports:
@@ -225,7 +267,9 @@ def main(argv=None):
             phase = f" child-parent {last['delta_ms']} ms (gap to next parent anchor {last['gap_after_ms']} ms)" if last else ""
             print(f"  h{r['handle']} {r['connected']} life {r['life_s']} s end {r['end_reason']} "
                   f"intervals {[i for _, i in r['intervals']]} dle+{r['dle_after_final_interval_s']} "
-                  f"silence {r['silence_before_end_s']} -> {r['verdict']}{phase}")
+                  f"silence {r['silence_before_end_s']} -> {r['verdict']}{phase}"
+                  + (f" parent_max_gap {r['parent_max_ncp_gap_s']} s{' STALLED' if r['parent_stalled'] else ''}"
+                     if r.get("swapped") else ""))
     if args.json:
         Path(args.json).write_text(json.dumps(full, indent=2) + "\n", encoding="utf-8")
     return 0

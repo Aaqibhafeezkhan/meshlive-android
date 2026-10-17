@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- 1 dp divider on the bottom edge of a settings row (M3 divider, outline variant). -->
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:gravity="bottom" android:height="1dp">
-        <shape android:shape="rectangle">
-            <solid android:color="@color/outline" />
-        </shape>
-    </item>
-</layer-list>

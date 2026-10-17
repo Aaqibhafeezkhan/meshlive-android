@@ -126,6 +126,20 @@ object RotatingDiscovery {
         listeners.clear()
     }
 
+    /** The application context given to [init], or null (the notification of an ended window needs one). */
+    @Synchronized
+    fun appContextOrNull(): Context? = appContext
+
+    /**
+     * Ends a Visible-by-handle window now (Visible by name starts: the two never run together) and tells the advertisers,
+     * which restart on a new set with version 5.
+     */
+    fun stopVisibleByHandle() {
+        synchronized(this) { visibleUntilEpoch = -1L }
+        val epoch = runCatching { currentEpoch() }.getOrDefault(-1L)
+        handler.post { listeners.forEach { listener -> runCatching { listener(epoch) } } }
+    }
+
     /** The epoch to advertise now (RV4); regenerates the key on a forward-jump recovery. */
     @Synchronized
     fun currentEpoch(): Long {
@@ -272,6 +286,7 @@ object RotatingDiscovery {
      * wall time (ms) at which it ends.
      */
     fun startVisibleByHandle(): Long {
+        NameWindowRuntime.onHandleWindowStart() // a Visible-by-name window ends: never both
         val nowSeconds = Math.floorDiv(DiscoveryWallClock.nowMs(), 1000L)
         synchronized(this) {
             visibleUntilEpoch = VisibleByHandleWindow.endEpoch(nowSeconds)
@@ -361,7 +376,7 @@ object RotatingDiscovery {
      * stream offer role 1). A hit is only a hint: the UI shows it unconfirmed and nothing connects from it.
      */
     fun recognize(announcement: DiscoveryAnnouncement): List<RecognitionTable.Hit> {
-        if (!announcement.rotating) return emptyList()
+        if (!announcement.rotating || announcement.isWindowOffer) return emptyList() // window IDs belong to no lease
         val role = when {
             announcement.isStreamOffer() -> RotatingDiscoveryIds.ROLE_STREAM_OFFER
             announcement.isPrivateCallOffer() -> RotatingDiscoveryIds.ROLE_CALL_OFFER

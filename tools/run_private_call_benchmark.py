@@ -249,7 +249,9 @@ def requested_matches(requested, observed):
                                          if key == "thermal_reduction" else "")).lower()
                 for key, actual in PROFILE_KEYS.items()}
     expected["playbackMs"] = str(PLAYBACK_MS[requested.get("playback", "balanced")])
-    return sum(observed.get(key, "").lower() != value for key, value in expected.items())
+    # The count of mismatching fields (0 = the selected profile is the requested one). Since fe2acce the app annotates
+    # some values ("thermalReduction=false (setting=false)"), so only the value before a note is compared.
+    return sum(observed.get(key, "").split(" (", 1)[0].strip().lower() != value for key, value in expected.items())
 
 
 def score_call_manifest(manifest, base_path, thresholds=None):

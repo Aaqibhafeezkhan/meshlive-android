@@ -32,6 +32,8 @@ internal data class DozeSnapshot(
     val lightIdle: Boolean?,
     val lowPowerStandby: Boolean?,
     val powerSave: Boolean,
+    /** PowerManager.isExemptFromLowPowerStandby (API 34): this app is exempt while Low Power Standby is on; null before API 34. */
+    val lowPowerStandbyExempt: Boolean? = null,
 )
 
 /** Pure rules (unit-tested). */
@@ -54,11 +56,84 @@ internal object DozePolicy {
     /** True when [next] should be reported (state or any reading changed). */
     fun changed(previous: DozeSnapshot?, next: DozeSnapshot): Boolean = previous != next
 
+    /**
+     * The banner text for [snapshot]: like [message], but Low Power Standby says so when this app is exempt from it
+     * (API 34 `isExemptFromLowPowerStandby`, e.g. while it holds an ongoing-call foreground service), because then calls
+     * are not held back by it (backlog B-08). Deep sleep still outranks it.
+     */
+    fun message(snapshot: DozeSnapshot): String? {
+        val state = state(snapshot)
+        if (state == DeviceSleepState.LOW_POWER_STANDBY && snapshot.lowPowerStandbyExempt == true) {
+            return "Low power standby is on, but this app is allowed to keep working."
+        }
+        return message(state)
+    }
+
     fun line(snapshot: DozeSnapshot, trigger: String): String =
         "doze_state: state=${state(snapshot).label} | deviceIdle=${snapshot.deviceIdle} | " +
             "lightIdle=${snapshot.lightIdle ?: "unavailable"} | " +
             "lowPowerStandby=${snapshot.lowPowerStandby ?: "unavailable"} | powerSave=${snapshot.powerSave} | " +
+            // Only on API 34+, so the line keeps its older shape elsewhere.
+            (snapshot.lowPowerStandbyExempt?.let { "lowPowerStandbyExempt=$it | " } ?: "") +
             "trigger=$trigger"
+}
+
+/**
+ * Timer lateness (backlog B-16, from xDrip's "buggy handset" detector): how late a timer that should fire every
+ * [periodMs] arrives. Phone makers' power managers delay timers with the screen off; this measures it instead of
+ * guessing from the manufacturer. Root hook: call [onTick] from the session's 1 s heartbeat and log [line] when the
+ * session ends. Gaps longer than [resumeAfterMs] mean the heartbeat was not running (no session) and only re-anchor.
+ * It decides nothing; setAlarmClock and exact alarms were rejected as keep-alives (backlog B-18).
+ */
+internal class TimerLateness(
+    private val periodMs: Long = 1_000L,
+    private val resumeAfterMs: Long = 30L * 60_000L,
+) {
+    private var lastTickMs = NONE
+    private var ticks = 0L
+    private var maxLateMs = 0L
+    private var lastLateMs = 0L
+    private var over1s = 0L
+    private var over5s = 0L
+
+    /** Records a tick at [nowMs] (monotonic ms) and returns how late it was. */
+    @Synchronized
+    fun onTick(nowMs: Long): Long {
+        val previous = lastTickMs
+        lastTickMs = nowMs
+        if (previous == NONE) return 0L
+        val gap = nowMs - previous
+        if (gap > resumeAfterMs) return 0L
+        val late = (gap - periodMs).coerceAtLeast(0L)
+        ticks++
+        lastLateMs = late
+        if (late > maxLateMs) maxLateMs = late
+        if (late >= 1_000L) over1s++
+        if (late >= 5_000L) over5s++
+        return late
+    }
+
+    @Synchronized
+    fun reset() {
+        lastTickMs = NONE
+        ticks = 0L
+        maxLateMs = 0L
+        lastLateMs = 0L
+        over1s = 0L
+        over5s = 0L
+    }
+
+    @Synchronized
+    fun maxLateMs(): Long = maxLateMs
+
+    @Synchronized
+    fun line(sleepState: String): String =
+        "timer_lateness: ticks=$ticks | max_late_ms=$maxLateMs | last_late_ms=$lastLateMs | over_1s=$over1s | over_5s=$over5s | " +
+            "period_ms=$periodMs | doze=$sleepState"
+
+    private companion object {
+        const val NONE = Long.MIN_VALUE
+    }
 }
 
 /**
@@ -86,8 +161,28 @@ internal object DozeWatchdog {
 
     val snapshot: DozeSnapshot? get() = last
 
-    /** The text the UI may show, or null while awake. */
-    fun message(): String? = DozePolicy.message(state)
+    /** The text the UI may show, or null while awake. Low Power Standby says when this app is exempt from it (API 34). */
+    fun message(): String? {
+        val current = last ?: return DozePolicy.message(state)
+        // The exemption can change without a broadcast (an ongoing call starts), so read it again for the text.
+        val fresh = if (Build.VERSION.SDK_INT >= 34) runCatching { powerManager?.isExemptFromLowPowerStandby }.getOrNull() else null
+        return DozePolicy.message(current.copy(lowPowerStandbyExempt = fresh ?: current.lowPowerStandbyExempt))
+    }
+
+    /** Session heartbeat timer lateness (B-16); see [TimerLateness]. */
+    val timerLateness = TimerLateness()
+
+    /** Root hook: the session's ~1 s heartbeat. */
+    fun onSessionTick(nowMs: Long = android.os.SystemClock.elapsedRealtime()) {
+        timerLateness.onTick(nowMs)
+    }
+
+    /** Root hook: when the session ends. Logs `timer_lateness` (BENCHMARK in DEBUG) and starts a new measurement. */
+    fun logTimerLateness() {
+        val line = timerLateness.line(state.label)
+        if (BuildConfig.DEBUG) Log.i(TAG, "BENCHMARK $line") else Log.w(TAG, line)
+        timerLateness.reset()
+    }
 
     /** Registers the receivers once per process (application context); later calls only refresh. */
     @Synchronized
@@ -135,6 +230,7 @@ internal object DozeWatchdog {
             lightIdle = if (Build.VERSION.SDK_INT >= 33) pm.isDeviceLightIdleMode else null,
             lowPowerStandby = if (Build.VERSION.SDK_INT >= 33) pm.isLowPowerStandbyEnabled else null,
             powerSave = pm.isPowerSaveMode,
+            lowPowerStandbyExempt = if (Build.VERSION.SDK_INT >= 34) runCatching { pm.isExemptFromLowPowerStandby }.getOrNull() else null,
         )
     }
 

@@ -61,6 +61,12 @@ object StoreForwardFormat {
      * (second review N2); version-1 bundles are rejected.
      */
     const val BUNDLE_VERSION = 2
+    /**
+     * Messaging v2 (DECISIONS Design M): exactly one key slot for classes 0-3, class 4 (BULK) has none and carries
+     * only the pair tag. Written and accepted only with the master switch on.
+     */
+    const val BUNDLE_VERSION_V3 = 3
+    const val BULK_CLASS = 4
 
     val DOMAIN: ByteArray = "BluetoothVideoMesh/StoreForward/2".toByteArray(Charsets.US_ASCII)
     val PAIR_CONTEXT: ByteArray = "BluetoothVideoMesh/StoreForward/Pair/2".toByteArray(Charsets.US_ASCII)
@@ -406,6 +412,7 @@ data class BundleMessage(
 /** `BSB1`: immutable, carrier-visible header. The raw [encoded] bytes are the bundle identity. */
 class BundleHeader private constructor(
     val encoded: ByteArray,
+    val version: Int,
     val createdHour: Int,
     val expiryHour: Int,
     val priorityClass: Int,
@@ -413,10 +420,14 @@ class BundleHeader private constructor(
     val chunkCount: Int,
     val slots: List<ByteArray>,
     val chunkHashes: List<ByteArray>,
+    /** Version 3 class 4 only: the pair's daily tag, in place of the (absent) key slot. */
+    val bulkTag: ByteArray? = null,
 ) {
     val bundleId: ByteArray = sfSha256(encoded)
     val idPrefix: ByteArray get() = bundleId.copyOf(8)
-    val tags: List<ByteArray> get() = slots.map { it.copyOf(StoreForwardFormat.TAG_BYTES) }
+    val isBulk: Boolean get() = bulkTag != null
+    val tags: List<ByteArray>
+        get() = bulkTag?.let { listOf(it.copyOf()) } ?: slots.map { it.copyOf(StoreForwardFormat.TAG_BYTES) }
     val createdDay: Int get() = StoreForwardFormat.dayOfHour(createdHour)
 
     /** Ciphertext bytes this bundle occupies on a carrier. */
@@ -431,7 +442,7 @@ class BundleHeader private constructor(
             MessageDigest.isEqual(StoreForwardFormat.chunkHash(ciphertext), chunkHashes[index])
 
     fun slotAad(slotIndex: Int): ByteArray =
-        fixedFields(createdHour, expiryHour, priorityClass, paddedLength, chunkCount, slots.size, chunkHashes) +
+        fixedFields(createdHour, expiryHour, priorityClass, paddedLength, chunkCount, slots.size, chunkHashes, version) +
             byteArrayOf(slotIndex.toByte()) + slots[slotIndex].copyOf(StoreForwardFormat.TAG_BYTES)
 
     companion object {
@@ -446,10 +457,11 @@ class BundleHeader private constructor(
             chunkCount: Int,
             slotCount: Int,
             hashes: List<ByteArray>,
+            version: Int = StoreForwardFormat.BUNDLE_VERSION,
         ): ByteArray = ByteArrayOutputStream().also { bytes ->
             DataOutputStream(bytes).apply {
                 write(MAGIC)
-                writeByte(StoreForwardFormat.BUNDLE_VERSION)
+                writeByte(version)
                 writeInt(created)
                 writeInt(expiry)
                 writeByte(priorityClass)
@@ -467,11 +479,13 @@ class BundleHeader private constructor(
             paddedLength: Int,
             slots: List<ByteArray>,
             hashes: List<ByteArray>,
+            version: Int = StoreForwardFormat.BUNDLE_VERSION,
+            bulkTag: ByteArray? = null,
         ): BundleHeader = decode(
             ByteArrayOutputStream().also { bytes ->
                 DataOutputStream(bytes).apply {
                     write(MAGIC)
-                    writeByte(StoreForwardFormat.BUNDLE_VERSION)
+                    writeByte(version)
                     writeInt(created)
                     writeInt(expiry)
                     writeByte(priorityClass)
@@ -479,24 +493,33 @@ class BundleHeader private constructor(
                     writeShort(hashes.size)
                     writeByte(slots.size)
                     slots.forEach(::write)
+                    bulkTag?.let(::write)
                     hashes.forEach(::write)
                 }
             }.toByteArray(),
+            allowV3 = version == StoreForwardFormat.BUNDLE_VERSION_V3,
         )
 
-        /** Structural validation only (no key, no clock); fails closed on anything unexpected. */
-        fun decode(bytes: ByteArray): BundleHeader {
+        /**
+         * Structural validation only (no key, no clock); fails closed on anything unexpected. Version 3 (Messaging v2)
+         * is decoded only when [allowV3]: with the switch off a version 3 header is "Unsupported bundle version",
+         * exactly as in v1. Version 3 needs exactly one slot for classes 0-3, and none (a pair tag) for class 4.
+         */
+        fun decode(bytes: ByteArray, allowV3: Boolean = false): BundleHeader {
             require(bytes.size in FIXED_BYTES..StoreForwardFormat.MAX_HEADER_BYTES) { "Invalid bundle header size" }
             val input = DataInputStream(ByteArrayInputStream(bytes))
             val magic = ByteArray(4).also(input::readFully)
             require(magic.contentEquals(MAGIC)) { "Invalid bundle magic" }
-            require(input.readUnsignedByte() == StoreForwardFormat.BUNDLE_VERSION) { "Unsupported bundle version" }
+            val version = input.readUnsignedByte()
+            require(version == StoreForwardFormat.BUNDLE_VERSION ||
+                (allowV3 && version == StoreForwardFormat.BUNDLE_VERSION_V3)) { "Unsupported bundle version" }
             val created = input.readInt()
             val expiry = input.readInt()
             require(created >= 0 && expiry > created) { "Invalid bundle lifetime" }
             require(expiry - created <= StoreForwardFormat.MAX_TTL_HOURS) { "Bundle lifetime exceeds the maximum" }
             val priorityClass = input.readUnsignedByte()
-            require(priorityClass in 0..3) { "Invalid priority class" }
+            val maxClass = if (version == StoreForwardFormat.BUNDLE_VERSION_V3) StoreForwardFormat.BULK_CLASS else 3
+            require(priorityClass in 0..maxClass) { "Invalid priority class" }
             val padded = input.readInt()
             require(padded in StoreForwardFormat.MIN_PADDED_BYTES..StoreForwardFormat.MAX_PADDED_BYTES) {
                 "Invalid padded length"
@@ -504,12 +527,26 @@ class BundleHeader private constructor(
             val count = input.readUnsignedShort()
             require(count == StoreForwardFormat.chunkCount(padded)) { "Chunk count does not match the padded length" }
             val slotCount = input.readUnsignedByte()
-            require(slotCount in 1..StoreForwardFormat.MAX_SLOTS) { "Invalid slot count" }
+            val bulk = priorityClass == StoreForwardFormat.BULK_CLASS
+            if (bulk) {
+                require(slotCount == 0) { "A bulk bundle carries no key slot" }
+                require(bytes.size == FIXED_BYTES + StoreForwardFormat.TAG_BYTES + count * StoreForwardFormat.CHUNK_HASH_BYTES) {
+                    "Bundle header length mismatch"
+                }
+                val tag = ByteArray(StoreForwardFormat.TAG_BYTES).also(input::readFully)
+                val hashes = List(count) { ByteArray(StoreForwardFormat.CHUNK_HASH_BYTES).also(input::readFully) }
+                return BundleHeader(bytes.copyOf(), version, created, expiry, priorityClass, padded, count, emptyList(), hashes, tag)
+            }
+            if (version == StoreForwardFormat.BUNDLE_VERSION_V3) {
+                require(slotCount == 1) { "Version 3 needs exactly one key slot" }
+            } else {
+                require(slotCount in 1..StoreForwardFormat.MAX_SLOTS) { "Invalid slot count" }
+            }
             require(bytes.size == FIXED_BYTES + slotCount * StoreForwardFormat.SLOT_BYTES +
                 count * StoreForwardFormat.CHUNK_HASH_BYTES) { "Bundle header length mismatch" }
             val slots = List(slotCount) { ByteArray(StoreForwardFormat.SLOT_BYTES).also(input::readFully) }
             val hashes = List(count) { ByteArray(StoreForwardFormat.CHUNK_HASH_BYTES).also(input::readFully) }
-            return BundleHeader(bytes.copyOf(), created, expiry, priorityClass, padded, count, slots, hashes)
+            return BundleHeader(bytes.copyOf(), version, created, expiry, priorityClass, padded, count, slots, hashes)
         }
     }
 }
@@ -519,6 +556,9 @@ class SealedBundle(val header: BundleHeader, val chunks: List<ByteArray>) {
 }
 
 class OpenedBundle(val senderNodeId: NodeId, val senderMailbox: ByteArray, val message: BundleMessage)
+
+/** A bundle opened for Messaging v2: the sender the slot authenticated and the inner content bytes (a BSM2). */
+class OpenedRaw(val senderNodeId: NodeId, val senderMailbox: ByteArray, val inner: ByteArray)
 
 /** A key slot that opened for this recipient and names a held contact. */
 class AuthenticatedSlot(val senderNodeId: NodeId, val senderMailbox: ByteArray, val contentKey: ByteArray)
@@ -539,8 +579,49 @@ object StoreForwardSeal {
         ttlHours: Int = StoreForwardFormat.DEFAULT_TTL_HOURS,
         random: SecureRandom = SecureRandom(),
     ): SealedBundle {
+        return sealInner(
+            message.encode(), message.kind.priorityClass, StoreForwardFormat.BUNDLE_VERSION,
+            sender, senderNodeId, recipientMailbox, recipientNodeId, pairSecret, nowMs, ttlHours, random,
+        )
+    }
+
+    /**
+     * Messaging v2 seal of a `BSM2` (or any inner bytes) as a version 3 bundle of class 0-3: one slot, fresh content
+     * key and ephemeral key, Padme padding. A bundle that must change is sealed again from scratch.
+     */
+    fun sealV3(
+        inner: ByteArray,
+        priorityClass: Int,
+        sender: MailboxKey,
+        senderNodeId: NodeId,
+        recipientMailbox: PublicKey,
+        recipientNodeId: NodeId,
+        pairSecret: ByteArray,
+        nowMs: Long,
+        ttlHours: Int,
+        random: SecureRandom = SecureRandom(),
+    ): SealedBundle {
+        require(priorityClass in 0..3) { "A slot bundle is class 0-3" }
+        return sealInner(
+            inner, priorityClass, StoreForwardFormat.BUNDLE_VERSION_V3,
+            sender, senderNodeId, recipientMailbox, recipientNodeId, pairSecret, nowMs, ttlHours, random,
+        )
+    }
+
+    private fun sealInner(
+        inner: ByteArray,
+        priorityClass: Int,
+        version: Int,
+        sender: MailboxKey,
+        senderNodeId: NodeId,
+        recipientMailbox: PublicKey,
+        recipientNodeId: NodeId,
+        pairSecret: ByteArray,
+        nowMs: Long,
+        ttlHours: Int,
+        random: SecureRandom,
+    ): SealedBundle {
         require(ttlHours in 1..StoreForwardFormat.MAX_TTL_HOURS) { "Invalid message lifetime" }
-        val inner = message.encode()
         val padded = StoreForwardFormat.paddedLength(inner.size)
         require(padded <= StoreForwardFormat.MAX_PADDED_BYTES) { "Message exceeds the 2 MiB bundle limit" }
         val plaintext = ByteArray(padded)
@@ -548,22 +629,98 @@ object StoreForwardSeal {
         System.arraycopy(inner, 0, plaintext, 4, inner.size)
         val count = StoreForwardFormat.chunkCount(padded)
         val cek = ByteArray(StoreForwardFormat.CONTENT_KEY_BYTES).also(random::nextBytes)
-        val chunks = List(count) { index ->
-            val start = index * StoreForwardFormat.CHUNK_PLAINTEXT_BYTES
-            val end = minOf(padded, start + StoreForwardFormat.CHUNK_PLAINTEXT_BYTES)
-            MeshAead.encrypt(cek, index.toLong(), plaintext.copyOfRange(start, end), chunkAad(index, count))
-        }
+        val chunks = sealChunks(plaintext, cek, count)
         plaintext.fill(0)
         val hashes = chunks.map(StoreForwardFormat::chunkHash)
         val created = StoreForwardFormat.hourOf(nowMs)
         val expiry = created + ttlHours
         val tag = StoreForwardTags.tag(pairSecret, StoreForwardFormat.dayOfHour(created))
-        val aad = BundleHeader.fixedFields(created, expiry, message.kind.priorityClass, padded, count, 1, hashes) +
+        val aad = BundleHeader.fixedFields(created, expiry, priorityClass, padded, count, 1, hashes, version) +
             byteArrayOf(0) + tag
         val slot = sealSlot(tag, aad, sender, senderNodeId, recipientMailbox, recipientNodeId, cek, random)
         cek.fill(0)
-        val header = BundleHeader.build(created, expiry, message.kind.priorityClass, padded, listOf(slot), hashes)
+        val header = BundleHeader.build(created, expiry, priorityClass, padded, listOf(slot), hashes, version)
         return SealedBundle(header, chunks)
+    }
+
+    private fun sealChunks(plaintext: ByteArray, key: ByteArray, count: Int): List<ByteArray> = List(count) { index ->
+        val start = index * StoreForwardFormat.CHUNK_PLAINTEXT_BYTES
+        val end = minOf(plaintext.size, start + StoreForwardFormat.CHUNK_PLAINTEXT_BYTES)
+        MeshAead.encrypt(key, index.toLong(), plaintext.copyOfRange(start, end), chunkAad(index, count))
+    }
+
+    /**
+     * Seals one file segment as a class 4 bundle: no key slot, the pair's daily tag, chunks under the [segmentKey]
+     * derived from the file key ([SegmentMath.segmentKey]). [paddedLength] is [SegmentMath.paddedLength] of the data:
+     * a full segment is not padded. A segment key must seal exactly one plaintext (nonce = chunk index), so the
+     * caller never seals the same index twice for one file key.
+     */
+    fun sealBulk(
+        inner: ByteArray,
+        paddedLength: Int,
+        segmentKey: ByteArray,
+        pairTag: ByteArray,
+        nowMs: Long,
+        ttlHours: Int,
+    ): SealedBundle {
+        require(ttlHours in 1..StoreForwardFormat.MAX_TTL_HOURS) { "Invalid message lifetime" }
+        require(segmentKey.size == 32 && pairTag.size == StoreForwardFormat.TAG_BYTES)
+        require(paddedLength in inner.size + 4..StoreForwardFormat.MAX_PADDED_BYTES) { "Invalid segment padding" }
+        val plaintext = ByteArray(paddedLength)
+        writeInt(plaintext, 0, inner.size)
+        System.arraycopy(inner, 0, plaintext, 4, inner.size)
+        val count = StoreForwardFormat.chunkCount(paddedLength)
+        val chunks = sealChunks(plaintext, segmentKey, count)
+        plaintext.fill(0)
+        val created = StoreForwardFormat.hourOf(nowMs)
+        val header = BundleHeader.build(
+            created, created + ttlHours, StoreForwardFormat.BULK_CLASS, paddedLength, emptyList(),
+            chunks.map(StoreForwardFormat::chunkHash), StoreForwardFormat.BUNDLE_VERSION_V3, pairTag,
+        )
+        return SealedBundle(header, chunks)
+    }
+
+    /**
+     * Decrypts a complete class 4 bundle under [segmentKey] and returns the inner bytes. Every chunk hash, tag and the
+     * zero padding are verified; any failure throws.
+     */
+    fun openBulk(header: BundleHeader, chunks: List<ByteArray>, segmentKey: ByteArray): ByteArray {
+        require(header.isBulk) { "Not a bulk bundle" }
+        require(chunks.size == header.chunkCount) { "Bundle is incomplete" }
+        chunks.forEachIndexed { index, chunk -> require(header.verifyChunk(index, chunk)) { "Chunk $index failed its hash" } }
+        return decryptInner(header, chunks, segmentKey)
+    }
+
+    /** As [open] but returns the inner bytes without decoding them (Messaging v2 decodes a `BSM2`). */
+    fun openRaw(
+        header: BundleHeader,
+        chunks: List<ByteArray>,
+        recipient: MailboxKey,
+        recipientNodeId: NodeId,
+        isKnownSender: (NodeId, ByteArray) -> Boolean,
+    ): OpenedRaw {
+        require(!header.isBulk) { "A bulk bundle has no key slot" }
+        require(chunks.size == header.chunkCount) { "Bundle is incomplete" }
+        chunks.forEachIndexed { index, chunk -> require(header.verifyChunk(index, chunk)) { "Chunk $index failed its hash" } }
+        val slot = authenticate(header, recipient, recipientNodeId, isKnownSender)
+        val cek = slot.contentKey
+        try {
+            return OpenedRaw(slot.senderNodeId, slot.senderMailbox, decryptInner(header, chunks, cek))
+        } finally {
+            cek.fill(0)
+        }
+    }
+
+    private fun decryptInner(header: BundleHeader, chunks: List<ByteArray>, key: ByteArray): ByteArray {
+        val plaintext = ByteArrayOutputStream(header.paddedLength)
+        chunks.forEachIndexed { index, chunk ->
+            plaintext.write(MeshAead.decrypt(key, index.toLong(), chunk, chunkAad(index, header.chunkCount)))
+        }
+        val padded = plaintext.toByteArray()
+        val innerLength = readInt(padded, 0)
+        require(innerLength in 0..padded.size - 4) { "Invalid padded content length" }
+        for (i in 4 + innerLength until padded.size) require(padded[i].toInt() == 0) { "Invalid padding" }
+        return padded.copyOfRange(4, 4 + innerLength)
     }
 
     /**
@@ -608,23 +765,9 @@ object StoreForwardSeal {
         recipientNodeId: NodeId,
         isKnownSender: (NodeId, ByteArray) -> Boolean,
     ): OpenedBundle {
-        require(chunks.size == header.chunkCount) { "Bundle is incomplete" }
-        chunks.forEachIndexed { index, chunk -> require(header.verifyChunk(index, chunk)) { "Chunk $index failed its hash" } }
-        val slot = authenticate(header, recipient, recipientNodeId, isKnownSender)
-        val cek = slot.contentKey
-        try {
-            val plaintext = ByteArrayOutputStream(header.paddedLength)
-            chunks.forEachIndexed { index, chunk ->
-                plaintext.write(MeshAead.decrypt(cek, index.toLong(), chunk, chunkAad(index, header.chunkCount)))
-            }
-            val padded = plaintext.toByteArray()
-            val innerLength = readInt(padded, 0)
-            require(innerLength in 0..padded.size - 4) { "Invalid padded content length" }
-            for (i in 4 + innerLength until padded.size) require(padded[i].toInt() == 0) { "Invalid padding" }
-            return OpenedBundle(slot.senderNodeId, slot.senderMailbox, BundleMessage.decode(padded.copyOfRange(4, 4 + innerLength)))
-        } finally {
-            cek.fill(0)
-        }
+        require(header.version == StoreForwardFormat.BUNDLE_VERSION) { "Only a version 2 bundle holds a BSM1" }
+        val raw = openRaw(header, chunks, recipient, recipientNodeId, isKnownSender)
+        return OpenedBundle(raw.senderNodeId, raw.senderMailbox, BundleMessage.decode(raw.inner))
     }
 
     private fun sealSlot(

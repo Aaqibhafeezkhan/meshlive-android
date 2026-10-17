@@ -35,15 +35,52 @@ internal class CallResolutionLadder(
     val requested: VideoResolution,
     rungs: List<VideoResolution>,
     private val codecId: Int,
+    /**
+     * Measured Auto ladder only (AutoQualityFeature): {largest pixel count, minimum start bps}
+     * thresholds from [AutoQualityLadder.callLimits] replacing the WebRTC table. The WebRTC AV1
+     * 640x360 limit (256 kbps) is 40% above the measured crossover (360p15 at 150 kbps already scores
+     * above 240p15 at 300), and the app's former 350 kbps "WebRTC VP9 360p" rationale never matched
+     * the table (640x360 is 190 kbps; 350 is the 960x540 entry). Null keeps the WebRTC table.
+     */
+    private val limits: List<Pair<Long, Int>>? = null,
+    /** Measured Auto ladder: step down sooner (the rate controller's target is already debounced). */
+    private val downHoldMs: Long = DOWN_HOLD_MS,
+    private val upHoldMs: Long = UP_HOLD_MS,
+    private val upMinIntervalMs: Long = UP_MIN_INTERVAL_MS,
+    private val downMinIntervalMs: Long = DOWN_MIN_INTERVAL_MS,
+    /**
+     * Measured Auto ladder: a start limit per size (bps) instead of one per bucket, so an off-grid
+     * camera mode such as 640x480 or 720x480 is judged by its own pixel count. [limits] still
+     * partitions sizes into rungs. Null keeps the per-bucket limit.
+     */
+    private val startLimit: ((VideoResolution) -> Int)? = null,
 ) {
     /** Rungs from largest to smallest; the first is always [requested]. */
-    val rungs: List<VideoResolution> = buildRungs(requested, rungs, codecId)
+    val rungs: List<VideoResolution> = buildRungs(requested, rungs, codecId, limits)
+
+    private fun minStart(resolution: VideoResolution): Int =
+        startLimit?.invoke(resolution) ?: minStartBps(codecId, resolution, limits)
 
     var current: VideoResolution = requested
         private set
 
     private var lowSinceMs = -1L
     private var highSinceMs = -1L
+    private var overloadSinceMs = -1L
+    private var upBlockedUntilMs = Long.MIN_VALUE
+
+    /**
+     * Measured Auto ladder: false holds every step up (the latency guard, [ClimbGuard]); the hold timer
+     * restarts when the gate closes. Null: always open.
+     */
+    var climbGate: ((nowMs: Long) -> Boolean)? = null
+
+    /**
+     * Measured Auto ladder, streams: a step down also needs this to be true (sustained congestion
+     * evidence), so a target that fell on its own never changes the picture size. The low-target timer
+     * keeps running while it is false. Null: always open.
+     */
+    var downGate: ((nowMs: Long) -> Boolean)? = null
     private var lastChangeMs = Long.MIN_VALUE / 2
 
     val active: Boolean get() = rungs.size > 1
@@ -67,11 +104,13 @@ internal class CallResolutionLadder(
     fun onTarget(targetBps: Int, nowMs: Long): Decision? {
         if (!active) return null
         val index = rungs.indexOf(current)
-        val currentLimit = minStartBps(codecId, current)
+        val currentLimit = minStart(current)
         if (targetBps < currentLimit && index < rungs.lastIndex) {
             highSinceMs = -1L
             if (lowSinceMs < 0L) lowSinceMs = nowMs
-            if (nowMs - lowSinceMs >= DOWN_HOLD_MS && nowMs - lastChangeMs >= DOWN_MIN_INTERVAL_MS) {
+            if (nowMs - lowSinceMs >= downHoldMs && nowMs - lastChangeMs >= downMinIntervalMs &&
+                downGate?.invoke(nowMs) != false
+            ) {
                 return change(largestRungFor(targetBps), "weak_link", targetBps, nowMs)
             }
             return null
@@ -82,15 +121,43 @@ internal class CallResolutionLadder(
             return null
         }
         val larger = rungs[index - 1]
-        if (targetBps >= minStartBps(codecId, larger) * UP_HEADROOM) {
+        if (targetBps >= minStart(larger) * UP_HEADROOM && climbGate?.invoke(nowMs) != false) {
             if (highSinceMs < 0L) highSinceMs = nowMs
-            if (nowMs - highSinceMs >= UP_HOLD_MS && nowMs - lastChangeMs >= UP_MIN_INTERVAL_MS) {
+            if (nowMs - highSinceMs >= upHoldMs && nowMs - lastChangeMs >= upMinIntervalMs && nowMs >= upBlockedUntilMs) {
                 return change(larger, "link_recovered", targetBps, nowMs)
             }
         } else {
             highSinceMs = -1L
         }
         return null
+    }
+
+    /**
+     * Measured Auto ladder: the software encoder's live p95 encode time as a fraction of the frame
+     * interval ([load], null when unknown). Over [ENCODER_OVERLOAD] for [ENCODER_HOLD_MS] steps one rung
+     * down whatever the link says (a frame rate that flips between 10 and 15 FPS cannot help an encoder
+     * that does not fit the picture), and blocks steps up for [ENCODER_UP_BLOCK_MS].
+     */
+    fun onEncoderLoad(load: Double?, nowMs: Long): Decision? {
+        if (!active || load == null || load <= ENCODER_OVERLOAD) {
+            overloadSinceMs = -1L
+            return null
+        }
+        if (overloadSinceMs < 0L) overloadSinceMs = nowMs
+        val index = rungs.indexOf(current)
+        if (nowMs - overloadSinceMs < ENCODER_HOLD_MS || nowMs - lastChangeMs < DOWN_MIN_INTERVAL_MS ||
+            index >= rungs.lastIndex
+        ) {
+            return null
+        }
+        val to = rungs[index + 1]
+        current = to
+        lastChangeMs = nowMs
+        lowSinceMs = -1L
+        highSinceMs = -1L
+        overloadSinceMs = -1L
+        upBlockedUntilMs = nowMs + ENCODER_UP_BLOCK_MS
+        return Decision(to, "encoder_load(load=${"%.2f".format(load)},limitKbps=${minStart(to) / 1_000})")
     }
 
     private fun change(to: VideoResolution, why: String, targetBps: Int, nowMs: Long): Decision? {
@@ -103,10 +170,10 @@ internal class CallResolutionLadder(
     }
 
     private fun reason(why: String, targetBps: Int, to: VideoResolution): String =
-        "$why(targetKbps=${targetBps / 1_000},limitKbps=${minStartBps(codecId, to) / 1_000})"
+        "$why(targetKbps=${targetBps / 1_000},limitKbps=${minStart(to) / 1_000})"
 
     private fun largestRungFor(targetBps: Int): VideoResolution =
-        rungs.firstOrNull { minStartBps(codecId, it) <= targetBps } ?: rungs.last()
+        rungs.firstOrNull { minStart(it) <= targetBps } ?: rungs.last()
 
     companion object {
         const val DOWN_HOLD_MS = 3_000L
@@ -114,6 +181,9 @@ internal class CallResolutionLadder(
         const val UP_HOLD_MS = 10_000L
         const val UP_MIN_INTERVAL_MS = 15_000L
         const val UP_HEADROOM = 1.25
+        const val ENCODER_OVERLOAD = 1.0
+        const val ENCODER_HOLD_MS = 3_000L
+        const val ENCODER_UP_BLOCK_MS = 60_000L
         const val ASPECT_TOLERANCE = 0.02
         const val FLOOR_PIXELS = 320L * 180
 
@@ -130,14 +200,16 @@ internal class CallResolutionLadder(
             960L * 540 to 384_000, 1280L * 720 to 576_000, 1920L * 1080 to 1_000_000,
         )
 
-        private fun limits(codecId: Int) = if (codecId == StreamProtocol.CODEC_AV1) AV1_LIMITS else VP9_LIMITS
+        private fun limits(codecId: Int, override: List<Pair<Long, Int>>? = null) =
+            override ?: if (codecId == StreamProtocol.CODEC_AV1) AV1_LIMITS else VP9_LIMITS
 
         /** The table entry index for [pixels]: the smallest entry at least as large (last when larger). */
-        private fun bucket(codecId: Int, pixels: Long): Int =
-            limits(codecId).indexOfFirst { it.first >= pixels }.let { if (it < 0) limits(codecId).lastIndex else it }
+        private fun bucket(codecId: Int, pixels: Long, override: List<Pair<Long, Int>>? = null): Int =
+            limits(codecId, override).indexOfFirst { it.first >= pixels }
+                .let { if (it < 0) limits(codecId, override).lastIndex else it }
 
-        fun minStartBps(codecId: Int, resolution: VideoResolution): Int =
-            limits(codecId)[bucket(codecId, resolution.width.toLong() * resolution.height)].second
+        fun minStartBps(codecId: Int, resolution: VideoResolution, override: List<Pair<Long, Int>>? = null): Int =
+            limits(codecId, override)[bucket(codecId, resolution.width.toLong() * resolution.height, override)].second
 
         private fun pixels(resolution: VideoResolution) = resolution.width.toLong() * resolution.height
 
@@ -145,15 +217,16 @@ internal class CallResolutionLadder(
             requested: VideoResolution,
             offered: List<VideoResolution>,
             codecId: Int,
+            override: List<Pair<Long, Int>>? = null,
         ): List<VideoResolution> {
             val aspect = requested.width.toDouble() / requested.height
-            val requestedBucket = bucket(codecId, pixels(requested))
+            val requestedBucket = bucket(codecId, pixels(requested), override)
             val smaller = offered
                 .filter { kotlin.math.abs(it.width.toDouble() / it.height - aspect) / aspect <= ASPECT_TOLERANCE }
                 .filter { pixels(it) < pixels(requested) && pixels(it) >= FLOOR_PIXELS }
-                .filter { bucket(codecId, pixels(it)) < requestedBucket }
+                .filter { bucket(codecId, pixels(it), override) < requestedBucket }
                 .sortedByDescending(::pixels)
-                .distinctBy { bucket(codecId, pixels(it)) }
+                .distinctBy { bucket(codecId, pixels(it), override) }
             return listOf(requested) + smaller
         }
     }

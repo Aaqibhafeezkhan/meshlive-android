@@ -1,0 +1,6 @@
+0.3.0-beta: new look, voice calls, audio-only live.
+- Go live with video, or audio only like a radio.
+- Voice calls, ringing, answer from the lock screen.
+- Redesigned Settings, Contacts and a step-by-step welcome.
+- Stream titles shown in the list. Finds iPhones.
+- Smoother streams on slow links; Bluetooth off/on no longer breaks a stream.

@@ -110,6 +110,76 @@ class CodecPolicyTest {
         assertFalse(DebugTunables.encoderFramerateAdjuster)
     }
 
+    private val exynosLl = DecoderOption("OMX.Exynos.VP9.Decoder", alias = false, softwareOnly = false, hardware = true, lowLatency = true)
+    private val qcomPlain = DecoderOption("c2.qti.vp9.decoder", alias = false, softwareOnly = false, hardware = true)
+    private val qcomLl = DecoderOption("c2.qti.vp9.decoder.low_latency", alias = false, softwareOnly = false, hardware = true, lowLatency = true)
+    private val softLl = DecoderOption("c2.android.vp9.decoder", alias = false, softwareOnly = true, hardware = false, lowLatency = true)
+
+    @Test
+    fun lowLatencyOrderIsOffByDefaultAndChangesNothing() {
+        val options = listOf(qcomPlain, exynosLl, softLl, qcomLl)
+        assertEquals(
+            listOf("c2.qti.vp9.decoder", "OMX.Exynos.VP9.Decoder", "c2.qti.vp9.decoder.low_latency"),
+            CodecPolicy.decoderInitCandidates(null, DecoderRequest.NONE, "c2.qti.vp9.decoder", options, fallback = true),
+        )
+        assertEquals(
+            listOf("c2.qti.vp9.decoder"),
+            CodecPolicy.decoderInitCandidates(null, DecoderRequest.NONE, "c2.qti.vp9.decoder", options, fallback = false),
+        )
+    }
+
+    @Test
+    fun lowLatencyFirstPutsHardwareDecodersThatDeclareTheFeatureBeforeTheFrameworkChoice() {
+        val options = listOf(qcomPlain, exynosLl, softLl, qcomLl)
+        assertEquals(
+            listOf("OMX.Exynos.VP9.Decoder", "c2.qti.vp9.decoder.low_latency", "c2.qti.vp9.decoder"),
+            CodecPolicy.decoderInitCandidates(null, DecoderRequest.NONE, "c2.qti.vp9.decoder", options, fallback = true,
+                lowLatencyFirst = true),
+        )
+        // A benchmark launch (no fallback) still names one decoder: the first low-latency hardware one.
+        assertEquals(
+            listOf("OMX.Exynos.VP9.Decoder"),
+            CodecPolicy.decoderInitCandidates(null, DecoderRequest.NONE, "c2.qti.vp9.decoder", options, fallback = false,
+                lowLatencyFirst = true),
+        )
+        // No hardware decoder declares it: unchanged, and a software one never jumps the queue.
+        assertEquals(
+            listOf("c2.qti.vp9.decoder", "c2.android.vp9.decoder"),
+            CodecPolicy.decoderInitCandidates(null, DecoderRequest.NONE, "c2.qti.vp9.decoder", listOf(qcomPlain, softLl),
+                fallback = true, lowLatencyFirst = true),
+        )
+    }
+
+    @Test
+    fun lowLatencyFirstNeverOverridesAnExplicitOrProtectedRequest() {
+        val options = listOf(qcomPlain, exynosLl, softLl)
+        assertEquals(
+            listOf("c2.qti.vp9.decoder"),
+            CodecPolicy.decoderInitCandidates("c2.qti.vp9.decoder", DecoderRequest.EXPLICIT, "OMX.Exynos.VP9.Decoder", options,
+                fallback = true, lowLatencyFirst = true),
+        )
+        assertEquals(
+            listOf("c2.android.vp9.decoder"),
+            CodecPolicy.decoderInitCandidates("c2.android.vp9.decoder", DecoderRequest.SOFTWARE_PROTECTION, "c2.qti.vp9.decoder",
+                options, fallback = true, lowLatencyFirst = true),
+        )
+        assertEquals(
+            listOf("c2.qti.vp9.decoder"),
+            CodecPolicy.decoderInitCandidates("c2.qti.vp9.decoder", DecoderRequest.EXPLICIT, null, options,
+                fallback = false, lowLatencyFirst = true),
+        )
+    }
+
+    @Test
+    fun theSelectionReasonNamesTheLowLatencyOrderOnlyWhenItChangedTheFirstChoice() {
+        assertEquals("low-latency-first",
+            CodecPolicy.decoderSelectionReason(null, DecoderRequest.NONE, "OMX.Exynos.VP9.Decoder", 0, lowLatencyReordered = true))
+        assertEquals("framework",
+            CodecPolicy.decoderSelectionReason(null, DecoderRequest.NONE, "c2.qti.vp9.decoder", 0))
+        assertEquals("fallback",
+            CodecPolicy.decoderSelectionReason(null, DecoderRequest.NONE, "c2.qti.vp9.decoder", 1, lowLatencyReordered = true))
+    }
+
     @Test
     fun codecAndYuvEntriesAreInTheOneRegistryWithTheirArea() {
         val ids = DeviceFamilyPolicy.entries.associateBy { it.id }

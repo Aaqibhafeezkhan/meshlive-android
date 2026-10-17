@@ -84,7 +84,16 @@ object StreamProtocol {
         val audioCodecId: Int,
         val audioSampleRate: Int,
         val audioChannelCount: Int,
+        /**
+         * Audio-only live streams (BTL1): the preset (1 Low data, 2 Voice, 3 Music), else 0 for a video stream.
+         * Such a header has no video fields (width, height, FPS and codec are 0).
+         */
+        val audioLivePreset: Int = 0,
+        /** The signer block of a BTL1 header (stream key, certifying identity key and certificate), else null. */
+        val audioLiveAuth: AudioLiveHeaderAuth? = null,
     ) {
+        val isAudioOnly: Boolean
+            get() = audioLivePreset != 0
         val displayWidth: Int
             get() = if (rotationDegrees == 90 || rotationDegrees == 270) height else width
         val displayHeight: Int
@@ -175,9 +184,21 @@ object StreamProtocol {
         return quarterTurns * 90
     }
 
-    fun readHeader(input: InputStream): Header {
+    /** Writes the audio-only live header: the 11 fixed bytes, then the signer block (PROTOCOL "Stream header BTL1"). */
+    fun writeAudioLiveHeader(output: OutputStream, preset: Int, auth: AudioLiveHeaderAuth) {
+        require(AudioLive.isValidPreset(preset)) { "Invalid audio live preset $preset" }
+        output.write(AudioLive.fixedHeader(preset))
+        auth.writeTo(output)
+    }
+
+    /**
+     * [allowAudioOnly] false (the default, and every call and video-only caller) behaves exactly as before the
+     * audio-only stream kind: a `BTL1` header is "Unsupported stream header BTL1", never a video format.
+     */
+    fun readHeader(input: InputStream, allowAudioOnly: Boolean = false): Header {
         val data = DataInputStream(input)
         val version = String(data.readFullyBytes(4), Charsets.US_ASCII)
+        if (allowAudioOnly && version == AudioLive.HEADER_MAGIC_TEXT) return readAudioLiveHeaderBody(data)
         require(version == "BTV3") { "Unsupported stream header $version" }
         val width = data.readUnsignedShort()
         val height = data.readUnsignedShort()
@@ -208,6 +229,34 @@ object StreamProtocol {
             audioCodecId,
             audioSampleRate,
             audioChannelCount,
+        )
+    }
+
+    private fun readAudioLiveHeaderBody(data: DataInputStream): Header {
+        val audioCodecId = data.readUnsignedByte()
+        val sampleRate = data.readUnsignedShort()
+        val channels = data.readUnsignedByte()
+        val frameMs = data.readUnsignedByte()
+        val preset = data.readUnsignedByte()
+        val reserved = data.readUnsignedByte()
+        require(audioCodecId == AUDIO_CODEC_OPUS && sampleRate == AUDIO_SAMPLE_RATE &&
+            channels == AUDIO_CHANNEL_COUNT && frameMs == AudioLive.FRAME_MS) {
+            "Unsupported audio live format $audioCodecId/$sampleRate/$channels/$frameMs"
+        }
+        require(AudioLive.isValidPreset(preset)) { "Unsupported audio live preset $preset" }
+        require(reserved == 0) { "Reserved audio live header byte is set" }
+        val auth = AudioLiveHeaderAuth.readFrom(data)
+        return Header(
+            width = 0,
+            height = 0,
+            fps = 0,
+            codecId = 0,
+            rotationDegrees = 0,
+            audioCodecId = audioCodecId,
+            audioSampleRate = sampleRate,
+            audioChannelCount = channels,
+            audioLivePreset = preset,
+            audioLiveAuth = auth,
         )
     }
 

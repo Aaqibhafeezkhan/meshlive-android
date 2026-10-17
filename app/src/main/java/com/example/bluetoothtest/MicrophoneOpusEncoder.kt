@@ -2,8 +2,11 @@ package com.example.bluetoothtest
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.hardware.SensorPrivacyManager
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioRecordingConfiguration
 import android.media.AudioTimestamp
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -14,15 +17,30 @@ import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AudioEffect
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import java.io.Closeable
 import java.io.File
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
+
+/**
+ * Optional platform facts and callbacks for [MicrophoneOpusEncoder] (batch U root hook: MainActivity passes these in
+ * `startPrivateCallMedia`). Every default keeps the encoder's former behaviour.
+ */
+class AudioCaptureHooks(
+    /** Lets the encoder ask SensorPrivacyManager whether the phone has a microphone privacy toggle. */
+    val context: Context? = null,
+    /** True while call audio plays from the loudspeaker (for the one-time echo hint). */
+    val routeIsLoudspeaker: () -> Boolean = { false },
+    /** A user-visible notice (toast or banner); also sent through the encoder's status callback. */
+    val onNotice: (AudioCaptureNotice) -> Unit = {},
+)
 
 class MicrophoneOpusEncoder(
     private val onPacket: (flags: Int, timeUs: Long, bytes: ByteArray) -> Unit,
@@ -36,6 +54,7 @@ class MicrophoneOpusEncoder(
     private val debugReferenceClock: () -> RawReferenceClock? = { null },
     private val debugTraceContext: Context? = null,
     private val debugTraceSession: String? = null,
+    private val hooks: AudioCaptureHooks = AudioCaptureHooks(),
 ) : Closeable {
     private val running = AtomicBoolean(false)
     @Volatile private var recorder: AudioRecord? = null
@@ -48,6 +67,19 @@ class MicrophoneOpusEncoder(
     private var effectSummary = ""
     private var referenceInput: ReferencePcmInput? = null
     private var debugAudioTrace: DebugAudioTrace? = null
+    private val effectOutcomes = mutableListOf<EffectOutcome>()
+    private var effectDetail = ""
+    @Volatile private var captureSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION
+    private var captureBufferBytes = 0
+    @Volatile private var startAttempts = 0
+    @Volatile private var clientSilenced: Boolean? = null
+    @Volatile private var aecInFramework: Boolean? = null
+    private var recordingCallback: AudioManager.AudioRecordingCallback? = null
+    private var callbackRecorder: AudioRecord? = null
+    private val noticeLimiter = NoticeLimiter()
+    private val callbackExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "MicRecordingCallback").apply { isDaemon = true }
+    }
 
     private data class PcmFrame(
         val bytes: ByteArray,
@@ -81,32 +113,42 @@ class MicrophoneOpusEncoder(
                     catch (error: Throwable) { input.close(); throw error }
                 }
             }
-            val activeNative = if (communicationMode && DebugTunables.callNativeOpus) startNativeEncoder() else null
-            nativeEncoder = activeNative
-            val encoderName: String
-            val activeCodec: MediaCodec?
-            if (activeNative != null) {
-                encoderName = "libopus ${NativeOpusBridge.nativeOpusVersion()}"
-                activeCodec = null
-            } else {
-                encoderName = MediaCodecList(MediaCodecList.ALL_CODECS).findEncoderForFormat(format)
-                    ?: error("This phone has no Opus audio encoder")
-                activeCodec = MediaCodec.createByCodecName(encoderName).apply {
-                    configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                    start()
-                }
-                codec = activeCodec
-                if (communicationMode) {
-                    Log.i(
-                        "BluetoothVideo",
-                        "BENCHMARK audio_codec: role=encoder | impl=mediacodec | " +
-                            "requested=${if (DebugTunables.callNativeOpus) "native" else "mediacodec"} | " +
-                            "name=$encoderName | fec=off | plc=n/a | kbps=${bitRate / 1_000}",
-                    )
+            var activeNative = if (communicationMode && DebugTunables.callNativeOpus) startNativeEncoder() else null
+            var encoderName = ""
+            var activeCodec: MediaCodec? = null
+            if (activeNative == null) {
+                val created = runCatching { createMediaCodecOpusEncoder(format) }
+                if (created.isSuccess) {
+                    val (name, codecInstance) = created.getOrThrow()
+                    encoderName = name
+                    activeCodec = codecInstance
+                    codec = codecInstance
+                    if (communicationMode) {
+                        Log.i(
+                            "BluetoothVideo",
+                            "BENCHMARK audio_codec: role=encoder | impl=mediacodec | " +
+                                "requested=${if (DebugTunables.callNativeOpus) "native" else "mediacodec"} | " +
+                                "name=$name | fec=off | plc=n/a | kbps=${bitRate / 1_000}",
+                        )
+                    }
+                } else {
+                    // U-08: a phone without a working MediaCodec Opus encoder (CDD makes it mandatory, so rare)
+                    // falls back to the bundled libopus instead of ending the call or stream audio.
+                    val failure = created.exceptionOrNull() ?: IllegalStateException("No Opus audio encoder")
+                    activeNative = if (AudioSwitches.policyActive(OPUS_ENCODER_FALLBACK_ID)) {
+                        startNativeEncoder(requested = "mediacodec", reason = "mediacodec_unavailable:${failure.message}")
+                    } else {
+                        null
+                    }
+                    if (activeNative == null) throw failure
                 }
             }
+            nativeEncoder = activeNative
+            val nativeActive = activeNative
+            val codecActive = activeCodec
+            if (nativeActive != null) encoderName = "libopus ${NativeOpusBridge.nativeOpusVersion()}"
             val startEncoding: () -> Unit = {
-                if (activeNative != null) nativeEncodeLoop(activeNative) else encodeLoop(checkNotNull(activeCodec))
+                if (nativeActive != null) nativeEncodeLoop(nativeActive) else encodeLoop(checkNotNull(codecActive))
             }
 
             debugAudioTrace = DebugAudioTrace.startIfRequested(debugTraceContext, debugTraceSession, "sender")
@@ -122,44 +164,24 @@ class MicrophoneOpusEncoder(
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
             )
-            require(minimumBuffer > 0) { "Microphone does not support 48 kHz mono PCM" }
-            val activeRecorder = AudioRecord.Builder()
-                .setAudioSource(
-                    if (communicationMode) MediaRecorder.AudioSource.VOICE_COMMUNICATION
-                    else MediaRecorder.AudioSource.CAMCORDER,
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setSampleRate(StreamProtocol.AUDIO_SAMPLE_RATE)
-                        .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .build(),
-                )
-                .setBufferSizeInBytes(maxOf(minimumBuffer, PCM_BYTES_PER_FRAME * 4))
-                .build()
-            require(activeRecorder.state == AudioRecord.STATE_INITIALIZED) {
-                "Microphone could not be initialized"
-            }
+            MinBufferCheck.captureProblem(minimumBuffer)?.let { error(it) }
+            captureBufferBytes = maxOf(minimumBuffer, PCM_BYTES_PER_FRAME * 4)
+            val source = CaptureSourceChain.forMode(communicationMode).first()
+            val activeRecorder = buildRecorder(source)
+            captureSource = source
             recorder = activeRecorder
+            registerRecordingCallback(activeRecorder)
             if (communicationMode) enableCallAudioEffects(activeRecorder.audioSessionId)
-            activeRecorder.startRecording()
-            require(activeRecorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                "Microphone did not start recording"
-            }
-            onStatus(
-                "Microphone audio: Opus mono at ${bitRate / 1_000} kbps " +
-                    "via $encoderName" + if (communicationMode) " with call echo control" else "",
-            )
-            Log.i(
-                "BluetoothVideo",
-                "BENCHMARK audio_capture: source=${if (communicationMode) "VOICE_COMMUNICATION" else "CAMCORDER"} | " +
-                    "encoder=$encoderName | kbps=${bitRate / 1_000} | " +
-                    "complexity=${activeCodec?.let(::encoderComplexity) ?: OPUS_COMPLEXITY.toString()} | " +
-                    "effects=${effectSummary.ifEmpty { "none-requested" }}",
-            )
+            val firstStartOk = startRecordingOnce(activeRecorder, attempt = 1)
+            val retryEnabled = AudioSwitches.policyActive(CAPTURE_WATCHDOG_ENTRY_ID)
+            if (!firstStartOk && !retryEnabled) error("Microphone did not start recording")
+            // U-04: a failed first start is retried on the capture thread (two more attempts, 250 ms apart) so the
+            // caller (the UI thread in a call) never sleeps; the call keeps going and the encoder is ready.
+            val announce: () -> Unit = { announceCapture(encoderName, codecActive) }
+            if (firstStartOk) announce()
 
             captureWorker = thread(name = "MicrophoneCapture") {
-                captureLoop(activeRecorder)
+                captureLoop(activeRecorder, retryStart = !firstStartOk, announce = announce)
             }
             encoderWorker = thread(name = "MicrophoneOpusEncoder") {
                 startEncoding()
@@ -169,6 +191,205 @@ class MicrophoneOpusEncoder(
             releaseResources()
             throw error
         }
+    }
+
+    /**
+     * [start] on the audio command thread when `test_audio_off_main` is on and the caller is the main thread,
+     * otherwise inline. [onResult] gets the failure or null; with the switch on it runs on the audio command
+     * thread, so a UI caller must hop to its own thread.
+     */
+    fun startOffMain(onResult: (Throwable?) -> Unit) {
+        AudioCommandQueue.shared.offloadForResult("mic_encoder_start", { start() }) { result ->
+            onResult(result.exceptionOrNull())
+        }
+    }
+
+    private fun createMediaCodecOpusEncoder(format: MediaFormat): Pair<String, MediaCodec> {
+        val encoderName = MediaCodecList(MediaCodecList.ALL_CODECS).findEncoderForFormat(format)
+            ?: error("This phone has no Opus audio encoder")
+        val created = MediaCodec.createByCodecName(encoderName)
+        try {
+            created.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            created.start()
+        } catch (error: Exception) {
+            runCatching { created.release() }
+            throw error
+        }
+        return encoderName to created
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun buildRecorder(source: Int): AudioRecord {
+        val built = AudioRecord.Builder()
+            .setAudioSource(source)
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setSampleRate(StreamProtocol.AUDIO_SAMPLE_RATE)
+                    .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .build(),
+            )
+            .setBufferSizeInBytes(captureBufferBytes)
+            .build()
+        if (built.state != AudioRecord.STATE_INITIALIZED) {
+            runCatching { built.release() }
+            error("Microphone could not be initialized")
+        }
+        return built
+    }
+
+    /** One start attempt: stop a half-started recorder, start, and report whether it records. Never throws. */
+    private fun startRecordingOnce(target: AudioRecord, attempt: Int): Boolean {
+        if (attempt > 1) runCatching { target.stop() }
+        val failure = runCatching { target.startRecording() }.exceptionOrNull()
+        val recording = failure == null && target.recordingState == AudioRecord.RECORDSTATE_RECORDING
+        if (attempt > 1 || !recording) {
+            Log.i(
+                "BluetoothVideo",
+                "BENCHMARK audio_capture_start: attempt=$attempt | recording=$recording | source=${CaptureSourceChain.label(captureSource)} | " +
+                    "error=${failure?.let { it.javaClass.simpleName + ":" + it.message } ?: "none"}",
+            )
+        }
+        startAttempts = attempt
+        return recording
+    }
+
+    private fun announceCapture(encoderName: String, activeCodec: MediaCodec?) {
+        onStatus(
+            "Microphone audio: Opus mono at ${bitRate / 1_000} kbps " +
+                "via $encoderName" + if (communicationMode) " with call echo control" else "",
+        )
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK audio_capture: source=${CaptureSourceChain.label(captureSource)} | " +
+                "encoder=$encoderName | kbps=${bitRate / 1_000} | " +
+                "complexity=${activeCodec?.let(::encoderComplexity) ?: OPUS_COMPLEXITY.toString()} | " +
+                "effects=${effectSummary.ifEmpty { "none-requested" }} | " +
+                "effectState=${effectDetail.ifEmpty { "none-requested" }} | startAttempts=$startAttempts",
+        )
+    }
+
+    /** The recording callback tells whether the platform silenced this client and which effects it really applies. */
+    @SuppressLint("NewApi")
+    private fun registerRecordingCallback(target: AudioRecord) {
+        unregisterRecordingCallback()
+        val sessionId = target.audioSessionId
+        val callback = object : AudioManager.AudioRecordingCallback() {
+            override fun onRecordingConfigChanged(configs: List<AudioRecordingConfiguration>) {
+                val mine = configs.firstOrNull { it.clientAudioSessionId == sessionId } ?: return
+                val silenced = mine.isClientSilenced
+                val aec = (mine.effects.orEmpty() + mine.clientEffects.orEmpty()).any { it.type == AudioEffect.EFFECT_TYPE_AEC }
+                val before = clientSilenced
+                clientSilenced = silenced
+                aecInFramework = aec
+                if (before != silenced) {
+                    Log.i(
+                        "BluetoothVideo",
+                        "BENCHMARK audio_capture_state: source=${CaptureSourceChain.label(captureSource)} | " +
+                            "clientSilenced=${before ?: "?"}->$silenced | aecInFramework=$aec",
+                    )
+                }
+            }
+        }
+        val registered = runCatching { target.registerAudioRecordingCallback(callbackExecutor, callback) }.isSuccess
+        if (registered) {
+            recordingCallback = callback
+            callbackRecorder = target
+        }
+    }
+
+    private fun unregisterRecordingCallback() {
+        val callback = recordingCallback ?: return
+        runCatching { callbackRecorder?.unregisterAudioRecordingCallback(callback) }
+        recordingCallback = null
+        callbackRecorder = null
+    }
+
+    @SuppressLint("NewApi")
+    @Suppress("DEPRECATION")
+    private fun micToggleSupported(): Boolean = runCatching {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return@runCatching false
+        val context = hooks.context ?: return@runCatching false
+        context.getSystemService(SensorPrivacyManager::class.java)
+            ?.supportsSensorToggle(SensorPrivacyManager.Sensors.MICROPHONE) == true
+    }.getOrDefault(false)
+
+    private fun emitNotice(notice: AudioCaptureNotice) {
+        if (!noticeLimiter.allow(notice, SystemClock.elapsedRealtime())) return
+        Log.i("BluetoothVideo", "BENCHMARK audio_capture_notice: notice=${notice.name}")
+        runCatching { hooks.onNotice(notice) }
+        runCatching { onStatus(notice.text) }
+    }
+
+    /** One-time echo hint, evaluated about one second after the start when the platform's effect report has arrived. */
+    private fun checkEchoRisk() {
+        if (!communicationMode || !AudioSwitches.policyActive(ECHO_HINT_ENTRY_ID)) return
+        val aec = effectOutcomes.firstOrNull { it.name == "aec" }
+        val aecEnabledByApp = aec?.let { it.created && it.finalEnabled == true }
+        val loudspeaker = runCatching { hooks.routeIsLoudspeaker() }.getOrDefault(false)
+        val risk = EchoRisk.atRisk(true, aecEnabledByApp, aecInFramework, loudspeaker)
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK audio_echo_risk: risk=$risk | aecEnabledByApp=${aecEnabledByApp ?: "?"} | " +
+                "aecInFramework=${aecInFramework ?: "?"} | loudspeaker=$loudspeaker",
+        )
+        if (risk) emitNotice(AudioCaptureNotice.ECHO_RISK)
+    }
+
+    /**
+     * Digital silence for two seconds: classify, tell the user, and (Experimental, `test_capture_source_fallback`)
+     * relax the source one step. Returns the recorder to read from next.
+     */
+    private fun onCaptureSilence(current: AudioRecord): AudioRecord {
+        val cause = SilenceClassifier.classify(clientSilenced)
+        val toggle = micToggleSupported()
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK audio_capture_silence: cause=${cause.name} | source=${CaptureSourceChain.label(captureSource)} | " +
+                "clientSilenced=${clientSilenced ?: "?"} | micToggleSupported=$toggle | " +
+                "sourceFallback=${AudioSwitches.captureSourceFallback}",
+        )
+        emitNotice(SilenceClassifier.notice(cause, toggle))
+        if (!SilenceClassifier.mayChangeSource(cause) || !AudioSwitches.captureSourceFallback) return current
+        val next = CaptureSourceChain.next(communicationMode, captureSource) ?: return current
+        return switchSource(current, next, "digital_silence_${CaptureSilenceDetector.THRESHOLD_MS}ms") ?: current
+    }
+
+    /**
+     * Rebuilds the AudioRecord on [source] (a relaxed source, or the same one after ERROR_DEAD_OBJECT). Effects are
+     * only attached to VOICE_COMMUNICATION. Returns the new recorder, or null when it could not be built (the old
+     * one then stays in place).
+     */
+    private fun switchSource(old: AudioRecord, source: Int, reason: String): AudioRecord? {
+        val requested = CaptureSourceChain.label(captureSource)
+        val next = runCatching { buildRecorder(source) }.getOrElse { error ->
+            Log.i("BluetoothVideo", "BENCHMARK audio_capture_fallback: requested=$requested | effective=$requested | reason=$reason | failed=${error.message}")
+            return null
+        }
+        recorder = next
+        captureSource = source
+        unregisterRecordingCallback()
+        audioEffects.forEach { effect -> runCatching { effect.release() } }
+        audioEffects.clear()
+        runCatching { old.stop() }
+        runCatching { old.release() }
+        registerRecordingCallback(next)
+        if (communicationMode && source == MediaRecorder.AudioSource.VOICE_COMMUNICATION) {
+            enableCallAudioEffects(next.audioSessionId)
+        } else {
+            effectSummary = "none-source-${CaptureSourceChain.label(source)}"
+            effectDetail = ""
+            effectOutcomes.clear()
+        }
+        val started = startRecordingOnce(next, attempt = 2)
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK audio_capture_fallback: requested=${CaptureSourceChain.label(CaptureSourceChain.forMode(communicationMode).first())} | " +
+                "effective=${CaptureSourceChain.label(source)} | reason=$reason | recording=$started | effects=$effectSummary",
+        )
+        if (started && source != CaptureSourceChain.forMode(communicationMode).first()) emitNotice(AudioCaptureNotice.SOURCE_FALLBACK)
+        // A recorder that did not start fails its first read and ends the call with the usual microphone error.
+        return next
     }
 
     private fun referenceCaptureLoop(input: ReferencePcmInput) {
@@ -219,25 +440,55 @@ class MicrophoneOpusEncoder(
         finally { captureWorker = null }
     }
 
-    private fun captureLoop(activeRecorder: AudioRecord) {
+    private fun captureLoop(initialRecorder: AudioRecord, retryStart: Boolean, announce: () -> Unit) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+        var current = initialRecorder
         var firstPresentationTimeUs = 0L
         var capturedSamples = 0L
         val captureTimestamp = AudioTimestamp()
         var captureTimestampLogged = false
         var captureTimestampAttempts = 0
+        val watchdogOn = AudioSwitches.policyActive(CAPTURE_WATCHDOG_ENTRY_ID)
+        val silence = CaptureSilenceDetector(FRAME_DURATION_US / 1_000L)
+        var deadObjectRebuilds = 0
+        var frames = 0L
         try {
+            if (retryStart) {
+                val started = CaptureStartRetry().runFrom(2, { running.get() }) { attempt ->
+                    startRecordingOnce(current, attempt)
+                }
+                if (started == null) {
+                    if (running.get()) error("Microphone did not start recording after ${CaptureStartRetry.ATTEMPTS} attempts")
+                    return
+                }
+                announce()
+            }
             while (running.get()) {
                 val bytes = ByteArray(PCM_BYTES_PER_FRAME)
                 var frameBytes = 0
                 while (running.get() && frameBytes < PCM_BYTES_PER_FRAME) {
-                    val bytesRead = activeRecorder.read(
+                    val bytesRead = current.read(
                         bytes,
                         frameBytes,
                         PCM_BYTES_PER_FRAME - frameBytes,
                         AudioRecord.READ_BLOCKING,
                     )
-                    if (bytesRead < 0) error("Microphone read failed ($bytesRead)")
+                    if (bytesRead < 0) {
+                        // ERROR_DEAD_OBJECT: audioserver restarted; rebuild the recorder (and effects) a few times.
+                        if (bytesRead == AudioRecord.ERROR_DEAD_OBJECT && watchdogOn && running.get() &&
+                            deadObjectRebuilds < MAX_DEAD_OBJECT_REBUILDS
+                        ) {
+                            deadObjectRebuilds++
+                            val rebuilt = switchSource(current, captureSource, "dead_object_$deadObjectRebuilds")
+                            if (rebuilt != null) {
+                                current = rebuilt
+                                frameBytes = 0
+                                silence.reset()
+                                continue
+                            }
+                        }
+                        error("Microphone read failed ($bytesRead)")
+                    }
                     frameBytes += bytesRead
                 }
                 if (frameBytes != PCM_BYTES_PER_FRAME) continue
@@ -249,7 +500,7 @@ class MicrophoneOpusEncoder(
                     capturedSamples * 1_000_000L / StreamProtocol.AUDIO_SAMPLE_RATE
                 if (!captureTimestampLogged && captureTimestampAttempts < 20) {
                     val status = runCatching {
-                        activeRecorder.getTimestamp(captureTimestamp, AudioTimestamp.TIMEBASE_BOOTTIME)
+                        current.getTimestamp(captureTimestamp, AudioTimestamp.TIMEBASE_BOOTTIME)
                     }.getOrDefault(AudioRecord.ERROR_INVALID_OPERATION)
                     captureTimestampAttempts++
                     if (status == AudioRecord.SUCCESS) {
@@ -264,6 +515,11 @@ class MicrophoneOpusEncoder(
                     }
                 }
                 capturedSamples += frameBytes / BYTES_PER_SAMPLE
+                frames++
+                if (watchdogOn) {
+                    if (silence.onFrame(PcmLevel.peak(bytes))) current = onCaptureSilence(current)
+                    if (frames == ECHO_CHECK_FRAME) checkEchoRisk()
+                }
                 val frame = PcmFrame(bytes, presentationTimeUs)
                 debugAudioTrace?.record("microphone_input", presentationTimeUs, bytes)
                 if (!pcmFrames.offer(frame)) {
@@ -360,11 +616,16 @@ class MicrophoneOpusEncoder(
     }
 
     /**
-     * Experimental native libopus call encoder (DEBUG `test_call_native_opus`). Null, with the reason
-     * logged as `impl=mediacodec | requested=native`, when the library or encoder is unavailable, so
-     * the call keeps its audio and the effective codec stays visible.
+     * Experimental native libopus call encoder (DEBUG `test_call_native_opus`), and the U-08 fallback when no
+     * MediaCodec Opus encoder works ([requested] = "mediacodec"). Null, with the reason logged as
+     * `impl=mediacodec | requested=native`, when the library or encoder is unavailable, so the call keeps its
+     * audio and the effective codec stays visible.
      */
-    private fun startNativeEncoder(): NativeOpusEncoder? {
+    private fun startNativeEncoder(
+        complexity: Int = OPUS_COMPLEXITY,
+        requested: String = "native",
+        reason: String? = null,
+    ): NativeOpusEncoder? {
         val settings = DebugTunables.nativeOpusSettings()
         val failure = NativeOpusBridge.loadError ?: run {
             val encoder = runCatching {
@@ -372,19 +633,19 @@ class MicrophoneOpusEncoder(
                     StreamProtocol.AUDIO_SAMPLE_RATE,
                     StreamProtocol.AUDIO_CHANNEL_COUNT,
                     bitRate,
-                    OPUS_COMPLEXITY,
+                    complexity,
                     settings,
                 )
             }
             encoder.getOrNull()?.let { active ->
                 Log.i(
                     "BluetoothVideo",
-                    "BENCHMARK audio_codec: role=encoder | impl=native | requested=native | " +
+                    "BENCHMARK audio_codec: role=encoder | impl=native | requested=$requested | " +
                         "name=libopus ${NativeOpusBridge.nativeOpusVersion()} | application=voip | " +
                         "fec=${if (settings.fec) "on" else "off"} | loss_pct=${settings.lossPercent} | " +
                         "dtx=${if (settings.dtx) "on" else "off"} | plc=n/a | kbps=${bitRate / 1_000} | " +
-                        "complexity=$OPUS_COMPLEXITY | vbr=constrained | frame_ms=${StreamProtocol.AUDIO_PACKET_DURATION_MS} | " +
-                        "pre_skip=${active.lookaheadSamples}",
+                        "complexity=$complexity | vbr=constrained | frame_ms=${StreamProtocol.AUDIO_PACKET_DURATION_MS} | " +
+                        "pre_skip=${active.lookaheadSamples}" + if (reason != null) " | reason=$reason" else "",
                 )
                 return active
             }
@@ -398,10 +659,13 @@ class MicrophoneOpusEncoder(
         return null
     }
 
-    private fun nativeEncodeLoop(encoder: NativeOpusEncoder) {
+    private fun nativeEncodeLoop(initialEncoder: NativeOpusEncoder) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+        var encoder = initialEncoder
         var packets = 0L
         var dtxSkipped = 0L
+        // U-09 (Experimental, default off): complexity 10 -> 8 -> 5 when the measured encode time stays high.
+        val governor = if (AudioSwitches.complexityGovernor) OpusComplexityGovernor(FRAME_DURATION_US * 1_000L) else null
         try {
             onPacket(
                 StreamProtocol.FLAG_AUDIO or StreamProtocol.FLAG_CODEC_CONFIG,
@@ -414,7 +678,17 @@ class MicrophoneOpusEncoder(
             )
             while (running.get()) {
                 val frame = pcmFrames.poll(ACTIVE_POLL_MS, TimeUnit.MILLISECONDS) ?: continue
+                val startedNs = System.nanoTime()
                 val bytes = encoder.encode(frame.bytes, SAMPLES_PER_FRAME)
+                governor?.onFrame(System.nanoTime() - startedNs)?.let { complexity ->
+                    startNativeEncoder(complexity = complexity, requested = "native", reason = "complexity_governor")?.let { replacement ->
+                        val old = encoder
+                        encoder = replacement
+                        nativeEncoder = replacement
+                        runCatching { old.close() }
+                        Log.i("BluetoothVideo", "BENCHMARK audio_complexity_governor: complexity=$complexity | kbps=${bitRate / 1_000}")
+                    }
+                }
                 // DTX (sub-switch, default off): a 1-2 byte packet means "no transmission needed".
                 if (encoder.settings.dtx && bytes.size <= DTX_SILENT_PACKET_BYTES) {
                     dtxSkipped++
@@ -446,19 +720,28 @@ class MicrophoneOpusEncoder(
         onError(error.message ?: error.javaClass.simpleName)
     }
 
+    /**
+     * Stops the workers and releases the microphone and codecs. This is a timed, serialized [AudioCommandQueue]
+     * command (it joins two threads for up to a second each and stops an AudioRecord); with `test_audio_off_main`
+     * it runs on the audio command thread instead of blocking a main-thread caller. [running] is cleared at once.
+     */
     override fun close() {
         running.set(false)
-        runCatching { recorder?.stop() }
-        captureWorker?.interrupt()
-        encoderWorker?.interrupt()
-        runCatching { captureWorker?.join(1_000) }
-        runCatching { encoderWorker?.join(1_000) }
-        pcmFrames.clear()
-        releaseResources()
+        AudioCommandQueue.shared.offload("mic_encoder_close") {
+            runCatching { recorder?.stop() }
+            captureWorker?.interrupt()
+            encoderWorker?.interrupt()
+            runCatching { captureWorker?.join(1_000) }
+            runCatching { encoderWorker?.join(1_000) }
+            pcmFrames.clear()
+            releaseResources()
+        }
     }
 
     @Synchronized
     private fun releaseResources() {
+        unregisterRecordingCallback()
+        callbackExecutor.shutdown()
         audioEffects.forEach { effect -> runCatching { effect.release() } }
         audioEffects.clear()
         runCatching { referenceInput?.close() }
@@ -478,32 +761,24 @@ class MicrophoneOpusEncoder(
     /**
      * The platform voice-communication pre-processing (CDD 5.4.4: an AEC SHOULD be applied to
      * VOICE_COMMUNICATION capture and is STRONGLY RECOMMENDED to be exposed via
-     * AcousticEchoCanceler.isAvailable()). Each effect's availability, enabled state after the request
-     * and implementor go to the `BENCHMARK audio_capture` line, so per-OEM behaviour is evidence, not
-     * an assumption. No family-specific policy: no vendor documents a reason to skip one.
+     * AcousticEchoCanceler.isAvailable()). Each effect's default state (read BEFORE it is enabled), descriptor
+     * UUID, implementor, control ownership, setEnabled status and final state go to the `BENCHMARK audio_capture`
+     * line (`effectState=`; `effects=` keeps its former format), so per-OEM behaviour is evidence, not an
+     * assumption. No effect is ever switched off here, and the AOSP software AEC stays enabled: MeshLive has no
+     * echo canceller of its own (WebRTC skips that effect only because it ships a better one; question Q-N4).
      */
     private fun enableCallAudioEffects(audioSessionId: Int) {
-        val summary = mutableListOf<String>()
+        effectOutcomes.clear()
         fun add(name: String, available: Boolean, create: () -> AudioEffect?) {
-            if (!available) {
-                summary += "$name:unavailable"
-                return
-            }
-            val effect = runCatching { create() }.getOrNull()
-            if (effect == null) {
-                summary += "$name:create-failed"
-                return
-            }
-            runCatching { effect.enabled = true }
-            audioEffects += effect
-            val enabled = runCatching { effect.enabled }.getOrDefault(false)
-            val implementor = runCatching { effect.descriptor.implementor }.getOrNull()?.replace('|', '/') ?: "?"
-            summary += "$name:${if (enabled) "on" else "off"}($implementor)"
+            val (outcome, handle) = AudioEffectProbe.enable(name, available) { create()?.let(::PlatformEffectHandle) }
+            effectOutcomes += outcome
+            (handle as? PlatformEffectHandle)?.let { audioEffects += it.effect }
         }
         add("aec", AcousticEchoCanceler.isAvailable()) { AcousticEchoCanceler.create(audioSessionId) }
         add("ns", NoiseSuppressor.isAvailable()) { NoiseSuppressor.create(audioSessionId) }
         add("agc", AutomaticGainControl.isAvailable()) { AutomaticGainControl.create(audioSessionId) }
-        effectSummary = summary.joinToString(",")
+        effectSummary = AudioEffectProbe.summary(effectOutcomes)
+        effectDetail = if (AudioSwitches.policyActive(EFFECT_LOGGING_ENTRY_ID)) AudioEffectProbe.detail(effectOutcomes) else ""
     }
 
     private fun encoderComplexity(activeCodec: MediaCodec): String = runCatching {
@@ -523,5 +798,18 @@ class MicrophoneOpusEncoder(
         const val ACTIVE_POLL_MS = 20L
         const val INPUT_TIMEOUT_US = 2_000L
         const val DTX_SILENT_PACKET_BYTES = 2
+        const val MAX_DEAD_OBJECT_REBUILDS = 3
+        /** About one second after the first frame the platform's effect report has normally arrived. */
+        const val ECHO_CHECK_FRAME = 50L
     }
+}
+
+/** Wraps a platform [AudioEffect] for [AudioEffectProbe]. */
+internal class PlatformEffectHandle(val effect: AudioEffect) : EffectHandle {
+    override fun uuid(): String? = effect.descriptor?.uuid?.toString()
+    override fun implementor(): String? = effect.descriptor?.implementor
+    override fun hasControl(): Boolean? = effect.hasControl()
+    override fun enabled(): Boolean? = effect.enabled
+    override fun setEnabled(enabled: Boolean): Int? = effect.setEnabled(enabled)
+    override fun release() = effect.release()
 }

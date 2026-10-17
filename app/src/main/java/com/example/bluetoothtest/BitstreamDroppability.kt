@@ -106,6 +106,9 @@ internal class BitstreamDroppability(private val mimeType: String) {
         val forceScreenContentTools: Int,
         val forceIntegerMv: Int,
         val orderHintBits: Int,
+        /** max_frame_width/height of the sequence (the coded size of an encoder that never overrides it). */
+        val maxFrameWidth: Int = 0,
+        val maxFrameHeight: Int = 0,
     )
 
     companion object {
@@ -240,8 +243,8 @@ internal class BitstreamDroppability(private val mimeType: String) {
             }
             val widthBits = r.bits(4) + 1
             val heightBits = r.bits(4) + 1
-            r.bits(widthBits)
-            r.bits(heightBits)
+            val maxFrameWidth = r.bits(widthBits) + 1
+            val maxFrameHeight = r.bits(heightBits) + 1
             val frameIdNumbersPresent = !reduced && r.bits(1) == 1
             var frameIdLength = 0
             if (frameIdNumbersPresent) {
@@ -286,6 +289,8 @@ internal class BitstreamDroppability(private val mimeType: String) {
                 forceScreenContentTools,
                 forceIntegerMv,
                 orderHintBits,
+                maxFrameWidth,
+                maxFrameHeight,
             )
         }
 

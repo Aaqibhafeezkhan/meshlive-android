@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The status sheet (opens from the indicator in a tab's title bar): what is on and what needs you.
+     Your code and ID are not here: they live only on the Add contact screen. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:scrollbars="none">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="24dp"
+        android:paddingTop="16dp"
+        android:paddingEnd="24dp"
+        android:paddingBottom="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:accessibilityHeading="true"
+            android:text="@string/status_sheet_title"
+            android:textAppearance="@style/TextAppearance.App.Readout" />
+
+        <include
+            android:id="@+id/statusRowBluetooth"
+            layout="@layout/item_status_row" />
+
+        <include
+            android:id="@+id/statusRowCalls"
+            layout="@layout/item_status_row" />
+
+        <include
+            android:id="@+id/statusRowRelay"
+            layout="@layout/item_status_row" />
+
+        <include
+            android:id="@+id/statusRowBattery"
+            layout="@layout/item_status_row" />
+
+        <!-- "Nearby you appear as <generated name>": filled by the naming work once its API exists; hidden until then. -->
+        <include
+            android:id="@+id/statusRowNameplate"
+            layout="@layout/item_status_row"
+            android:visibility="gone" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/statusActionButton"
+            style="@style/Widget.App.Button.Secondary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:visibility="gone"
+            tools:text="Turn on Bluetooth" />
+    </LinearLayout>
+</ScrollView>

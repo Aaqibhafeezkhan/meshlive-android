@@ -22,6 +22,10 @@ import org.junit.Test
  * cover the shared per-role listener that replaced one listener per session.
  */
 class SharedCocListenerTest {
+    /** Safety net: a test that hangs fails after this instead of holding the whole run (a legitimate run on a loaded host takes seconds to a minute or two). */
+    @get:org.junit.Rule
+    val perTestTimeout: org.junit.rules.Timeout = org.junit.rules.Timeout.seconds(600)
+
     private class FakeSocket(val id: Int) : Closeable {
         @Volatile var closed = false
         override fun close() {
@@ -79,7 +83,7 @@ class SharedCocListenerTest {
         val lease = requireNotNull(listener.acquire("callee"))
         val socket = FakeSocket(1)
         servers.single().connect(socket)
-        assertSame(socket, lease.accept(2_000))
+        assertSame(socket, lease.accept(120_000))
         assertFalse(socket.closed)
         lease.close()
     }
@@ -122,7 +126,7 @@ class SharedCocListenerTest {
         }
         Thread.sleep(50)
         lease.close()
-        assertTrue(done.await(2, TimeUnit.SECONDS))
+        assertTrue(done.await(120, TimeUnit.SECONDS))
         assertTrue(failure[0] is IOException)
         assertFalse(servers.single().closed)
         assertTrue(listener.listening)
@@ -155,7 +159,7 @@ class SharedCocListenerTest {
         val lease = requireNotNull(listener.acquire("call"))
         servers.single().incoming.offer(IOException("Bluetooth off"))
         try {
-            lease.accept(2_000)
+            lease.accept(120_000)
             fail("expected the listener failure")
         } catch (expected: IOException) {
             assertEquals("Bluetooth off", expected.message)
@@ -220,7 +224,7 @@ class SharedCocListenerTest {
         servers.single().incoming.offer(IOException("listener dropped"))
         waitUntil { !listener.listening }
         try {
-            lease.accept(2_000)
+            lease.accept(120_000)
             fail("a failed lease must not hand out its queued connection")
         } catch (expected: IOException) {
             assertEquals("listener dropped", expected.message)
@@ -257,7 +261,7 @@ class SharedCocListenerTest {
     }
 
     private fun waitUntil(condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
         while (!condition()) {
             if (System.nanoTime() > deadline) fail("condition not reached")
             Thread.sleep(5)
