@@ -7,13 +7,13 @@ import org.junit.Test
 class ClassicTargetMatcherTest {
     @Test
     fun deviceNameIgnoresSurroundingWhitespaceAndCase() {
-        assertTrue(classicTargetMatches("Pradyun ", "AA:BB", " pradyun"))
+        assertTrue(classicTargetMatches("Robin ", "AA:BB", " robin"))
     }
 
     @Test
     fun addressMatchRemainsCaseInsensitive() {
         assertTrue(classicTargetMatches(null, "AA:BB", "aa:bb"))
-        assertFalse(classicTargetMatches("Another phone", "AA:BB", "Pradyun"))
+        assertFalse(classicTargetMatches("Another phone", "AA:BB", "Robin"))
     }
 
     @Test
