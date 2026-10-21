@@ -192,8 +192,8 @@ class MessagesActivity : AppCompatActivity() {
         worker.execute {
             val allContacts = node.contacts.all()
             runCatching { node.sweepArchive() }.onFailure { Log.w("BluetoothVideo", "Store-forward archive sweep failed", it) }
-            val messages = node.archive.page(0, PAGE_SIZE, MessageDirection.IN) +
-                node.archive.page(0, PAGE_SIZE, MessageDirection.OUT)
+            val messages = (node.archive.page(0, PAGE_SIZE, MessageDirection.IN) +
+                node.archive.page(0, PAGE_SIZE, MessageDirection.OUT)).filterNot { LocalReporting.hidden(this, it.peerNode) }
             val states = node.store.all().associateBy { it.idHex }
             failedIds = node.store.failed().keys
             outboxStatus = if (!StoreForwardAutoSyncFeature.enabled) emptyMap() else runCatching {

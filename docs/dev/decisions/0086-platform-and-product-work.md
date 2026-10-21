@@ -1,0 +1,14 @@
+# Platform and product work
+
+| Area | Remaining boundary |
+| --- | --- |
+| Audience membership and trust (**design review required**) | Static group-key distribution exists. Dynamic revocation, epoch rotation and expiry, and rejection of old keys remain unfinished (Design B's `BGK2` covers part). Full-fingerprint verification exists and is opt-in per contact; trust-on-first-use pinning of unverified peers and an independent protocol audit remain open. Audience modes must change admission without disabling encryption |
+| Branches and alternate routes | Normal viewer-forwarders support one child and one active parent. A multi-child UI, four-phone group and adversarial validation, and larger alternate-parent graphs remain open; a diamond needs loop, duplicate, TTL and hysteresis handling. Simultaneous redundant media and make-before-break recovery need separate architecture work |
+| Call recovery and expansion | Screen lock, OS or Bluetooth interruption and process-death reconstruction need evidence and a bounded reconnect design. The opaque relay diagnostic builds chains of up to four relays (PROTOCOL.md "Private-call relay chains"); remaining: physical evidence for two or more relays, route discovery for ordinary users (the relay is DEBUG-only), relay forwarding counters and a measured relayed call cap (experimental `relayed_call_measured_cap`) |
+| Background and session ownership | Typed foreground services protect ordinary app switching. Reconstructing camera, audio and authenticated sessions after process death needs an explicit design and lifecycle proof |
+| Windows receiver | The retained desktop receiver is video-only (`BTV2`). Add current `BTV3` video and audio and ordinary discovery before claiming interoperability with current Android camera-and-audio streams; capture lifecycle and teardown need physical evidence |
+| Power, range and display | Matched unplugged, role-reversed endurance, real heat, and controlled range and interference measurements; charging runs and nominal Low Energy do not establish efficiency. Replacing TextureView with SurfaceView needs measured geometry, lifecycle and power preservation |
+| New Bluetooth and API facilities | Temporal-layer dropping proceeds through workstream A with bitstream-verified droppability; API 37 temporal-layer IDs or HDT only with a compatible public API, hardware and actual output evidence. HDT is not an arbitrary CIS or BIS payload socket, and hidden or root-only LE Audio paths are not product features. Classic and LE bandwidth aggregation and relay re-encoding are not implemented product paths |
+
+These rows keep future obligations without turning them into approved implementations. When a requirement changes,
+update the benchmark scope and inventory together with its reason (see [testing.md](../testing.md)).

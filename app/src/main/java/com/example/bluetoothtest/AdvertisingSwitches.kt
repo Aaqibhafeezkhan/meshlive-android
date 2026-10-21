@@ -5,13 +5,17 @@ import android.content.Intent
 /**
  * Launch switches of the advertising batch (device-family backlog A-01..A-03). Every non-default value is
  * DEBUG-only: a launch extra from another app must not change a release build's behaviour. Defaults are the
- * shipped behaviour. The register of switches is docs/SWITCHES.md ("Experimental, alternative and optional
+ * shipped behaviour. The register of switches is docs/dev/switches.md ("Experimental, alternative and optional
  * behaviour"); the matching rows are listed in the batch hand-back.
  *
  * Shipped ON (after-failure behaviour, kill switches for A/B control arms):
  *  - `test_adv_watchdog=false`: no restart of a set that stopped without being asked (A-03).
  *  - `test_adv_preempt=false`: a refused session-critical set does not release title/reach sets (A-02).
  *  - `test_adv_stop_settle=false`: a start does not wait for in-flight stops to be confirmed (A-02).
+ *  - `test_adv_inplace_keep_set=false`: an in-place balanced step whose disable the stack never confirms restarts the
+ *    set with a new address, as before ([InPlaceStepHealth]).
+ *  - `test_adv_inplace_boost=false`: the Meet-code boost and its end replace the set (a new address each time), and a
+ *    second balanced step on a set that already took one replaces it, as before ([StableAdvertisingSet.switchMode]).
  * Experimental, default OFF:
  *  - `test_adv_budget_cap=N` (1..8): act as if the controller offered only N advertising sets, to exercise the
  *    one-instance paths on a phone that has more (there is no owned 1-slot phone).
@@ -33,6 +37,18 @@ object AdvertisingSwitches {
 
     /** `test_adv_stop_settle` (default true; false is the control arm). */
     @Volatile var stopSettle: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /** `test_adv_inplace_keep_set` (default true; false is the control arm). See [InPlaceStepHealth]. */
+    @Volatile var inPlaceKeepSet: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /** `test_adv_inplace_boost` (default true; false is the control arm). See [StableAdvertisingSet.switchMode]. */
+    @Volatile var inPlaceBoost: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
         }
@@ -64,6 +80,8 @@ object AdvertisingSwitches {
         watchdogRestart = boolExtra("test_adv_watchdog", true)
         budgetPreempt = boolExtra("test_adv_preempt", true)
         stopSettle = boolExtra("test_adv_stop_settle", true)
+        inPlaceKeepSet = boolExtra("test_adv_inplace_keep_set", true)
+        inPlaceBoost = boolExtra("test_adv_inplace_boost", true)
         budgetCap = intExtra("test_adv_budget_cap", 0)
         quiesceStop = boolExtra("test_adv_quiesce_stop", false)
     }

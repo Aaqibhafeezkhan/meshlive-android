@@ -141,6 +141,80 @@ internal object FirstFrameSanity {
 }
 
 /**
+ * Experimental (default off, `test_drop_leading_blank_frames`): drop the camera's leading blank buffers.
+ *
+ * 2026-10-20 (prewarm-ab-20261020a-d, build 502b65f1): the S22 as a source logged `encoder_first_frames_suspect
+ * verdict=BLACK` (yMean 0.0, uMean and vMean 128.0) for frames 1-3 in all 8 runs, both arms; the ASUS never did.
+ * The check reads the Camera2 `Image` itself (CameraVideoEncoder `checkFirstFramesImage`), so the camera delivered
+ * them. Decoding the S22's encoded stream: frames 1-4 are exactly black (YAVG 0.008; 109, 23, 23, 23 bytes), frame 5
+ * jumps to 50.7 and the exposure then settles (50 -> 61 over 10 frames). Exact zero luma with neutral chroma is a
+ * blank buffer, not a dark scene (a sensor frame has noise) and not exposure convergence (that starts from 50). The
+ * black key frame was the first picture a viewer got, about 0.27 s before the real one.
+ *
+ * Only before the first real frame, at most [MAX_FRAMES] frames and [MAX_MS] after the first one: a frame whose luma
+ * mean is below [LUMA_MAX] and whose chroma means are within [CHROMA_TOLERANCE] of 128 is dropped before the encoder
+ * sees it. The first frame that is not blank ends the check for the whole session; nothing is dropped mid-stream.
+ * Surface-input encoders get no pixels and are not affected.
+ */
+internal class LeadingBlankFrames(private val enabled: () -> Boolean = { DebugTunables.dropLeadingBlankFrames }) {
+    private var done = false
+    private var firstAtMs = -1L
+    var dropped = 0
+        private set
+
+    /** True when this frame should be dropped. [nowMs] is a monotonic clock. */
+    fun drop(yMean: Double, uMean: Double, vMean: Double, nowMs: Long): Boolean {
+        if (done || !enabled()) return false
+        if (firstAtMs < 0) firstAtMs = nowMs
+        val blank = isBlank(yMean, uMean, vMean)
+        if (!blank || dropped >= MAX_FRAMES || nowMs - firstAtMs >= MAX_MS) {
+            done = true
+            return false
+        }
+        dropped++
+        return true
+    }
+
+    /** Whether the check still runs (the caller then samples the frame's planes). */
+    val checking: Boolean get() = !done && enabled()
+
+    companion object {
+        const val MAX_FRAMES = 15
+        const val MAX_MS = 1_000L
+        const val LUMA_MAX = 1.0
+        const val CHROMA_TOLERANCE = 1.0
+
+        fun isBlank(yMean: Double, uMean: Double, vMean: Double): Boolean =
+            yMean < LUMA_MAX && kotlin.math.abs(uMean - 128.0) <= CHROMA_TOLERANCE &&
+                kotlin.math.abs(vMean - 128.0) <= CHROMA_TOLERANCE
+    }
+}
+
+/**
+ * DEBUG only (`test_inject_blank_frames=N`): the first N camera images are made blank (luma 0, chroma 128) in the
+ * listener, before [LeadingBlankFrames], so an A/B can exercise the gate on any phone (2026-10-20: the S22's real blank
+ * buffers came in only 2 of 8 runs, so the gate's ON runs had nothing to drop).
+ */
+internal object BlankFrameInjection {
+    const val MAX_FRAMES = 60
+
+    fun shouldInject(injectedSoFar: Int, requested: Int): Boolean = injectedSoFar < requested.coerceIn(0, MAX_FRAMES)
+
+    /** Y to 0 and both chroma planes to 128, in place; false (nothing written) when a plane buffer is read-only. */
+    fun blank(planes: List<java.nio.ByteBuffer>): Boolean {
+        if (planes.size < 3 || planes.any { it.isReadOnly }) return false
+        fill(planes[0], 0)
+        fill(planes[1], 128.toByte())
+        fill(planes[2], 128.toByte())
+        return true
+    }
+
+    private fun fill(buffer: java.nio.ByteBuffer, value: Byte) {
+        for (index in buffer.position() until buffer.limit()) buffer.put(index, value)
+    }
+}
+
+/**
  * Capture-interval monitor (V-22): counts the intervals of consecutive capture completions so a thermal
  * or HAL frame-rate drop shows in the log. Cheap (one subtraction per frame), but the CaptureCallback
  * itself is only registered in DEBUG or with `test_camera_release_timing`, until its overhead is measured.

@@ -238,6 +238,12 @@ class CameraVideoEncoder(
     private val blackFrameDetector = BlackFrameDetector()
     private var lastHealthSampleNs = 0L
     private var firstFramesChecked = 0
+    /** Experimental: the camera's leading blank buffers (S22) are dropped before the encoder ([LeadingBlankFrames]). */
+    private val leadingBlankFrames = LeadingBlankFrames()
+    private var blankFramesInjected = 0
+    /** V-19 first-frames check: 8 frames in DEBUG (the S22 sent 4 blank buffers; 3 hid the fourth), 3 otherwise. */
+    private val firstFramesToCheck = if (BuildConfig.DEBUG) FIRST_FRAMES_CHECKED_DEBUG else FIRST_FRAMES_CHECKED
+    private var leadingBlankLogged = false
     private val privacyNoticeOn = CameraPolicy.isOn("camera-privacy-toggle-notice", deviceTraits)
     private var privacyNoticeShown = false
     private var continuousAutoFocusAvailable = false
@@ -520,13 +526,30 @@ class CameraVideoEncoder(
                         return@setOnImageAvailableListener
                     }
                     if (usesNativeAom) {
-                        availableReader.acquireLatestImage()?.use(::queueNativeFrame)
+                        availableReader.acquireLatestImage()?.use { image ->
+                            injectBlankIfRequested(image)
+                            if (!dropLeadingBlank(image)) queueNativeFrame(image)
+                        }
                     } else {
+                        val image = availableReader.acquireLatestImage() ?: return@setOnImageAvailableListener
+                        injectBlankIfRequested(image)
+                        if (dropLeadingBlank(image)) {
+                            image.close()
+                            return@setOnImageAvailableListener
+                        }
                         pendingImage?.close()
-                        pendingImage = availableReader.acquireLatestImage()
+                        pendingImage = image
                         queuePendingFrame()
                     }
                 }, worker)
+            }
+            if (BuildConfig.DEBUG) {
+                Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK camera_leading_blank: enabled=${DebugTunables.dropLeadingBlankFrames} | " +
+                        "inject=${DebugTunables.injectBlankFrames} | path=${if (usesNativeAom) "native" else "image"} | " +
+                        "encoder=$activeEncoderName",
+                )
             }
         } else if (referenceRecorder != null) {
             referenceImageReader = ImageReader.newInstance(
@@ -1619,6 +1642,14 @@ class CameraVideoEncoder(
         val nowNs = System.nanoTime()
         val elapsedNs = nowNs - cadenceReportStartedNs
         if (elapsedNs < CADENCE_REPORT_INTERVAL_NS) return
+        fpsFollow?.let { follow ->
+            val frameMs = sensorFrameDurationNs?.div(1_000_000.0)
+            val exposureMs = exposureTimeNs?.div(1_000_000.0)
+            if (follow.onWindow(frameMs, exposureMs)) {
+                Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + follow.line(frameMs, exposureMs))
+                updateFrameRate(lastMaximumFps)
+            }
+        }
         val elapsedSeconds = elapsedNs / 1_000_000_000.0
         val cadence = encodedFrameInterval.snapshot()
         val outputLatency = captureToEncodedOutput.snapshot()
@@ -1827,7 +1858,7 @@ class CameraVideoEncoder(
                 return planes[index].buffer.position() + area.top * planes[index].rowStride +
                     area.left * planes[index].pixelStride
             }
-            val nativeCopied = planes.size >= 3 && NativeAomBridge.nativeCopyYuv420ToI420(
+            val nativeCopied = planes.size >= 3 && NativeAomBridge.available && NativeAomBridge.nativeCopyYuv420ToI420(
                 planes[0].buffer,
                 start(0),
                 planes[0].buffer.limit(),
@@ -1851,7 +1882,7 @@ class CameraVideoEncoder(
             )
             if (!nativeCopied) copyYuv420ToI420(source, input)
             nativeCopyLatency.recordNanos(System.nanoTime() - startedCopyNs)
-            if (firstFramesChecked < FIRST_FRAMES_CHECKED) checkFirstFramesI420(input)
+            if (firstFramesChecked < firstFramesToCheck) checkFirstFramesI420(input)
             referenceRecorder?.record(source, visible)
             val presentationTimeUs = source.timestamp / 1_000
             inspectEncoderInput(presentationTimeUs, width = settings.resolution.width, height = settings.resolution.height) {
@@ -2270,6 +2301,33 @@ class CameraVideoEncoder(
         }.getOrDefault(false)
     }
 
+    /** DEBUG [BlankFrameInjection]: blanks this camera image in place while the requested count lasts. */
+    private fun injectBlankIfRequested(image: Image) {
+        if (!BuildConfig.DEBUG || !BlankFrameInjection.shouldInject(blankFramesInjected, DebugTunables.injectBlankFrames)) return
+        blankFramesInjected++
+        val written = runCatching { BlankFrameInjection.blank(image.planes.map { it.buffer }) }.getOrDefault(false)
+        Log.i("BluetoothVideo", "BENCHMARK camera_blank_injected: frame=$blankFramesInjected | written=$written")
+    }
+
+    /** Experimental [LeadingBlankFrames]: true when this camera frame is a leading blank buffer to drop. */
+    private fun dropLeadingBlank(image: Image): Boolean {
+        if (!leadingBlankFrames.checking) return false
+        val drop = runCatching {
+            val planes = image.planes
+            val chromaWidth = YuvPlaneCopy.chromaSize(image.width)
+            val chromaHeight = YuvPlaneCopy.chromaSize(image.height)
+            val y = PlaneSampler.mean(planes[0].buffer, planes[0].buffer.position(), planes[0].rowStride, planes[0].pixelStride, image.width, image.height)
+            val u = PlaneSampler.mean(planes[1].buffer, planes[1].buffer.position(), planes[1].rowStride, planes[1].pixelStride, chromaWidth, chromaHeight)
+            val v = PlaneSampler.mean(planes[2].buffer, planes[2].buffer.position(), planes[2].rowStride, planes[2].pixelStride, chromaWidth, chromaHeight)
+            leadingBlankFrames.drop(y, u, v, SystemClock.elapsedRealtime())
+        }.getOrDefault(false)
+        if (!drop && leadingBlankFrames.dropped > 0 && !leadingBlankLogged) {
+            leadingBlankLogged = true
+            if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK camera_leading_blank: dropped=${leadingBlankFrames.dropped} | encoder=$activeEncoderName")
+        }
+        return drop
+    }
+
     /** V-19: average luma and chroma of the first YUV frames; only a suspect (black, purple, green) is logged. */
     private fun checkFirstFramesImage(source: Image) {
         firstFramesChecked++
@@ -2320,7 +2378,7 @@ class CameraVideoEncoder(
                 ?: throw IllegalStateException("Encoder did not expose a flexible YUV input image")
             val copyStartedNs = if (BuildConfig.DEBUG) System.nanoTime() else 0L
             copyYuv420(source, target)
-            if (firstFramesChecked < FIRST_FRAMES_CHECKED && debugRawInputFile == null) checkFirstFramesImage(source)
+            if (firstFramesChecked < firstFramesToCheck && debugRawInputFile == null) checkFirstFramesImage(source)
             if (BuildConfig.DEBUG) {
                 yuvCopyLatency.recordNanos(System.nanoTime() - copyStartedNs)
                 if (cameraTimestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
@@ -2510,8 +2568,18 @@ class CameraVideoEncoder(
         return if (encode.samples >= LIVE_LOAD_MIN_SAMPLES) encode.p95Ms * effectiveFps / 1_000.0 else null
     }
 
+    /**
+     * F16 fix 2 (Experimental, `test_call_fps_follow`; set only for an Automatic call): follows the camera's real rate in
+     * sustained low light. Its rate is one more limit beside [updateFrameRate]'s.
+     */
+    @Volatile internal var fpsFollow: CallFpsFollow? = null
+
+    /** The last limit [updateFrameRate] was given (the link's), so the follower can be combined with it. */
+    @Volatile private var lastMaximumFps = Int.MAX_VALUE
+
     fun updateFrameRate(maximumFps: Int) {
-        val requestedFps = minOf(settings.fps, maximumFps).coerceAtLeast(1)
+        lastMaximumFps = maximumFps
+        val requestedFps = minOf(settings.fps, maximumFps, fpsFollow?.effectiveFps ?: Int.MAX_VALUE).coerceAtLeast(1)
         worker.post {
             if (debugRawInputFile != null) {
                 rawInputFps = requestedFps
@@ -2682,7 +2750,7 @@ class CameraVideoEncoder(
             val sourceOffset = sourceBuffer.position()
             val targetOffset = targetBuffer.position()
             if (sourceCrop.width == targetWidth && sourceCrop.height == targetHeight &&
-                !targetBuffer.isReadOnly && NativeAomBridge.nativeCopyPlane(
+                !targetBuffer.isReadOnly && NativeAomBridge.available && NativeAomBridge.nativeCopyPlane(
                     sourceBuffer, sourceOffset + sourceCrop.top * sourcePlane.rowStride +
                         sourceCrop.left * sourcePlane.pixelStride, sourceBuffer.limit(),
                     sourcePlane.rowStride, sourcePlane.pixelStride,
@@ -2740,6 +2808,7 @@ class CameraVideoEncoder(
         const val MAX_ALTERNATE_ENCODERS = 2
         const val HEALTH_SAMPLE_INTERVAL_NS = 500_000_000L
         const val FIRST_FRAMES_CHECKED = 3
+        const val FIRST_FRAMES_CHECKED_DEBUG = 8
     }
 
     override fun close() {

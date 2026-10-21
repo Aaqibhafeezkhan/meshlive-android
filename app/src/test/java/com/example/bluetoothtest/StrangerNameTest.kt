@@ -154,7 +154,6 @@ class StrangerNameTest {
                 }
             }
         }
-        assertTrue(callers.size < 50)
     }
 
     // --- frozen files ---

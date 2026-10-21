@@ -453,6 +453,67 @@ internal object GattLinkPolicy {
         fallback = "The service cache is refreshed only when a service is missing.",
     )
 
+    private const val A11_BT_APP = "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/refs/heads/android11-release"
+
+    val SERVER_CONNECTION_UNTRACKED = DevicePolicyEntry(
+        id = "android11-gatt-server-connection-untracked",
+        title = "Android 10-11: a GATT server's connection can be missing from the stack's server map (no answers to that client)",
+        matcher = DeviceMatcher(stackLineages = setOf(BluetoothStackLineage.LEGACY_29_30)),
+        effects = listOf(
+            GattServerConnectionWatch(timeoutMs = GattServerConnectionWatch.DEFAULT_TIMEOUT_MS),
+            GattServerFirstWriteWatch(timeoutMs = GattServerFirstWriteWatch.DEFAULT_TIMEOUT_MS),
+            GattServerReregisterKeepsAddress,
+        ),
+        behaviour = "After a client connects to the advertising call listener, the server reads the link's PHY; a healthy stack " +
+            "answers in 5-10 ms. When no PHY answer comes within 400 ms the stack has no record of this connection for the " +
+            "server, so every response would go to connection 0 and the client's subscribe would hang to its timeout: the " +
+            "server logs gatt_server_connection_untracked, cancels the connection and registers itself again (close, open, " +
+            "add the service, advertise). The client's retry then reaches a freshly registered server. Only the advertising " +
+            "listener is watched (the dual-listening second server also hears links it does not own). Newer stacks may never " +
+            "call back a PHY read (AdaptivePhy's Android 13 backstop), so the watch is limited to the legacy stack. Second " +
+            "stage: after the client's subscribe is accepted, its first data write must reach the app within 1.2 s (healthy " +
+            "first writes arrive 70-140 ms later); otherwise the server logs gatt_server_first_write_missing, ends that " +
+            "connection and registers again. A connection that has delivered any data is never cut. A re-registration replaces " +
+            "only the GATT server: the advertising set is a separate stack object, so a running set keeps advertising with " +
+            "the same address and the client's retry finds it at once; to keep it for stage 2 the set stays on after the " +
+            "subscribe until the first data write (at most the 1.2 s watch) instead of stopping at the subscribe. A " +
+            "rotating-ID epoch change always stops the set, so an address never carries into a new epoch.",
+        sources = listOf(
+            PolicySource(AOSP_SOURCE, "$A11_BT_APP/src/com/android/bluetooth/gatt/GattService.java#2763",
+                "onClientConnected: the connection is added to mServerMap only when getById(serverIf) finds the server"),
+            PolicySource(AOSP_SOURCE, "$A11_BT_APP/src/com/android/bluetooth/gatt/GattService.java#3027",
+                "serverReadPhy: connIdByAddress(serverIf, address) null -> 'no connection to <address>', nothing is read"),
+            PolicySource(AOSP_SOURCE, "$A11_BT_APP/src/com/android/bluetooth/gatt/GattService.java#3105",
+                "sendResponse: a missing connection is sent as connId 0 (the stack then rejects it: gatt_if out of range)"),
+            PolicySource(AOSP_SOURCE, "$A11_BT_APP/src/com/android/bluetooth/gatt/GattService.java#2830",
+                "onServerWriteCharacteristic: a write that reached the stack is dropped silently when mHandleMap.getByHandle or " +
+                    "mServerMap.getById finds no entry (stage 2: the first handshake write never reaches the app)"),
+        ),
+        sourceStatus = PARTIAL,
+        evidence = listOf(
+            "benchmarks/runs/edgecases-20261020 (asus-s22-fb0e, s22-asus-r3..r6, asus-s22-r3..r6) and " +
+                "benchmarks/runs/longcall-035b5235-20261020 (lc-s22-asus-r3..r5), ASUS (Android 11, legacy stack) called by the " +
+                "S22: 16 of 16 failed first connects reached a server idle for more " +
+                "than 10 s: 'serverReadPhy() - no connection to <addr>' 8 ms after onClientConnected, then 'address not found " +
+                "for given connId' and a failed CCCD sendResponse (gatt_if out of range = 0); the client's subscribe hung to its " +
+                "12 s timeout. 16 of 16 retries on freshly registered servers worked. No failure before about 02:17; the onset " +
+                "followed a rising count of other apps' GATT registrations without callbacks (5 to 9).",
+            "benchmarks/runs/edgecases-20261020/asus-a15s-m31-055022 step 2 (A15s calling the ASUS back, server registered 16 s " +
+                "earlier): the PHY read was answered and the subscribe acknowledged; the A15s's first 133-byte handshake write " +
+                "reached the ASUS stack (gatt_data_process op_code=82) but never the app (bmh3 responder EOFException after " +
+                "4692 ms); the A15s's setup-stall guard closed at 3.0 s, and the retry after rediscovery worked in 211 ms.",
+        ),
+        confidence = MEDIUM,
+        confidenceNote = "Symptom and recovery measured 16/16 on one Android 11 phone; why the stack loses the record is not " +
+            "proven (the server map lookup is the documented path). Other legacy-stack phones: not measured.",
+        reviewed = "2026-10-21",
+        origin = "Offline analysis of the S22-ASUS edge-case and long-call runs, 2026-10-21.",
+        area = PolicyArea.BLUETOOTH_TRANSPORT,
+        validation = PolicyValidation.LOCALLY_REPRODUCED,
+        fallback = "The client's subscribe waits for its 12 s timeout and retries; the retry reaches a fresh server only " +
+            "when the listener was rebuilt for another reason.",
+    )
+
     val entries: List<DevicePolicyEntry> = listOf(
         LINK_SLOT_LIMIT,
         REGISTRATION_POOL_EXHAUSTION,
@@ -468,6 +529,7 @@ internal object GattLinkPolicy {
         DISCOVERY_HANG_OEM_ANDROID13,
         CONNECT_GATT_ON_MAIN,
         GATT_CACHE_REFRESH,
+        SERVER_CONNECTION_UNTRACKED,
     )
 
     private fun policy(): ResolvedDevicePolicy = DeviceFamilyPolicy.current()
@@ -491,6 +553,41 @@ internal object GattLinkPolicy {
 
     fun linkSlotLimit(resolved: ResolvedDevicePolicy = policy()): GattLinkSlotLimit? =
         resolved.effects<GattLinkSlotLimit>().firstOrNull()
+
+    fun serverConnectionWatch(resolved: ResolvedDevicePolicy = policy()): GattServerConnectionWatch? =
+        resolved.effects<GattServerConnectionWatch>().firstOrNull()
+
+    fun serverFirstWriteWatch(resolved: ResolvedDevicePolicy = policy()): GattServerFirstWriteWatch? =
+        resolved.effects<GattServerFirstWriteWatch>().firstOrNull()
+
+    fun serverReregisterKeepsAddress(resolved: ResolvedDevicePolicy = policy()): Boolean =
+        resolved.has<GattServerReregisterKeepsAddress>()
+}
+
+internal data object GattServerReregisterKeepsAddress : DevicePolicyEffect {
+    override fun describe(): String =
+        "a re-registration replaces only the GATT server and keeps the running advertising set (same address); after a " +
+            "subscribe the set stays on until the first data write; a rotating-ID epoch change always stops it"
+}
+
+internal data class GattServerFirstWriteWatch(val timeoutMs: Long) : DevicePolicyEffect {
+    override fun describe(): String =
+        "after a client subscribed, no data write for $timeoutMs ms means the stack drops this connection's writes before " +
+            "the app: cancel the connection and register the server again (never after any data arrived)"
+
+    companion object {
+        const val DEFAULT_TIMEOUT_MS = 1_200L
+    }
+}
+
+internal data class GattServerConnectionWatch(val timeoutMs: Long) : DevicePolicyEffect {
+    override fun describe(): String =
+        "after a client connects, a PHY read unanswered for $timeoutMs ms means the stack lost the server's connection record: " +
+            "cancel the connection and register the server again"
+
+    companion object {
+        const val DEFAULT_TIMEOUT_MS = 400L
+    }
 }
 
 internal data class GattLinkSlotLimit(val legacyCeiling: Int, val parentReserve: Int) : DevicePolicyEffect {

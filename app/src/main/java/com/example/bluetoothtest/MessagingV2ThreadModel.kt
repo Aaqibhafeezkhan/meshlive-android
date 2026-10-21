@@ -181,11 +181,13 @@ object ConversationRows {
         if (summary == null || !summary.hasActivity) return if (nearby) text.get("mv2_ui_nearby_now") else ""
         val typed = summary.lastPresentation?.let { text.get(presentationKey(it)) }
         val words = summary.previewText.replace(Regex("\\s+"), " ").trim()
-        return when {
+        val preview = when {
             typed != null -> typed
             words.isNotEmpty() -> words
             else -> text.get("mv2_ui_preview_message")
         }
+        // Chat list (2026-10-21): your own last message reads "You: ...".
+        return if (summary.lastIncoming) preview else text.get("mv2_ui_preview_you", preview)
     }
 
     fun presentationKey(presentation: Presentation): String = when (presentation) {

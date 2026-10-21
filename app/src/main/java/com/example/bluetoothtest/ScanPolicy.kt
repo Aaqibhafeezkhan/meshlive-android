@@ -197,6 +197,11 @@ internal object ScanPolicy {
                 "io.github.meshlive.app (1583 started / 1558 stopped) back to 10-12 and the 32-slot pool full (`MAX client reached: 32`); the three " +
                 "ongoing starts inside the saved logs match, to the second, the first scan of a process the lane driver force-killed " +
                 "(benchmarks/runs/lane11-stats-20261015/m-asus-btmgr). Intermittent: 3 of about 77 force-killed processes in the saved lane11 ASUS logs leaked.",
+            "Redmi Note 9S (Android 11, SDK 30, MIUI, patch 2022-03-01), 2026-10-20 win-userflow qw-packaged redmi-failfast-3: after 61 counted " +
+                "unclean exits the pool had one free slot; the first scanner got `allocated gatt_if=32`, the call-listener GATT server then failed " +
+                "(`MAX client reached: 32`, status 128) and took slot 32 when the scanner stopped, and the Nearby scanner failed with code 2 (stack " +
+                "status 133) on every retry. Logged as `android11_scanner_leak_suspected`; the Nearby list now says Bluetooth needs a restart " +
+                "(ScanRestartHint).",
         ),
         confidence = HIGH,
         confidenceNote = "AOSP code read for stock Android 10 (fixed in the Android 11 source); measured on an Android 11 ASUS build whose stack still " +

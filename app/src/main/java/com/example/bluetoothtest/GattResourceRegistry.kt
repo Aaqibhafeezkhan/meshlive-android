@@ -332,6 +332,14 @@ internal class PoolExhaustionPolicy(private val clock: () -> Long = SystemClock:
     @Synchronized
     fun restartGuidanceDue(): Boolean = restartGuidanceAtMs != 0L || registrationGuidanceDue()
 
+    /**
+     * True once [source] alone has failed [REGISTRATION_THRESHOLD] back-off steps in a row, the last within
+     * [REGISTRATION_STALE_MS], with no success of [source] since (the Nearby list's restart hint asks for the scanner).
+     */
+    @Synchronized
+    fun registrationGuidanceDue(source: PoolSource): Boolean =
+        clock() - registrationLastMs <= REGISTRATION_STALE_MS && (registrationFailures[source] ?: 0) >= REGISTRATION_THRESHOLD
+
     private fun registrationGuidanceDue(): Boolean =
         registrationFailures.isNotEmpty() && clock() - registrationLastMs <= REGISTRATION_STALE_MS &&
             registrationFailures.values.any { it >= REGISTRATION_THRESHOLD }

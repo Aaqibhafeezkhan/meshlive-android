@@ -202,6 +202,18 @@ class PrivateCallBenchmarkTest(unittest.TestCase):
             self.assertEqual({"bounded_media_age": True}, runner.broadcast_shape(call, phone)["tunables"])
         self.assertNotIn("tunables", runner.broadcast_shape(self.case, self.case["caller"]))
 
+    def test_phone_tunables_reach_only_their_endpoint(self):
+        call = {**self.case, "tunables": {"call_link_renewal": True},
+                "phone_tunables": {self.case["caller"]: {"call_tx_stall_after_s": 20}}}
+        self.assertEqual({"call_link_renewal": True, "call_tx_stall_after_s": 20},
+                         runner.broadcast_shape(call, call["caller"])["tunables"])
+        self.assertEqual({"call_link_renewal": True}, runner.broadcast_shape(call, call["callee"])["tunables"])
+        self.assertEqual({"a", "b"}, runner.validate_call_case(call, self.devices))
+        for bad in ({"c": {"call_tx_stall_after_s": 20}}, {"a": {"no_such_tunable": 1}},
+                    {"a": {"call_tx_stall_after_s": True}}, {"a": 20}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                runner.validate_call_case({**self.case, "phone_tunables": bad}, self.devices)
+
     def test_requested_call_trace_is_initialized_for_both_endpoint_launches(self):
         call = {**self.case, "media_trace": True}
         run = runner.CallRunner("adb", self.devices, call, Path("recorded-motion-call"))

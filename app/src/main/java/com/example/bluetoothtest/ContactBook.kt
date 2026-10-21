@@ -61,3 +61,41 @@ internal object ContactNames {
                 .thenBy { it.fingerprintHex },
         )
 }
+
+/**
+ * Whether Contacts can find a saved contact nearby, and what to tell the user when it cannot. With rotating IDs a contact
+ * advertises a changing ID that this phone recognises only with the presence lease that contact gave it; leases move in an
+ * answered call or when both phones scan each other's expiring code (Design QL). UI only, no protocol change.
+ */
+internal object ContactReach {
+    enum class Hint {
+        /** A lease is held, or this phone cannot recognise rotating IDs at all: "not found nearby yet" while absent. */
+        RECOGNISABLE,
+
+        /** No lease and the two phones have not scanned each other both ways: "Ask <name> to scan your code too". */
+        ASK_TO_SCAN,
+
+        /** No lease although both phones scanned each other (the exchange did not finish): scan again or call once from Nearby. */
+        SCAN_AGAIN,
+
+        /** No lease and the Add contact scan cannot move one here (expiring codes off): call once from Nearby. */
+        CALL_FROM_NEARBY,
+    }
+
+    /**
+     * [recognitionOn]: rotating IDs on with a persistent presence vault. [holdsLease]: the vault holds this contact's lease.
+     * [meetAvailable]: the expiring-code Add contact flow can run (it is the only scan that moves a lease).
+     */
+    fun hint(recognitionOn: Boolean, holdsLease: Boolean, scannedBothWays: Boolean, meetAvailable: Boolean): Hint = when {
+        !recognitionOn || holdsLease -> Hint.RECOGNISABLE
+        !meetAvailable -> Hint.CALL_FROM_NEARBY
+        !scannedBothWays -> Hint.ASK_TO_SCAN
+        else -> Hint.SCAN_AGAIN
+    }
+
+    /**
+     * Whether "Open Nearby" may wait for this contact and dial it when it appears. Only a recognisable contact can be matched;
+     * for any other the wait could never succeed, so Nearby opens for browsing only.
+     */
+    fun mayWaitForCallBack(hint: Hint): Boolean = hint == Hint.RECOGNISABLE
+}

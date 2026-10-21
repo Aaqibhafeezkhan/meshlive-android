@@ -122,7 +122,8 @@ class MessagingV2ThreadEngineTest {
         // The rows model turns it into the words of the Contacts row.
         val time = ThreadTime({ rig.clock() }, java.time.ZoneId.of("UTC"), { "12:00" }, { _, _ -> "1 Jan" })
         val model = ConversationRows.row(ContactRef(bob.nodeId.toString(), "Bob"), row, false, XmlThreadText, time)
-        assertEquals("Voice note", model.subtitle)
+        // Alice's own newest message: the chat list reads "You: Voice note" (2026-10-21).
+        assertEquals(XmlThreadText.get("mv2_ui_preview_you", "Voice note"), model.subtitle)
         assertEquals(DeliveryGlyph.CLOCK, model.glyph?.glyph)
     }
 
@@ -132,27 +133,28 @@ class MessagingV2ThreadEngineTest {
 
     @Test
     fun threadSettingsPersistSealedAndForgetWhenAsked() {
+        // Realistic 12-hex node IDs: a two-letter ID ("aa") also occurs by chance in the sealed random bytes (flaky).
         val dir = Files.createTempDirectory("mv2-settings").toFile()
         try {
             val file = File(dir, "thread-settings.properties")
             val settings = ThreadSettings(file, cipher)
-            assertEquals(0, settings.disappearSeconds("aa"))
-            assertNull(settings.readReceipts("aa"))
-            settings.setDisappearSeconds("aa", 86_400)
-            settings.setReadReceipts("aa", true)
-            settings.setReadReceipts("bb", false)
+            assertEquals(0, settings.disappearSeconds("3915eea54ea3"))
+            assertNull(settings.readReceipts("3915eea54ea3"))
+            settings.setDisappearSeconds("3915eea54ea3", 86_400)
+            settings.setReadReceipts("3915eea54ea3", true)
+            settings.setReadReceipts("362398ac5518", false)
             val reopened = ThreadSettings(file, cipher)
-            assertEquals(86_400, reopened.disappearSeconds("aa"))
-            assertEquals(true, reopened.readReceipts("aa"))
-            assertEquals(false, reopened.readReceipts("bb"))
-            assertEquals(0, reopened.disappearSeconds("bb"))
-            assertFalse("the node IDs are sealed at rest", String(file.readBytes(), Charsets.ISO_8859_1).contains("aa"))
-            reopened.setDisappearSeconds("aa", 0)
-            reopened.setReadReceipts("aa", null)
-            assertEquals(0, ThreadSettings(file, cipher).disappearSeconds("aa"))
-            assertNull(ThreadSettings(file, cipher).readReceipts("aa"))
-            reopened.forget("bb")
-            assertNull(ThreadSettings(file, cipher).readReceipts("bb"))
+            assertEquals(86_400, reopened.disappearSeconds("3915eea54ea3"))
+            assertEquals(true, reopened.readReceipts("3915eea54ea3"))
+            assertEquals(false, reopened.readReceipts("362398ac5518"))
+            assertEquals(0, reopened.disappearSeconds("362398ac5518"))
+            assertFalse("the node IDs are sealed at rest", String(file.readBytes(), Charsets.ISO_8859_1).contains("3915eea54ea3"))
+            reopened.setDisappearSeconds("3915eea54ea3", 0)
+            reopened.setReadReceipts("3915eea54ea3", null)
+            assertEquals(0, ThreadSettings(file, cipher).disappearSeconds("3915eea54ea3"))
+            assertNull(ThreadSettings(file, cipher).readReceipts("3915eea54ea3"))
+            reopened.forget("362398ac5518")
+            assertNull(ThreadSettings(file, cipher).readReceipts("362398ac5518"))
         } finally {
             dir.deleteRecursively()
         }

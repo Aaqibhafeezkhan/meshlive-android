@@ -26,7 +26,7 @@ import kotlin.concurrent.thread
  *       Confirmation-free entry point for an in-app panic gesture (for example a triple-tap).
  *   EmergencyWipe.wipeConfirmed(context, confirmationText: String): WipeReport
  *       The confirmed variant: runs only when confirmationText == EmergencyWipe.CONFIRMATION_TEXT
- *       ("WIPE"); otherwise throws IllegalArgumentException and touches nothing.
+ *       ("DELETE"); otherwise throws IllegalArgumentException and touches nothing.
  *   EmergencyWipe.wipe(context, reason: WipeReason, exitProcess: Boolean = true): WipeReport
  *       The shared synchronous implementation; safe to call from the main thread.
  *   EmergencyWipe.isPending(context) / resumePendingWipe(context): WipeReport
@@ -127,7 +127,7 @@ interface WipeEnvironment {
 }
 
 object EmergencyWipe {
-    const val CONFIRMATION_TEXT = "WIPE"
+    const val CONFIRMATION_TEXT = "DELETE"
     const val TERMINATOR_WAIT_MS = 2_500L
 
     /** In noBackupFilesDir; present from the start of a wipe until it completes. */
@@ -168,6 +168,12 @@ object EmergencyWipe {
         // (after a wipe the neutral name stays; no record of the user's own name remains).
         "rotating_discovery",
         "rotating_discovery_name",
+        // Crash reports: the "Don't ask again" choice (the reports themselves live in filesDir and go with it).
+        "crash_reports",
+        // Missed-call notification: the one-time Call back tokens (no call content).
+        "missed_call",
+        // Chats: the local mute list (thread IDs only).
+        "chat_mute",
     )
 
     /** dataDir children that are not app data: native library link and ART's code cache. */

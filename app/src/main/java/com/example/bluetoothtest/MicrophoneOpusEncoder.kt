@@ -343,16 +343,36 @@ class MicrophoneOpusEncoder(
     private fun onCaptureSilence(current: AudioRecord): AudioRecord {
         val cause = SilenceClassifier.classify(clientSilenced)
         val toggle = micToggleSupported()
+        val evidence = AudioSwitches.captureSilenceEvidence
+        val notice = SilenceClassifier.episodeNotice(cause, toggle, evidence)
         Log.i(
             "BluetoothVideo",
             "BENCHMARK audio_capture_silence: cause=${cause.name} | source=${CaptureSourceChain.label(captureSource)} | " +
                 "clientSilenced=${clientSilenced ?: "?"} | micToggleSupported=$toggle | " +
-                "sourceFallback=${AudioSwitches.captureSourceFallback}",
+                "sourceFallback=${AudioSwitches.captureSourceFallback} | notice=${notice?.name ?: "awaiting_evidence"}",
         )
-        emitNotice(SilenceClassifier.notice(cause, toggle))
+        notice?.let(::emitNotice)
+        if (evidence) return current
+        return relaxSource(current, cause, "digital_silence_${CaptureSilenceDetector.THRESHOLD_MS}ms")
+    }
+
+    /** F18: a blank capture confirmed by [BlankCaptureEvidence]; the platform's own silencing was told at the episode. */
+    private fun onBlankConfirmed(current: AudioRecord, verdict: BlankCaptureEvidence.Verdict, zeroMs: Long): AudioRecord {
+        val cause = SilenceClassifier.classify(clientSilenced)
+        Log.i(
+            "BluetoothVideo",
+            "BENCHMARK audio_capture_blank: evidence=${verdict.name.lowercase()} | zeroMs=$zeroMs | cause=${cause.name} | " +
+                "source=${CaptureSourceChain.label(captureSource)} | clientSilenced=${clientSilenced ?: "?"}",
+        )
+        if (cause != SilenceCause.BLANK_CAPTURE) return current
+        emitNotice(AudioCaptureNotice.CAPTURE_SILENT)
+        return relaxSource(current, cause, "blank_${verdict.name.lowercase()}_${zeroMs}ms")
+    }
+
+    private fun relaxSource(current: AudioRecord, cause: SilenceCause, reason: String): AudioRecord {
         if (!SilenceClassifier.mayChangeSource(cause) || !AudioSwitches.captureSourceFallback) return current
         val next = CaptureSourceChain.next(communicationMode, captureSource) ?: return current
-        return switchSource(current, next, "digital_silence_${CaptureSilenceDetector.THRESHOLD_MS}ms") ?: current
+        return switchSource(current, next, reason) ?: current
     }
 
     /**
@@ -450,6 +470,7 @@ class MicrophoneOpusEncoder(
         var captureTimestampAttempts = 0
         val watchdogOn = AudioSwitches.policyActive(CAPTURE_WATCHDOG_ENTRY_ID)
         val silence = CaptureSilenceDetector(FRAME_DURATION_US / 1_000L)
+        val blank = BlankCaptureEvidence(FRAME_DURATION_US / 1_000L)
         var deadObjectRebuilds = 0
         var frames = 0L
         try {
@@ -517,7 +538,15 @@ class MicrophoneOpusEncoder(
                 capturedSamples += frameBytes / BYTES_PER_SAMPLE
                 frames++
                 if (watchdogOn) {
-                    if (silence.onFrame(PcmLevel.peak(bytes))) current = onCaptureSilence(current)
+                    val peak = PcmLevel.peak(bytes)
+                    val before = current
+                    if (silence.onFrame(peak)) current = onCaptureSilence(current)
+                    if (AudioSwitches.captureSilenceEvidence) {
+                        val verdict = blank.onFrame(peak)
+                        if (verdict != BlankCaptureEvidence.Verdict.NONE) current = onBlankConfirmed(current, verdict, blank.zeroMs)
+                    }
+                    // A relaxed source is a new stream: it has to show signal again.
+                    if (current !== before) blank.reset()
                     if (frames == ECHO_CHECK_FRAME) checkEchoRisk()
                 }
                 val frame = PcmFrame(bytes, presentationTimeUs)

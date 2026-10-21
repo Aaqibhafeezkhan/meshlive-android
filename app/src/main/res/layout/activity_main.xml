@@ -282,6 +282,43 @@
                         android:textColor="@android:color/white" />
                 </LinearLayout>
 
+                <!-- Why the start is blocked, when the user can act on it (LiveStartGate): missing access with Allow or
+                     Open settings, or Bluetooth off with Turn on. Hidden otherwise. -->
+                <LinearLayout
+                    android:id="@+id/liveStartNotice"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:layout_marginStart="24dp"
+                    android:layout_marginEnd="24dp"
+                    android:background="@drawable/call_overlay_background"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical"
+                    android:paddingStart="20dp"
+                    android:paddingTop="16dp"
+                    android:paddingEnd="20dp"
+                    android:paddingBottom="12dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/liveStartNoticeText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:accessibilityLiveRegion="polite"
+                        android:gravity="center"
+                        android:maxWidth="300dp"
+                        android:textAppearance="@style/TextAppearance.App.Body"
+                        android:textColor="@android:color/white" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/liveStartNoticeAction"
+                        style="@style/Widget.App.Button.Secondary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:visibility="gone" />
+                </LinearLayout>
+
                 <!-- Top bar, the same on broadcasting and watching: back, title (and viewers), red-dot LIVE badge, timer. -->
                 <LinearLayout
                     android:id="@+id/liveTopBar"
@@ -889,6 +926,48 @@
                     style="@style/Widget.App.StatusLine"
                     android:text="@string/people_starting" />
 
+                <!-- Calls > Nearby: "You appear as Gold Fox" + (i) on one line (OwnNearbyName; the tap explains the 15-minute
+                     change), and a small indicator while the list searches (no "Looking..." text). -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <com.example.bluetoothtest.InfoLabelView
+                        android:id="@+id/nearbySelfLine"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:background="?attr/selectableItemBackground"
+                        android:gravity="center_vertical"
+                        android:maxLines="1"
+                        android:minHeight="40dp"
+                        android:textAppearance="@style/TextAppearance.App.Body"
+                        android:visibility="gone" />
+
+                    <ProgressBar
+                        android:id="@+id/callsSearchingIndicator"
+                        style="?android:attr/progressBarStyleSmall"
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:layout_marginStart="8dp"
+                        android:indeterminate="true"
+                        android:indeterminateTint="@color/text_secondary"
+                        android:visibility="gone" />
+                </LinearLayout>
+
+                <EditText
+                    android:id="@+id/nearbyPeopleSearch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:inputType="text"
+                    android:singleLine="true"
+                    android:imeOptions="actionDone"
+                    android:hint="@string/nearby_search_hint"
+                    android:visibility="gone" />
+
                 <!-- The list refreshes itself in place (no flicker). -->
                 <FrameLayout
                     android:layout_width="match_parent"
@@ -1395,6 +1474,21 @@
                         android:textAppearance="@style/TextAppearance.App.Label"
                         android:textColor="@color/text_secondary"
                         android:textSize="14sp" />
+                    <TextView
+                        android:id="@+id/declineAndReportButton"
+                        android:visibility="gone"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:gravity="center"
+                        android:minHeight="48dp"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:text="@string/report_action"
+                        android:textAppearance="@style/TextAppearance.App.Label"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="14sp" />
                 </LinearLayout>
 
                 <com.google.android.material.button.MaterialButton
@@ -1628,6 +1722,29 @@
 
                     <LinearLayout style="@style/Widget.App.SettingsCard">
 
+                    <!-- Identity terms (audit 2026-10-21): "Your code" first, opening Add contact on Show my code. -->
+                    <LinearLayout
+                        android:id="@+id/settingsRowYourCode"
+                        style="@style/Widget.App.Row"
+                        android:contentDescription="@string/settings_your_code">
+
+                        <ImageView
+                            style="@style/Widget.App.RowIcon"
+                            android:src="@drawable/ic_qr_code" />
+
+                        <TextView
+                            style="@style/Widget.App.RowTitle"
+                            android:importantForAccessibility="no"
+                            android:text="@string/settings_your_code" />
+
+                        <ImageView
+                            android:layout_width="24dp"
+                            android:layout_height="24dp"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_chevron_right"
+                            app:tint="@color/text_secondary" />
+                    </LinearLayout>
+
                     <LinearLayout
                         android:id="@+id/identityNameButton"
                         style="@style/Widget.App.Row"
@@ -1639,19 +1756,25 @@
                             android:src="@drawable/ic_person" />
 
 
-                        <TextView
-                            style="@style/Widget.App.RowTitle"
-                            android:importantForAccessibility="no"
-                            android:text="@string/identity_name_title" />
-
-                        <TextView
-                            android:id="@+id/identityNameValue"
-                            android:layout_width="wrap_content"
+                        <com.example.bluetoothtest.TitleValueLayout
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginEnd="4dp"
-                            android:importantForAccessibility="no"
-                            android:textAppearance="@style/TextAppearance.App.Body"
-                            />
+                            android:layout_weight="1">
+
+                            <TextView
+                                style="@style/Widget.App.RowTitle"
+                                android:importantForAccessibility="no"
+                                android:text="@string/identity_name_title" />
+
+                            <TextView
+                                android:id="@+id/identityNameValue"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginEnd="4dp"
+                                android:importantForAccessibility="no"
+                                android:textAppearance="@style/TextAppearance.App.Body"
+                                />
+                        </com.example.bluetoothtest.TitleValueLayout>
 
                         <ImageView
                             android:layout_width="24dp"
@@ -1672,19 +1795,25 @@
                             android:src="@drawable/ic_visibility" />
 
 
-                        <TextView
-                            style="@style/Widget.App.RowTitle"
-                            android:importantForAccessibility="no"
-                            android:text="@string/names_audience_title" />
-
-                        <TextView
-                            android:id="@+id/identityAudienceValue"
-                            android:layout_width="wrap_content"
+                        <com.example.bluetoothtest.TitleValueLayout
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginEnd="4dp"
-                            android:importantForAccessibility="no"
-                            android:textAppearance="@style/TextAppearance.App.Body"
-                            />
+                            android:layout_weight="1">
+
+                            <TextView
+                                style="@style/Widget.App.RowTitle"
+                                android:importantForAccessibility="no"
+                                android:text="@string/names_audience_title" />
+
+                            <TextView
+                                android:id="@+id/identityAudienceValue"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginEnd="4dp"
+                                android:importantForAccessibility="no"
+                                android:textAppearance="@style/TextAppearance.App.Body"
+                                />
+                        </com.example.bluetoothtest.TitleValueLayout>
 
                         <ImageView
                             android:layout_width="24dp"
@@ -1752,20 +1881,26 @@
                             android:src="@drawable/ic_videocam" />
 
 
-                        <TextView
-                            style="@style/Widget.App.RowTitle"
-                            android:importantForAccessibility="no"
-                            android:text="@string/settings_row_video" />
-
-                        <TextView
-                            android:id="@+id/settingsRowVideoValue"
-                            android:layout_width="wrap_content"
+                        <com.example.bluetoothtest.TitleValueLayout
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginEnd="4dp"
-                            android:importantForAccessibility="no"
-                            android:textAppearance="@style/TextAppearance.App.Body"
-                            android:text="@string/settings_video_auto"
-                            />
+                            android:layout_weight="1">
+
+                            <TextView
+                                style="@style/Widget.App.RowTitle"
+                                android:importantForAccessibility="no"
+                                android:text="@string/settings_row_video" />
+
+                            <TextView
+                                android:id="@+id/settingsRowVideoValue"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginEnd="4dp"
+                                android:importantForAccessibility="no"
+                                android:textAppearance="@style/TextAppearance.App.Body"
+                                android:text="@string/settings_video_auto"
+                                />
+                        </com.example.bluetoothtest.TitleValueLayout>
 
                         <ImageView
                             android:layout_width="24dp"
@@ -1992,10 +2127,47 @@
                     </LinearLayout>
 
                     <LinearLayout
+                        android:id="@+id/contactUsRow"
+                        style="@style/Widget.App.Row">
+
+                        <ImageView
+                            style="@style/Widget.App.RowIcon"
+                            android:src="@drawable/ic_send" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:textAppearance="@style/TextAppearance.App.RowLabel"
+                                android:text="@string/contact_us" />
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:textAppearance="@style/TextAppearance.App.Label"
+                                android:text="@string/contact_us_subtitle" />
+                        </LinearLayout>
+
+                        <ImageView
+                            android:layout_width="24dp"
+                            android:layout_height="24dp"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_chevron_right"
+                            app:tint="@color/text_secondary" />
+                    </LinearLayout>
+
+                    <LinearLayout
                         android:id="@+id/updateFeaturesContainer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="vertical" />
+                        android:orientation="vertical"
+                        android:divider="@drawable/settings_divider"
+                        android:showDividers="middle" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/updateOpenButton"
@@ -2146,7 +2318,9 @@
                         android:id="@+id/viewerFeaturesContainer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="vertical" />
+                        android:orientation="vertical"
+                        android:divider="@drawable/settings_divider"
+                        android:showDividers="middle" />
 
                     </LinearLayout>
 
@@ -2206,18 +2380,17 @@
                             android:layout_weight="1"
                             android:gravity="center_vertical"
                             android:orientation="horizontal">
-                            <TextView
+                            <com.example.bluetoothtest.InfoLabelView
                                 android:id="@+id/neutralBluetoothNameSwitchInfo"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:minHeight="56dp"
                                 android:gravity="center_vertical"
                                 android:background="?attr/selectableItemBackground"
-                                android:drawableEnd="@drawable/ic_info_small"
-                                android:drawablePadding="6dp"
-                                android:drawableTint="@color/text_secondary"
                                 android:textAppearance="@style/TextAppearance.App.RowLabel"
-                                android:text="@string/neutral_bluetooth_name" />
+                                android:text="@string/neutral_bluetooth_name"
+                                android:paddingTop="16dp"
+                                android:paddingBottom="16dp"/>
                         </LinearLayout>
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/neutralBluetoothNameSwitch"
@@ -2260,18 +2433,17 @@
                             android:layout_weight="1"
                             android:gravity="center_vertical"
                             android:orientation="horizontal">
-                            <TextView
+                            <com.example.bluetoothtest.InfoLabelView
                                 android:id="@+id/panicGestureSwitchInfo"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:minHeight="56dp"
                                 android:gravity="center_vertical"
                                 android:background="?attr/selectableItemBackground"
-                                android:drawableEnd="@drawable/ic_info_small"
-                                android:drawablePadding="6dp"
-                                android:drawableTint="@color/text_secondary"
                                 android:textAppearance="@style/TextAppearance.App.RowLabel"
-                                android:text="@string/panic_gesture" />
+                                android:text="@string/panic_gesture"
+                                android:paddingTop="16dp"
+                                android:paddingBottom="16dp"/>
                         </LinearLayout>
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/panicGestureSwitch"
@@ -2307,18 +2479,17 @@
                                 android:layout_weight="1"
                                 android:gravity="center_vertical"
                                 android:orientation="horizontal">
-                                <TextView
+                                <com.example.bluetoothtest.InfoLabelView
                                     android:id="@+id/blockUnknownCallersSwitchInfo"
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
                                     android:minHeight="56dp"
                                     android:gravity="center_vertical"
                                     android:background="?attr/selectableItemBackground"
-                                    android:drawableEnd="@drawable/ic_info_small"
-                                    android:drawablePadding="6dp"
-                                    android:drawableTint="@color/text_secondary"
                                     android:textAppearance="@style/TextAppearance.App.RowLabel"
-                                    android:text="@string/block_unknown_callers" />
+                                    android:text="@string/block_unknown_callers"
+                                    android:paddingTop="16dp"
+                                    android:paddingBottom="16dp"/>
                             </LinearLayout>
                             <com.google.android.material.materialswitch.MaterialSwitch
                                 android:id="@+id/blockUnknownCallersSwitch"
@@ -2409,7 +2580,9 @@
                         android:id="@+id/privacyFeaturesContainer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="vertical" />
+                        android:orientation="vertical"
+                        android:divider="@drawable/settings_divider"
+                        android:showDividers="middle" />
 
                     <!-- Messaging v2 (phase 1c): Read receipts, Download files automatically (shown with the feature on). -->
                     <include layout="@layout/view_mv2_privacy_rows" />
@@ -2419,7 +2592,9 @@
                         android:id="@+id/namingFeaturesContainer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="vertical" />
+                        android:orientation="vertical"
+                        android:divider="@drawable/settings_divider"
+                        android:showDividers="middle" />
 
                     <!-- Visible by name (only while that switch is on): start or stop the ten-minute window. -->
                     <LinearLayout
@@ -2428,19 +2603,25 @@
                         android:visibility="gone"
                         android:contentDescription="@string/visible_name_row">
 
-                        <TextView
-                            style="@style/Widget.App.RowTitle"
-                            android:importantForAccessibility="no"
-                            android:text="@string/visible_name_row" />
-
-                        <TextView
-                            android:id="@+id/visibleByNameValue"
-                            android:layout_width="wrap_content"
+                        <com.example.bluetoothtest.TitleValueLayout
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginEnd="4dp"
-                            android:importantForAccessibility="no"
-                            android:textAppearance="@style/TextAppearance.App.Body"
-                            />
+                            android:layout_weight="1">
+
+                            <TextView
+                                style="@style/Widget.App.RowTitle"
+                                android:importantForAccessibility="no"
+                                android:text="@string/visible_name_row" />
+
+                            <TextView
+                                android:id="@+id/visibleByNameValue"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginEnd="4dp"
+                                android:importantForAccessibility="no"
+                                android:textAppearance="@style/TextAppearance.App.Body"
+                                />
+                        </com.example.bluetoothtest.TitleValueLayout>
 
                         <ImageView
                             android:layout_width="24dp"
@@ -2466,18 +2647,17 @@
                             android:layout_weight="1"
                             android:gravity="center_vertical"
                             android:orientation="horizontal">
-                            <TextView
+                            <com.example.bluetoothtest.InfoLabelView
                                 android:id="@+id/experimentalRotatingIdsSwitchInfo"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:minHeight="56dp"
                                 android:gravity="center_vertical"
                                 android:background="?attr/selectableItemBackground"
-                                android:drawableEnd="@drawable/ic_info_small"
-                                android:drawablePadding="6dp"
-                                android:drawableTint="@color/text_secondary"
                                 android:textAppearance="@style/TextAppearance.App.RowLabel"
-                                android:text="@string/experimental_rotating_ids" />
+                                android:text="@string/experimental_rotating_ids"
+                                android:paddingTop="16dp"
+                                android:paddingBottom="16dp"/>
                         </LinearLayout>
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/experimentalRotatingIdsSwitch"
@@ -2712,7 +2892,9 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="16dp"
-                        android:orientation="vertical" />
+                        android:orientation="vertical"
+                        android:divider="@drawable/settings_divider"
+                        android:showDividers="middle" />
 
                     </LinearLayout>
                     </LinearLayout>
@@ -3088,7 +3270,9 @@
                         android:id="@+id/shareFeaturesContainer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="vertical" />
+                        android:orientation="vertical"
+                        android:divider="@drawable/settings_divider"
+                        android:showDividers="middle" />
 
                     <LinearLayout
                         android:id="@+id/experimentalTemporalLayersSwitchRow"
@@ -3106,18 +3290,17 @@
                             android:layout_weight="1"
                             android:gravity="center_vertical"
                             android:orientation="horizontal">
-                            <TextView
+                            <com.example.bluetoothtest.InfoLabelView
                                 android:id="@+id/experimentalTemporalLayersSwitchInfo"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:minHeight="56dp"
                                 android:gravity="center_vertical"
                                 android:background="?attr/selectableItemBackground"
-                                android:drawableEnd="@drawable/ic_info_small"
-                                android:drawablePadding="6dp"
-                                android:drawableTint="@color/text_secondary"
                                 android:textAppearance="@style/TextAppearance.App.RowLabel"
-                                android:text="Experimental: temporal layering (may drop enhancement frames under congestion)" />
+                                android:text="Experimental: temporal layering (may drop enhancement frames under congestion)"
+                                android:paddingTop="16dp"
+                                android:paddingBottom="16dp"/>
                         </LinearLayout>
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/experimentalTemporalLayersSwitch"
@@ -3153,18 +3336,17 @@
                             android:layout_weight="1"
                             android:gravity="center_vertical"
                             android:orientation="horizontal">
-                            <TextView
+                            <com.example.bluetoothtest.InfoLabelView
                                 android:id="@+id/relayChildMediaAgeSwitchInfo"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:minHeight="56dp"
                                 android:gravity="center_vertical"
                                 android:background="?attr/selectableItemBackground"
-                                android:drawableEnd="@drawable/ic_info_small"
-                                android:drawablePadding="6dp"
-                                android:drawableTint="@color/text_secondary"
                                 android:textAppearance="@style/TextAppearance.App.RowLabel"
-                                android:text="Relay: slow viewers skip to keyframes" />
+                                android:text="Relay: slow viewers skip to keyframes"
+                                android:paddingTop="16dp"
+                                android:paddingBottom="16dp"/>
                         </LinearLayout>
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/relayChildMediaAgeSwitch"
@@ -3200,18 +3382,17 @@
                             android:layout_weight="1"
                             android:gravity="center_vertical"
                             android:orientation="horizontal">
-                            <TextView
+                            <com.example.bluetoothtest.InfoLabelView
                                 android:id="@+id/experimentalRelayedCallsSwitchInfo"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:minHeight="56dp"
                                 android:gravity="center_vertical"
                                 android:background="?attr/selectableItemBackground"
-                                android:drawableEnd="@drawable/ic_info_small"
-                                android:drawablePadding="6dp"
-                                android:drawableTint="@color/text_secondary"
                                 android:textAppearance="@style/TextAppearance.App.RowLabel"
-                                android:text="@string/experimental_relayed_calls" />
+                                android:text="@string/experimental_relayed_calls"
+                                android:paddingTop="16dp"
+                                android:paddingBottom="16dp"/>
                         </LinearLayout>
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/experimentalRelayedCallsSwitch"

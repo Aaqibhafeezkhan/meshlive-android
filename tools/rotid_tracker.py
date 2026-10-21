@@ -4,7 +4,7 @@ Acts as an adversary with one or more passive BLE scanners. Inputs are full-HCI 
 scanning phone (every LE advertising / scan-response report is extracted: legacy 0x3E/0x02 and extended
 0x3E/0x0D) and/or scanner logcat files with `BENCHMARK adv_address_seen` lines. It decodes the MeshLive
 announcements (22-byte v2/v5, compact UUIDs v1/v2, title pages v3, reach pages v4/v6; layouts ported from
-docs/PROTOCOL.md and the Kotlin codecs), builds one "set" per (scanner, address, role identity), and links
+docs/dev/protocol/README.md and the Kotlin codecs), builds one "set" per (scanner, address, role identity), and links
 sets across the declared UTC epoch boundaries by every field that repeats: address, RDI/prefix, route
 token (except the documented logical stream token), recovery hint, reach-page identifiers, any opaque or
 extra AD bytes. It also measures what it cannot call a field link: continuity (one set ends, one begins

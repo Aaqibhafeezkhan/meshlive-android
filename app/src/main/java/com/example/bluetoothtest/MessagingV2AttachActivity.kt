@@ -157,14 +157,14 @@ class MessagingV2AttachActivity : ComponentActivity() {
     private fun open(message: ThreadMessage, attachment: AttachmentInfo, vaultId: String) {
         val granted = MessagingV2Opens.grantFor(applicationContext, vaultId, attachment.name, attachment.presentation, message.peerNode)
         if (granted == null) {
-            Toast.makeText(this, "This file type is not opened from here", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.attach_cannot_open_type, Toast.LENGTH_SHORT).show()
             return
         }
         Log.i("BluetoothVideo", "BENCHMARK message_v2_attach open mime=${granted.mime} bytes=${granted.grant.size}")
         try {
             startActivity(MessagingV2Opens.viewIntent(granted))
         } catch (error: ActivityNotFoundException) {
-            Toast.makeText(this, "No app can show this", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.attach_no_app, Toast.LENGTH_SHORT).show()
         }
     }
 

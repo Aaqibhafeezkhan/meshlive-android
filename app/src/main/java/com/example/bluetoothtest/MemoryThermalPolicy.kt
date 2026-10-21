@@ -546,6 +546,18 @@ internal class BoundedControlQueue<T : Any>(
     val size: Int get() = synchronized(lock) { entries.size }
     val refusedOffers: Long get() = synchronized(lock) { refused }
 
+    /**
+     * Always accepted, ahead of everything queued, in the given order: must-deliver items a writer took but could not
+     * deliver (link renewal re-queues them so they keep their place before newer controls).
+     */
+    fun offerMustFirst(items: List<T>) {
+        if (items.isEmpty()) return
+        synchronized(lock) {
+            items.asReversed().forEach { entries.addFirst(Entry(it, null)) }
+            lock.notifyAll()
+        }
+    }
+
     /** Always accepted: terminal and lifecycle messages must reach the peer. */
     fun offerMust(item: T) {
         synchronized(lock) {

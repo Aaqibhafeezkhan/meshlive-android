@@ -5,7 +5,7 @@ import android.content.Intent
 
 /**
  * Switches of the session-service batch (device-family backlog B1). The register of experimental and
- * optional behaviour is docs/SWITCHES.md; this object is where the defaults live.
+ * optional behaviour is docs/dev/switches.md; this object is where the defaults live.
  *
  * Every arm that differs from the shipped behaviour is DEBUG-only (a launch extra from another app must not change a
  * release build). The launch extras are parsed by [applyLaunchExtras], which the main activity calls once with the

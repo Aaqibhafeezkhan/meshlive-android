@@ -179,6 +179,8 @@ internal class QrCodeDisplay(
         when (code.phase) {
             Phase.CONSUMED -> {
                 // A genuinely new attempt on a consumed code: someone else holds it. Cancel the pending scan, alert.
+                // Design QL (review R1): a lease that has not left yet is withheld for the rest of this visit.
+                QrMeet.visit.onReuseAlert()
                 events.onReuseAlert()
                 throw Bmh3Failure("qr consumed")
             }
@@ -287,16 +289,19 @@ internal class QrConnectionGate(private val display: QrCodeDisplay) {
  *
  * - link records: the end-to-end handshake, end-to-end content, link heartbeats and the link opening `BDO1`; everything
  *   else (store-and-forward, relay setup, mesh envelopes, group and route control) closes it;
- * - content: `LABELS` only (the scanner's optional name, kind 1); `INVITE`/call signals, discovery records (so no presence
- *   lease and no recognition offer), streams, media, key frames and group keys close it;
- * - completion: the successful end-to-end handshake IS the verification event; the app then ends the session. No extra
- *   control message exists;
- * - no ordinary contact side effect: no ring, recent-call entry, lease, label persistence or message exchange;
+ * - content: `LABELS` (the scanner's optional name, kind 1) and, when both endpoint hellos carry bit 3, one `BDX1`
+ *   `RECOGNITION_OFFER` and one `PRESENCE_LEASE` per direction (Design QL); `INVITE`/call signals, other discovery records
+ *   (`OPENING`, `IDENTITY_REVEAL`, a second OFFER or LEASE), streams, media, key frames and group keys close it;
+ * - completion: the successful end-to-end handshake IS the verification event; the app then ends the session, after the
+ *   presence exchange when this side takes part in one. No extra control message exists;
+ * - no ordinary contact side effect: no ring, recent-call entry, label persistence or message exchange;
  * - at most [MAX_SESSION_MS] after the handshake, then it closes. A violation closes it and is counted.
  */
 internal class QrSessionScope(private val startMs: Long) {
     var violations = 0
         private set
+
+    private val discoveryKindsSeen = HashSet<Int>()
 
     fun allowsLinkRecord(type: SecureRecordType): Boolean = type in LINK_RECORDS
 
@@ -307,6 +312,23 @@ internal class QrSessionScope(private val startMs: Long) {
 
     fun refuseContent(type: EndToEndContentType): Boolean = (!allowsContent(type)).also { if (it) violations++ }
 
+    /**
+     * Design QL: a `BDX1` record is allowed only as the first OFFER or the first LEASE from the peer, and only when both
+     * endpoint hellos carried bit 3 ([negotiated]). True when refused; counts the violation.
+     */
+    @Synchronized
+    fun refuseDiscovery(payload: ByteArray, negotiated: Boolean): Boolean {
+        val magic = DiscoveryExchange.MAGIC
+        val kind = if (payload.size > magic.size && payload.copyOfRange(0, magic.size).contentEquals(magic)) {
+            payload[magic.size].toInt() and 0xff
+        } else {
+            -1
+        }
+        val allowed = negotiated && kind in LEASE_KINDS && discoveryKindsSeen.add(kind)
+        if (!allowed) violations++
+        return !allowed
+    }
+
     fun expired(nowMs: Long): Boolean = nowMs - startMs >= MAX_SESSION_MS
 
     companion object {
@@ -314,12 +336,19 @@ internal class QrSessionScope(private val startMs: Long) {
 
         /** After the verification event the session lingers briefly (the scanner's name label may still be in flight). */
         const val CLOSE_GRACE_MS = 2_000L
+
+        /**
+         * Design QL (review R5): how long a session waits for the scanner's confirmation (scanner) or its OFFER (displayer)
+         * before it ends without a lease; the endpoint is busy meanwhile, so this stays well below [MAX_SESSION_MS].
+         */
+        const val CONFIRM_WAIT_MS = 20_000L
         val LINK_RECORDS = setOf(
             SecureRecordType.END_TO_END_HANDSHAKE,
             SecureRecordType.END_TO_END_CONTENT,
             SecureRecordType.LINK_HEARTBEAT,
             SecureRecordType.DISCOVERY_OPENING,
         )
+        val LEASE_KINDS = setOf(DiscoveryExchange.KIND_RECOGNITION_OFFER, DiscoveryExchange.KIND_PRESENCE_LEASE)
     }
 }
 
@@ -360,6 +389,11 @@ internal class MeetSession {
     private val scannedByMe = HashSet<IdentityFingerprint>()
     private val pendingConfirm = HashMap<IdentityFingerprint, String>()
     private val scannedMe = HashSet<IdentityFingerprint>()
+    private val recognised = HashSet<IdentityFingerprint>()
+    /** Design QL revision 2: the people this phone's user unchecked "Let <name>'s phone recognise yours nearby" for. */
+    private val declined = HashSet<IdentityFingerprint>()
+    /** When a lease for each person was stored in this visit (elapsed ms), for Call now's 60 s. */
+    private val storedAtMs = HashMap<IdentityFingerprint, Long>()
     var reuseAlert = false
         private set
 
@@ -384,6 +418,44 @@ internal class MeetSession {
         scannedMe += peer
     }
 
+    /** Design QL: a verification session in this visit stored [peer]'s presence lease. */
+    fun leaseStored(peer: IdentityFingerprint, nowMs: Long = 0L) {
+        recognised += peer
+        storedAtMs[peer] = nowMs
+    }
+
+    /** Design QL revision 2: the user unchecked recognition for [peer] at the scan confirmation. */
+    fun declinedRecognition(peer: IdentityFingerprint) {
+        declined += peer
+    }
+
+    /** Revision 2's plain result for [peer]; null before any scan. */
+    fun qlResult(peer: IdentityFingerprint): QlResult? = when (outcome(peer)) {
+        Outcome.NONE -> null
+        Outcome.YOU_VERIFIED, Outcome.THEY_SCANNED_YOU -> QlResult.ONE_SCAN
+        Outcome.VERIFIED_EACH_OTHER -> when {
+            peer in recognised -> QlResult.RECOGNISED
+            peer in declined -> QlResult.DECLINED
+            else -> QlResult.NOT_FINISHED
+        }
+    }
+
+    /** Call now: only with result (a), for [CALL_NOW_MS] after the lease was stored in this visit. */
+    fun callNowVisible(peer: IdentityFingerprint, nowMs: Long): Boolean {
+        if (qlResult(peer) != QlResult.RECOGNISED) return false
+        val at = storedAtMs[peer] ?: return false
+        return nowMs - at in 0 until CALL_NOW_MS
+    }
+
+    /** (a) callable from Contacts, (b) this phone declined, (c) not finished (no reason guessed), (d) one scan so far. */
+    enum class QlResult { RECOGNISED, DECLINED, NOT_FINISHED, ONE_SCAN }
+
+    companion object {
+        const val CALL_NOW_MS = 60_000L
+    }
+
+    fun recognises(peer: IdentityFingerprint): Boolean = peer in recognised
+
     fun onReuseAlert() {
         reuseAlert = true
         pendingConfirm.clear()
@@ -400,7 +472,12 @@ internal class MeetSession {
         Outcome.NONE -> null
         Outcome.YOU_VERIFIED -> "You scanned $name. $name has not scanned your code yet."
         Outcome.THEY_SCANNED_YOU -> "$name scanned your code. Now scan $name's code."
-        Outcome.VERIFIED_EACH_OTHER -> "You and $name scanned each other. Your phones will recognise each other after your next call."
+        Outcome.VERIFIED_EACH_OTHER -> if (peer in recognised) {
+            "You and $name scanned each other. Your phones now recognise each other, so you can call from Contacts."
+        } else {
+            // A late confirmation leaves no lease in this visit: "after your next call" was not true (Design QL revision 2).
+            "You and $name scanned each other. Scan each other's codes again, or call once from Nearby, so your phones recognise each other."
+        }
     }
 }
 
@@ -432,4 +509,43 @@ internal object CodeOnlyLeaseRule {
 internal object QrMeet {
     val display = QrCodeDisplay()
     val session = MeetSession()
+
+    /** Design QL: a verification session stored [peer]'s presence lease (the Meet screen says the phones now recognise each other). */
+    @Volatile var onLeaseStored: ((IdentityFingerprint) -> Unit)? = null
+
+    val visit = MeetVisit()
+}
+
+/**
+ * Design QL (review R1): who this phone's own user confirmed ("Is this X's screen you scanned?" answered yes, shield stored)
+ * during the current visit of the Add contact screen, and whether a reuse alert fired in it. A displayer takes part in the
+ * lease exchange only with a scanner in [confirmed], so a race winner that happens to be an older contact gets nothing.
+ */
+internal class MeetVisit {
+    private val confirmed = HashSet<IdentityFingerprint>()
+    private var reuse = false
+
+    @Synchronized
+    fun begin() {
+        confirmed.clear()
+        reuse = false
+    }
+
+    @Synchronized
+    fun confirm(peer: IdentityFingerprint) {
+        confirmed += peer
+    }
+
+    @Synchronized
+    fun onReuseAlert() {
+        reuse = true
+    }
+
+    /** A displayer may offer and lease to [peer] now. */
+    @Synchronized
+    fun displayerMayLease(peer: IdentityFingerprint): Boolean = !reuse && peer in confirmed
+
+    /** Any lease of a verification session is withheld after a reuse alert in this visit. */
+    @Synchronized
+    fun reuseAlerted(): Boolean = reuse
 }

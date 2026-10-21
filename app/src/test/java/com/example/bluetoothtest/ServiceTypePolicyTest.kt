@@ -19,7 +19,15 @@ class ServiceTypePolicyTest {
         fine: Boolean = true,
         visible: Boolean = true,
         held: Boolean = false,
-    ) = ServiceTypePolicy.locationTypeWanted(sdk, policy, locationOn, fine, visible, held)
+        distribution: Boolean = true,
+    ) = ServiceTypePolicy.locationTypeWanted(sdk, policy, locationOn, fine, visible, held, distribution)
+
+    @Test
+    fun aBuildWithoutTheLocationTypeNeverAsksForIt() {
+        // The Google Play flavour declares no location type; asking for an undeclared type throws in startForeground.
+        assertFalse(wanted(sdk = 29, distribution = false))
+        assertFalse(wanted(sdk = 30, held = true, distribution = false))
+    }
 
     @Test
     fun locationTypeIsWantedOnlyOnAndroid10And11() {

@@ -140,6 +140,12 @@ internal object GattPoolBackoff {
     fun isPoolStatus(status: Int?): Boolean =
         status == GattResourceRegistry.STATUS_REGISTRATION_EXHAUSTED || status == GattResourceRegistry.STATUS_NO_RESOURCES
 
+    /**
+     * Called (on the caller's thread) after a scanner back-off step or the scanner's first success, so a screen that
+     * shows the Nearby list can refresh [ScanRestartHint]. The activity sets it and posts to its own thread.
+     */
+    @Volatile var onScannerChanged: (() -> Unit)? = null
+
     /** Records a registration failure of [source]; logs and feeds the card when it opened a new backoff step. */
     fun recordFailure(source: PoolSource, code: Int?, owner: String): PoolBackoff.Step? {
         if (source == PoolSource.SCANNER) scannerFailing = true
@@ -150,6 +156,7 @@ internal object GattPoolBackoff {
         if (card.restartGuidanceDue()) {
             GattResourceRegistry.logQuietly("BENCHMARK gatt_restart_guidance: ${PoolExhaustionPolicy.GUIDANCE}")
         }
+        if (source == PoolSource.SCANNER) runCatching { onScannerChanged?.invoke() }
         return step
     }
 
@@ -167,6 +174,7 @@ internal object GattPoolBackoff {
             GattResourceRegistry.logQuietly(
                 "BENCHMARK gatt_pool_exhausted: source=${source.label} | event=recovered | failures=$ended",
             )
+            if (source == PoolSource.SCANNER) runCatching { onScannerChanged?.invoke() }
         }
     }
 

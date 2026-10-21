@@ -224,6 +224,61 @@ internal class CaptureSilenceDetector(
     }
 }
 
+/**
+ * F18 (2026-10-20): when 2 s of exact digital zeros really mean a dead capture path. Samsung's VOICE_COMMUNICATION
+ * capture (S24 and M31, noise suppression in the framework) outputs exact zeros for 2 s or more every 3-40 s in a quiet
+ * room and recovers by itself (2026-10-20 voice and video calls between them: 16-34 episodes per phone per call of
+ * 3.5-4.5 min, 6-8 "not picking up any sound" notices each, all `clientSilenced=false`); a Windows DSP noise gate did
+ * the same. A dead path (Oboe #2123, #1526) never recovers. So a
+ * blank capture is confirmed only when the stream has carried no signal at all since the recorder started
+ * ([NEVER_SIGNAL_MS]) or one zero run lasts [PERSISTENT_MS]. The platform's own silencing (isClientSilenced) needs no
+ * such wait. [onFrame] returns a verdict once per zero run.
+ */
+internal class BlankCaptureEvidence(
+    private val frameMs: Long,
+    private val neverSignalMs: Long = NEVER_SIGNAL_MS,
+    private val persistentMs: Long = PERSISTENT_MS,
+) {
+    enum class Verdict { NONE, NEVER_SIGNAL, PERSISTENT }
+
+    private var everSignal = false
+    private var zeroFrames = 0L
+    private var fired = false
+
+    /** Length of the current zero run. */
+    val zeroMs: Long get() = zeroFrames * frameMs
+
+    fun onFrame(peak: Int): Verdict {
+        if (peak != 0) {
+            everSignal = true
+            zeroFrames = 0
+            fired = false
+            return Verdict.NONE
+        }
+        zeroFrames++
+        if (fired) return Verdict.NONE
+        val verdict = when {
+            !everSignal && zeroMs >= neverSignalMs -> Verdict.NEVER_SIGNAL
+            zeroMs >= persistentMs -> Verdict.PERSISTENT
+            else -> Verdict.NONE
+        }
+        if (verdict != Verdict.NONE) fired = true
+        return verdict
+    }
+
+    /** A new recorder (source switch or rebuild): its stream has not carried signal yet. */
+    fun reset() {
+        everSignal = false
+        zeroFrames = 0
+        fired = false
+    }
+
+    companion object {
+        const val NEVER_SIGNAL_MS = 8_000L
+        const val PERSISTENT_MS = 30_000L
+    }
+}
+
 internal enum class SilenceCause {
     /** The platform silenced this client (another app has priority, a call, or the privacy toggle). Changing the source cannot help. */
     SYSTEM_SILENCED,
@@ -253,6 +308,13 @@ internal object SilenceClassifier {
         SilenceCause.SYSTEM_SILENCED -> if (micToggleSupported) AudioCaptureNotice.MIC_PRIVACY_SWITCH else AudioCaptureNotice.MIC_BLOCKED
         SilenceCause.BLANK_CAPTURE -> AudioCaptureNotice.CAPTURE_SILENT
     }
+
+    /**
+     * The notice for a 2 s silence episode. With [evidence] on (F18, default) a blank capture waits for
+     * [BlankCaptureEvidence]; the platform's own silencing is told at once.
+     */
+    fun episodeNotice(cause: SilenceCause, micToggleSupported: Boolean, evidence: Boolean): AudioCaptureNotice? =
+        if (evidence && cause == SilenceCause.BLANK_CAPTURE) null else notice(cause, micToggleSupported)
 
     /** Only a blank capture can be helped by relaxing the source; the privacy toggle or another app's priority cannot. */
     fun mayChangeSource(cause: SilenceCause): Boolean = cause == SilenceCause.BLANK_CAPTURE

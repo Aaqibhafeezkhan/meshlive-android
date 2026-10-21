@@ -31,6 +31,10 @@ internal object FlavourUpdater : UpdaterBackend {
     }
 
     override fun open(activity: Activity, nearbyRelease: Int) {
+        if (OfflineAppShareGate.liveSessionActive()) {
+            android.widget.Toast.makeText(activity, R.string.update_busy_media, android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
         activity.startActivity(UpdateActivity.intent(activity, nearbyRelease))
     }
 

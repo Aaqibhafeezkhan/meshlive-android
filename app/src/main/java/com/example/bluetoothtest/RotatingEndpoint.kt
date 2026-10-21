@@ -82,11 +82,12 @@ object PresenceEligibility {
 }
 
 /**
- * The OFFER / PRESENCE_LEASE rules of one call session (design 5.1-5.2). [localEligible] is decided once,
- * when the session starts: the experiment is on, the vault is persistent, the authenticated peer is a
- * verified contact and the per-contact switch is on. A lease is stored only after both sides offered.
+ * The OFFER / PRESENCE_LEASE rules of one call session (design 5.1-5.2). [localEligible] is decided when the
+ * session is built: the experiment is on, the vault is persistent, the authenticated peer is a verified contact
+ * and the per-contact switch is on. The one later change is [becomeEligible] (the user verified the peer during
+ * this call). A lease is stored only after both sides offered.
  */
-class PresenceSession(private val localEligible: Boolean) {
+class PresenceSession(private var localEligible: Boolean) {
     sealed class Action {
         object SendOffer : Action()
         object SendLease : Action()
@@ -99,6 +100,14 @@ class PresenceSession(private val localEligible: Boolean) {
     private var receivedOffer = false
     private var sentLease = false
     private var receivedLease = false
+    private var withheld = false
+
+    /**
+     * Nothing more can move in this session: this side does not take part, withheld its OFFER, or has sent its lease and
+     * received the peer's. A verification session (Design QL) ends shortly after this.
+     */
+    @Synchronized
+    fun settled(): Boolean = !localEligible || withheld || (sentLease && receivedLease)
 
     /**
      * Called once, when the call is answered. The peer may already have offered (it answered first): its
@@ -117,6 +126,24 @@ class PresenceSession(private val localEligible: Boolean) {
         }
     }
 
+    /** Whether this side takes part in the exchange (it may still withhold its OFFER at send time). */
+    @get:Synchronized
+    val eligible: Boolean get() = localEligible
+
+    /**
+     * The user verified the peer during this call (safety code or scan), so a session that was built ineligible at the
+     * handshake or reveal may now take part. Records already received are kept: an OFFER the peer sent earlier is answered
+     * with the lease as soon as this side [start]s, exactly as if it had arrived after the start. True only when the
+     * session changed (it was ineligible and had not started); the caller then starts it if the call is answered, and the
+     * send-time checks of each record are unchanged.
+     */
+    @Synchronized
+    fun becomeEligible(): Boolean {
+        if (localEligible || started) return false
+        localEligible = true
+        return true
+    }
+
     /**
      * The OFFER from [start] could not be sent (a Forget, a switch-off or a store problem since the handshake):
      * this side never offered, so it neither sends a lease nor stores one.
@@ -125,6 +152,7 @@ class PresenceSession(private val localEligible: Boolean) {
     fun offerWithheld() {
         sentOffer = false
         sentLease = true
+        withheld = true
     }
 
     /** [peerVerifiedNow]: the peer's authenticated fingerprint is VERIFIED in the store at this moment. */

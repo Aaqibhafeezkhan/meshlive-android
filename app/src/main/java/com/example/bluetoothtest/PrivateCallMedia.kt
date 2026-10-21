@@ -359,7 +359,11 @@ private const val CONSTRAINED_RFCOMM_BITRATE_KBPS = DevicePolicyRegistry.LEGACY_
 private const val CONSTRAINED_PEER_CALL_AUDIO_BIT_RATE = 16_000
 
 internal class PrivateCallMediaReceiver(
-    private val surface: Surface,
+    /**
+     * The remote picture's surface, asked for only when a video packet needs a decoder; null while the call view has
+     * none (a voice call answered from the lock screen: F17 second instance, [VideoSurfaceWait]).
+     */
+    private val surfaceProvider: () -> Surface?,
     private val playbackDelayProfile: PlaybackDelayProfile,
     private val transport: BluetoothTransportOption,
     private val onVideoFormat: (StreamProtocol.Header) -> Unit,
@@ -384,6 +388,7 @@ internal class PrivateCallMediaReceiver(
     private var videoDecoderRecoveryAttempts = 0
     private var debugPriorDecoderDrops = 0L
     private var awaitingVideoRecoveryKeyFrame = false
+    private val surfaceWait = VideoSurfaceWait()
     private var audioDecoder: OpusAudioDecoder? = null
     private var playoutClock: MediaPlayoutClock? = null
     /** Experimental (`test_call_audio_own_clock`): audio's own delay, grown only by late audio. */
@@ -400,11 +405,16 @@ internal class PrivateCallMediaReceiver(
     private val windowMaxLatenessMs = java.util.concurrent.atomic.AtomicLong()
     /** Same lateness, read by the BENCHMARK media_age line instead of the peer report. */
     private val windowLateMaxForAgeMs = java.util.concurrent.atomic.AtomicLong()
+    /** F16: the largest video lateness since the call sender last took it; -1 = no video arrived. */
+    private val reverseLateMaxMs = java.util.concurrent.atomic.AtomicLong(-1L)
 
     /**
      * Hop-local report for the peer's sender: how much this phone delays playback, or how late
      * video arrives when the call delay is fixed, since the previous report.
      */
+    /** F16 ([CallLinkShare]): the largest lateness of the received video since the last call, or null when none arrived. */
+    fun takeReverseLateMaxMs(): Long? = reverseLateMaxMs.getAndSet(-1L).takeIf { it >= 0L }
+
     fun takeLinkReport(arrivalKbps: Int): LinkCapacityReport {
         val clock = playoutClock
         val lateness = windowMaxLatenessMs.getAndSet(0L)
@@ -442,8 +452,9 @@ internal class PrivateCallMediaReceiver(
                 header = updated
                 onVideoFormat(updated)
             }
+            // Review 2026-10-19 (P2): bounded until the decoder exists (CodecConfigBudget).
             packet.flags and StreamProtocol.FLAG_CODEC_CONFIG != 0 && decoder == null ->
-                videoConfig += packet.payload.copyOf()
+                CodecConfigBudget.add(videoConfig, packet.payload)
             else -> offerVideo(activeHeader, packet)
         }
         reportIfDue()
@@ -469,7 +480,7 @@ internal class PrivateCallMediaReceiver(
     ) {
         require(activeHeader.hasAudio) { "Peer sent undeclared call audio" }
         if (packet.flags and StreamProtocol.FLAG_CODEC_CONFIG != 0) {
-            if (audioDecoder == null) audioConfig += packet.payload.copyOf()
+            if (audioDecoder == null) CodecConfigBudget.add(audioConfig, packet.payload)
             return
         }
         // Experimental own audio clock: video bursts no longer hold speech back for lip sync.
@@ -508,8 +519,26 @@ internal class PrivateCallMediaReceiver(
             videoArrivalLateness.recordNanos(arrivalTiming.latenessMs * 1_000_000L)
             windowMaxLatenessMs.accumulateAndGet(arrivalTiming.latenessMs, ::maxOf)
             windowLateMaxForAgeMs.accumulateAndGet(arrivalTiming.latenessMs, ::maxOf)
+            reverseLateMaxMs.accumulateAndGet(arrivalTiming.latenessMs, ::maxOf)
         }
         val activeDecoder = decoder ?: run {
+            val surface = surfaceProvider()
+            // After a skip the decoder must start at a key frame; the stream's first packet starts it as before.
+            val startable = packet.flags and StreamProtocol.FLAG_KEY_FRAME != 0 || surfaceWait.skipped == 0L
+            when (surfaceWait.onVideoPacket(surface != null && startable, System.nanoTime())) {
+                VideoSurfaceWait.Action.DECODE -> if (surfaceWait.skipped > 0L) {
+                    Log.i("BluetoothVideo", "BENCHMARK call_video_surface: event=ready | skipped=${surfaceWait.skipped}")
+                }
+                VideoSurfaceWait.Action.SKIP -> return
+                VideoSurfaceWait.Action.SKIP_AND_REQUEST_KEY_FRAME -> {
+                    Log.i(
+                        "BluetoothVideo",
+                        "BENCHMARK call_video_surface: event=waiting | surface=${surface != null} | skipped=${surfaceWait.skipped}",
+                    )
+                    onKeyFrameNeeded()
+                    return
+                }
+            }
             val preferredDecoderName = privateCallPreferredDecoderName(
                 activeHeader.codecId,
                 privateCallStackFingerprint(),
@@ -517,7 +546,7 @@ internal class PrivateCallMediaReceiver(
             inLocalMediaStage(LocalMediaStage.VIDEO_DECODER_SETUP) {
                 VideoStreamDecoder(
                     activeHeader,
-                    surface,
+                    requireNotNull(surface),
                     videoConfig,
                     playbackDelayProfile = playbackDelayProfile,
                     playoutClock = clock,

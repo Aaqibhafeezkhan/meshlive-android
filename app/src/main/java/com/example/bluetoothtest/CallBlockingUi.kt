@@ -36,6 +36,33 @@ internal object CallBlockingUi {
         }
     }
 
+    fun report(activity: Activity, fingerprint: IdentityFingerprint?, streamToken: Int? = null, onDone: () -> Unit = {}) {
+        if (fingerprint == null) {
+            afterDeclineAndBlock(activity, null)
+            return
+        }
+        Thread {
+            val success = runCatching { LocalReporting.report(activity, fingerprint, streamToken) }.getOrDefault(false)
+            if (success) ConversationNotifier.opened(activity.applicationContext, fingerprint.nodeId.toString())
+            activity.runOnUiThread {
+                if (activity.isDestroyed) return@runOnUiThread
+                if (!success) {
+                    Toast.makeText(activity, R.string.block_failed, Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                onDone()
+                (activity as? MainActivity)?.localReportChanged()
+                val dialog = MaterialAlertDialogBuilder(activity)
+                    .setMessage(R.string.report_done)
+                    .setPositiveButton(R.string.action_close, null)
+                dialog.setNeutralButton(R.string.report_tell_meshlive) { _, _ ->
+                    ContactEmailUi.open(activity, concern = true)
+                }
+                dialog.show()
+            }
+        }.start()
+    }
+
     /** Asks, then blocks [fingerprint]. [name] is what the person is called on screen. */
     fun confirmBlock(activity: Activity, fingerprint: IdentityFingerprint, name: String, onDone: () -> Unit = {}) {
         MaterialAlertDialogBuilder(activity)
@@ -44,6 +71,7 @@ internal object CallBlockingUi {
             .setMessage(R.string.block_message)
             .setPositiveButton(R.string.block_action) { _, _ -> block(activity, fingerprint, name, onDone) }
             .setNegativeButton(R.string.action_cancel, null)
+            .apply { if (DebugTunables.localReporting) setNeutralButton(R.string.report_action) { _, _ -> report(activity, fingerprint, onDone = onDone) } }
             .show()
     }
 
@@ -74,13 +102,41 @@ internal object CallBlockingUi {
             Toast.makeText(activity, R.string.block_failed, Toast.LENGTH_LONG).show()
             return
         }
-        confirmBlock(activity, fingerprint, name)
+        if (!DebugTunables.localReporting) {
+            confirmBlock(activity, fingerprint, name)
+            return
+        }
+        MaterialAlertDialogBuilder(activity).setTitle(name)
+            .setItems(arrayOf(activity.getString(R.string.block_action), activity.getString(R.string.report_action))) { _, which ->
+                if (which == 0) confirmBlock(activity, fingerprint, name)
+                else report(activity, fingerprint)
+            }.show()
     }
 
     /**
      * After "Decline and block" declined the call: blocks a caller that showed its real identity; for a caller that
      * is still a throwaway key (nothing to block) says so and offers "Block unknown callers".
      */
+    /**
+     * Audit 2026-10-21: a caller with a one-time ID cannot be blocked one by one, so the call screen offers only Decline;
+     * after it, this sheet offers "Block all unknown callers" (once: "Not now" is remembered; nothing when already on).
+     */
+    fun offerBlockUnknownAfterDecline(activity: Activity) {
+        val prefs = activity.getSharedPreferences(CallFeatureDefaults.APP_SETTINGS_PREFERENCES, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(CallBlocking.PREF_BLOCK_UNKNOWN, false) || prefs.getBoolean(PREF_OFFER_DISMISSED, false)) return
+        if (activity.isFinishing || activity.isDestroyed) return
+        MaterialAlertDialogBuilder(activity)
+            .setMessage(R.string.declined_offer_block_unknown)
+            .setPositiveButton(R.string.block_turn_on_unknown) { _, _ ->
+                prefs.edit().putBoolean(CallBlocking.PREF_BLOCK_UNKNOWN, true).apply()
+                Toast.makeText(activity, R.string.block_unknown_turned_on, Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton(R.string.crash_prompt_later) { _, _ -> prefs.edit().putBoolean(PREF_OFFER_DISMISSED, true).apply() }
+            .show()
+    }
+
+    private const val PREF_OFFER_DISMISSED = "block_unknown_offer_dismissed"
+
     fun afterDeclineAndBlock(activity: Activity, caller: IncomingCaller?) {
         val fingerprint = caller?.fingerprint
         if (caller == null || caller.pseudonymous || fingerprint == null) {

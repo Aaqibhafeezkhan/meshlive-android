@@ -3,11 +3,25 @@ package com.example.bluetoothtest
 import android.content.Context
 
 /**
- * One remembered call: who (12-hex node prefix), voice or video, and when it connected. [fingerprintHex] is the
+ * One remembered call: who (12-hex node prefix), voice or video, and when it ended. [fingerprintHex] is the
  * caller's full identity fingerprint (64 hex) when known, so a row can block the person (CallBlocking.kt).
  * [blocked] marks a call that was declined without ringing because "Block unknown callers" is on; nobody is named
  * (the caller's identity was never revealed), so its prefix is empty.
  */
+internal enum class CallDirection { UNKNOWN, INCOMING, OUTGOING }
+internal enum class CallResult(val labelRes: Int) {
+    ANSWERED(R.string.recent_answered), MISSED(R.string.recent_missed), DECLINED(R.string.recent_declined),
+    NO_ANSWER(R.string.recent_no_answer), FAILED(R.string.recent_failed),
+}
+
+internal fun recentCallResult(direction: CallDirection, answered: Boolean, declined: Boolean, message: String): CallResult = when {
+    answered -> CallResult.ANSWERED
+    direction == CallDirection.INCOMING && MissedCallNotification.isMissed(message) -> CallResult.MISSED
+    declined || message == "Call declined" || message == BUSY_DECLINE_MESSAGE -> CallResult.DECLINED
+    message == CallRingTimeout.NO_ANSWER_MESSAGE || message == "Call cancelled" -> CallResult.NO_ANSWER
+    else -> CallResult.FAILED
+}
+
 internal data class RecentCall(
     val nodePrefixHex: String,
     val video: Boolean,
@@ -20,65 +34,123 @@ internal data class RecentCall(
      * phone does not hold a list of stranger keys. Such an entry has an empty [nodePrefixHex] and cannot be called back.
      */
     val strangerName: String = "",
+    val direction: CallDirection = CallDirection.UNKNOWN,
+    val result: CallResult = CallResult.ANSWERED,
 )
 
 /**
- * Home "Recent": the last few people this phone talked to, newest first, one entry per person.
+ * Home "Recent": the last 50 ended calls, newest first. Legacy entries keep unknown directions.
  * Stored only on this phone (app-private preferences, cleared by Emergency wipe). Names are not
  * stored: the row asks PeerLabels at display time (contact label or handle).
  */
 internal object RecentCalls {
     /** Listed in EmergencyWipe.KNOWN_PREFERENCES. */
     const val PREFERENCES = "recent_calls"
-    private const val KEY = "calls_v1"
-    const val MAX_ENTRIES = 5
+    private const val KEY = "calls_v2"
+    private const val OLD_KEY = "calls_v1"
+    const val MAX_ENTRIES = 50
 
     /** "gold fox", "gold fox 42", "gold fox-7a7d" and "gold fox 42-7a7d": a generated name, lower case, no commas. */
     private val STRANGER_NAME = Regex("[a-z]{3,7} [a-z]{3,7}( [0-9]{2})?(-[0-9a-f]{4})?")
 
-    fun load(context: Context): List<RecentCall> = decode(
-        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getString(KEY, null),
-    )
+    @Synchronized
+    fun load(context: Context): List<RecentCall> = project(loadStored(context), DebugTunables.completeRecentCalls)
 
+    /** Storage always retains the full history, even while displaying the five-person control arm. */
+    private fun loadStored(context: Context): List<RecentCall> {
+        val prefs = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        if (!prefs.contains(KEY)) {
+            prefs.edit().putString(KEY, encode(decode(prefs.getString(OLD_KEY, null)))).apply()
+        }
+        return decode(prefs.getString(KEY, null))
+    }
+
+    @Synchronized
     fun record(context: Context, call: RecentCall) {
         val prefs = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        val updated = add(decode(prefs.getString(KEY, null)), call)
+        val updated = add(loadStored(context), call)
         prefs.edit().putString(KEY, encode(updated)).apply()
     }
 
-    /** A call declined by "Block unknown callers": one row, the latest time (nobody is named). */
+    /**
+     * The stranger shown as [strangerName] has just been verified as [fingerprintHex]: their entry becomes an ordinary entry
+     * for that person (prefix and fingerprint, named by the contact label at display time, callable like a contact). False
+     * when no such stranger entry is stored.
+     */
+    @Synchronized
+    fun promoteStranger(context: Context, strangerName: String, fingerprintHex: String): Boolean {
+        val prefs = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val existing = loadStored(context)
+        val updated = promote(existing, strangerName, fingerprintHex) ?: return false
+        prefs.edit().putString(KEY, encode(updated)).apply()
+        return true
+    }
+
+    /**
+     * Pure part of [promoteStranger]: the stranger entry keeps its place, time and call type and takes the person's prefix
+     * and fingerprint; earlier calls are preserved. Null when nothing matches or
+     * the fingerprint is not 64 hex.
+     */
+    fun promote(existing: List<RecentCall>, strangerName: String, fingerprintHex: String): List<RecentCall>? {
+        val fingerprint = fingerprintHex.lowercase()
+        if (strangerName.isEmpty() || !fingerprint.matches(Regex("[0-9a-f]{64}"))) return null
+        val index = existing.indexOfFirst { it.strangerName == strangerName }
+        if (index < 0) return null
+        val prefix = fingerprint.take(12)
+        val promoted = existing[index].copy(nodePrefixHex = prefix, fingerprintHex = fingerprint, strangerName = "")
+        return existing.mapIndexedNotNull { i, call ->
+            when {
+                i == index -> promoted
+                else -> call
+            }
+        }
+    }
+
+    /** A call declined by "Block unknown callers" (nobody is named). */
+    @Synchronized
     fun recordBlocked(context: Context, atMs: Long) {
         val prefs = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        val updated = add(decode(prefs.getString(KEY, null)), RecentCall("", false, atMs, blocked = true))
+        val updated = add(loadStored(context), RecentCall("", false, atMs, blocked = true, direction = CallDirection.INCOMING, result = CallResult.DECLINED))
         prefs.edit().putString(KEY, encode(updated)).apply()
     }
 
-    /** Newest first, one entry per person (and one blocked-call row), at most [MAX_ENTRIES]. */
-    fun add(existing: List<RecentCall>, call: RecentCall): List<RecentCall> =
-        (listOf(call) + existing.filterNot {
+    /** A non-destructive display projection: the old Recent recorded active calls and anonymous blocked calls. */
+    fun project(calls: List<RecentCall>, complete: Boolean): List<RecentCall> = if (complete) calls else
+        calls.filter { it.blocked || it.result == CallResult.ANSWERED }.distinctBy {
             when {
-                call.blocked -> it.blocked
-                call.strangerName.isNotEmpty() -> it.strangerName == call.strangerName
-                else -> !it.blocked && it.strangerName.isEmpty() && it.nodePrefixHex == call.nodePrefixHex
+                it.blocked -> "blocked"
+                it.strangerName.isNotEmpty() -> "stranger:${it.strangerName}"
+                else -> "person:${it.nodePrefixHex}"
             }
-        }).take(MAX_ENTRIES)
+        }.take(5)
+
+    /** Newest first, one entry per call, at most [MAX_ENTRIES]; control projection never alters stored calls. */
+    fun add(existing: List<RecentCall>, call: RecentCall, complete: Boolean = true): List<RecentCall> =
+        project((listOf(call) + existing).take(MAX_ENTRIES), complete)
 
     /**
      * One entry per line: `prefix,v|a,epochMs[,fingerprint[,b]]` (plain text; no JSON so it unit-tests on the JVM).
-     * Older lines have three fields; a blocked call has an empty prefix and the trailing `b`.
+     * Older lines have three fields; v2 appends `|direction|result` to each identity record.
      */
     fun encode(calls: List<RecentCall>): String = calls.joinToString("\n") {
         val base = "${it.nodePrefixHex},${if (it.video) "v" else "a"},${it.atMs}"
-        when {
+        val identity = when {
             it.blocked -> "$base,,b"
             it.strangerName.isNotEmpty() -> "$base,,s,${it.strangerName}"
             it.fingerprintHex.isNotEmpty() -> "$base,${it.fingerprintHex}"
             else -> base
         }
+        "$identity|${it.direction.name}|${it.result.name}"
     }
 
     fun decode(text: String?): List<RecentCall> = text.orEmpty().lines().mapNotNull { line ->
-        val parts = line.trim().split(',')
+        val fields = line.trim().split('|')
+        if (fields.size != 1 && fields.size != 3) return@mapNotNull null
+        val direction = if (fields.size == 1) CallDirection.UNKNOWN else
+            CallDirection.entries.firstOrNull { it.name == fields[1] } ?: return@mapNotNull null
+        val result = if (fields.size == 1) CallResult.ANSWERED else
+            CallResult.entries.firstOrNull { it.name == fields[2] } ?: return@mapNotNull null
+        val parts = fields[0].split(',')
         if (parts.size !in 3..6) return@mapNotNull null
         val prefix = parts[0].lowercase()
         val at = parts[2].toLongOrNull()
@@ -88,7 +160,7 @@ internal object RecentCalls {
         if (parts.getOrNull(4) == "s") {
             val name = parts.getOrNull(5).orEmpty()
             if (parts.size != 6 || prefix.isNotEmpty() || fingerprint.isNotEmpty() || !STRANGER_NAME.matches(name)) return@mapNotNull null
-            return@mapNotNull RecentCall("", parts[1] == "v", at, strangerName = name)
+            return@mapNotNull RecentCall("", parts[1] == "v", at, strangerName = name, direction = direction, result = result)
         }
         if (parts.size == 6) return@mapNotNull null
         val blocked = parts.getOrNull(4) == "b"
@@ -96,11 +168,36 @@ internal object RecentCalls {
         if (fingerprint.isNotEmpty() && !fingerprint.matches(Regex("[0-9a-f]{64}"))) return@mapNotNull null
         if (blocked) {
             if (prefix.isNotEmpty() || fingerprint.isNotEmpty()) return@mapNotNull null
-            return@mapNotNull RecentCall("", parts[1] == "v", at, blocked = true)
+            return@mapNotNull RecentCall("", parts[1] == "v", at, blocked = true, direction = direction, result = result)
         }
         if (!prefix.matches(Regex("[0-9a-f]{12}")) || (fingerprint.isNotEmpty() && !fingerprint.startsWith(prefix))) {
             return@mapNotNull null
         }
-        RecentCall(prefix, parts[1] == "v", at, fingerprint)
+        RecentCall(prefix, parts[1] == "v", at, fingerprint, direction = direction, result = result)
     }.take(MAX_ENTRIES)
+}
+
+/**
+ * Naming v2 (F20) and saved-contact calls: which real fingerprint revealed itself behind a stranger's recent entry, kept in
+ * memory only (never persisted, so a seized phone holds no list of stranger keys), so the entry can become the contact's if
+ * the user verifies that person after the call. At most [RecentCalls.MAX_ENTRIES] links, newest kept.
+ */
+internal object StrangerRecentLinks {
+    private val byFingerprint = LinkedHashMap<String, String>()
+
+    @Synchronized
+    fun remember(fingerprintHex: String, strangerName: String) {
+        if (strangerName.isEmpty()) return
+        val key = fingerprintHex.lowercase()
+        byFingerprint.remove(key)
+        byFingerprint[key] = strangerName
+        while (byFingerprint.size > RecentCalls.MAX_ENTRIES) byFingerprint.remove(byFingerprint.keys.first())
+    }
+
+    /** The stranger name linked to [fingerprintHex], removed from memory (it is used once). */
+    @Synchronized
+    fun take(fingerprintHex: String): String? = byFingerprint.remove(fingerprintHex.lowercase())
+
+    @Synchronized
+    fun clear() = byFingerprint.clear()
 }

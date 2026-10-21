@@ -527,7 +527,12 @@ class AudioLiveController(
         AudioLiveFeatures.enabled && announcement.isAudioOnlyOffer()
 
     /** The listener tapped an audio row (or a reconnect picked a new route): show the listening screen. */
+    private var listenToken: Int? = null
+
     fun onJoin(announcement: DiscoveryAnnouncement, title: String?) {
+        listenToken = announcement.logicalStreamToken()
+        listenSourceFingerprint = null
+        listenRoot?.findViewById<View>(R.id.audioListenReport)?.visibility = View.GONE
         if (!canListenTo(announcement)) return
         val relays = host.relayCount(announcement.routeCost)
         listenRouteText = activity.getString(
@@ -563,6 +568,10 @@ class AudioLiveController(
     }
 
     private fun bindListenScreen(view: View) {
+        view.findViewById<View>(R.id.audioListenReport).apply {
+            visibility = View.GONE
+            setOnClickListener { CallBlockingUi.report(activity, listenSourceFingerprint, listenToken, host::leaveListening) }
+        }
         view.findViewById<ImageButton>(R.id.audioListenBack).setOnClickListener { host.leaveListening() }
         view.findViewById<MaterialButton>(R.id.audioListenStop).setOnClickListener { host.leaveListening() }
         view.findViewById<MaterialButton>(R.id.audioListenMute).setOnClickListener { toggleListenMute() }
@@ -585,8 +594,15 @@ class AudioLiveController(
     fun onListenFormat(header: StreamProtocol.Header) {
         if (!listening) return
         listenSourceFingerprint = header.audioLiveAuth?.let { IdentityFingerprint.fromPublicKey(it.identitySpki) }
+        if (listenSourceFingerprint?.let { LocalReporting.hidden(activity, it.hex) } == true) {
+            listenToken?.let { LocalReporting.hideStream(activity, it) }
+            host.leaveListening()
+            return
+        }
         listenRoot?.findViewById<View>(R.id.audioListenBlock)?.visibility =
             if (listenSourceFingerprint != null) View.VISIBLE else View.GONE
+        listenRoot?.findViewById<View>(R.id.audioListenReport)?.visibility =
+            if (listenSourceFingerprint != null && DebugTunables.localReporting) View.VISIBLE else View.GONE
         if (focusPolicy == null) startFocus()
         renderListen()
     }

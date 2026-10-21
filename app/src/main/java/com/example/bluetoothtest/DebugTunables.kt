@@ -2,6 +2,31 @@ package com.example.bluetoothtest
 
 /** Debug-build overrides for tunable sweeps; production code ignores them. */
 object DebugTunables {
+    @Volatile var playBatteryGuidance: Boolean = true
+        set(value) { field = value || !BuildConfig.DEBUG }
+
+    @Volatile var localReporting: Boolean = true
+        set(value) { field = value || !BuildConfig.DEBUG }
+
+    @Volatile var nearbyListUx: Boolean = true
+        set(value) { field = value || !BuildConfig.DEBUG }
+
+    @Volatile var strangerCallFollowup: Boolean = true
+        set(value) { field = value || !BuildConfig.DEBUG }
+
+    @Volatile var completeRecentCalls: Boolean = true
+        set(value) { field = value || !BuildConfig.DEBUG }
+
+    @Volatile var fullScreenCallGuidance: Boolean = true
+        set(value) { field = value || !BuildConfig.DEBUG }
+
+    @Volatile var callReadinessPermissions: Boolean = true
+        set(value) { field = value || !BuildConfig.DEBUG }
+
+    /** Control arm: the old status chip ignores stream-owned reachability. */
+    @Volatile var honestCallStatus: Boolean = true
+        set(value) { field = value || !BuildConfig.DEBUG }
+
     /** Connection priority a streaming source requests on its GATT media links. */
     @Volatile var sourceGattPriority: BleConnectionPriority? = null
         set(value) {
@@ -121,6 +146,186 @@ object DebugTunables {
     @Volatile var scanRecovery: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * F11 weak-pair reach (2026-10-19): app scans ask for the LE 1M PHY only. Every advert of this app is a legacy advert,
+     * which is always sent on LE 1M (BT Core 5.x Vol 6 Part B 4.4.2: legacy advertising PDUs use the primary channels on
+     * LE 1M), but ScanSettings defaults to PHY_LE_ALL_SUPPORTED, and the Android 13+ stack then scans 1M and Coded in turn
+     * (`le_scanning_manager.cc SetScanParameters scan_phy 255 phy 5` on the Redmi 12), leaving 1M a part of the window.
+     * DEBUG `test_scan_le_1m_only=false` is the control arm (the platform default PHY).
+     */
+    @Volatile var scanLe1mOnly: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * F11 (2026-10-20): the Meet scan (Add contact, a code being scanned: screen on, at most [MeetBridge.scanLimitMs])
+     * hands the stack an empty filter and matches the service UUID in software. The Redmi 12's (MT6769, HyperOS)
+     * offloaded filter never reported the A15s's (Android 10) code advert: its HCI snoop of a filtered Meet scan has no
+     * report from that advertiser at all, while the same phone's unfiltered DEBUG raw observer heard it (legacy,
+     * connectable, -60 dBm). The A15s's advert differs from the others only in its flags (0x02, the pre-GD advertiser,
+     * not 0x1A), which an Android 10 app cannot change. Default on; DEBUG `test_meet_software_filter=false` is the
+     * control arm (the hardware filter, as before).
+     */
+    @Volatile var meetSoftwareFilter: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * F11 follow-up (Experimental, default off, `test_call_list_software_filter`): the Nearby call list's scanner also
+     * matches the service UUID in software, for an A/B on the Redmi 12, whose offloaded filter misses the A15s's advert.
+     * The list scans only while it is visible, so the screen is on; an unfiltered scan is paused by the stack otherwise.
+     */
+    @Volatile var callListSoftwareFilter: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default off, `test_drop_leading_blank_frames`): an Image-input encoder skips the camera's leading
+     * blank buffers (luma 0, neutral chroma) until the first real frame, at most 15 frames or 1 s ([LeadingBlankFrames]).
+     */
+    @Volatile var dropLeadingBlankFrames: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Lost GATT chunks (default on; DEBUG control arm `test_gatt_gap_fast_fail=false`): a sequence gap held 1 s or behind
+     * 128 chunks ends the stream at once with its reason ([ChunkGapPolicy]) instead of after the 8 s liveness timeout.
+     */
+    @Volatile var gattGapFastFail: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental, DEBUG only (`test_gatt_chunk_recovery=true`, default off): `GR1` lost-chunk recovery on GATT links
+     * ([GattChunkRecovery], DECISIONS "Design GR" option C). Off: no history, no type-2 values sent, type 2 ignored.
+     */
+    @Volatile var gattChunkRecovery: Boolean = true
+        set(value) {
+            // Default on (design decision 2026-10-21); DEBUG launches can pass false as the control arm.
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * DEBUG only (`test_gatt_drop_received_every=N`, 0 = off): every GATT reader drops the first copy of each received data
+     * chunk whose sequence is N-1 mod N, as if the host had lost it, so option A or recovery can be forced on any pair.
+     */
+    @Volatile var gattDropReceivedEvery: Int = 0
+        set(value) {
+            field = if (BuildConfig.DEBUG) value.coerceIn(0, 1_000_000) else 0
+        }
+
+    /** DEBUG only (`test_inject_blank_frames=N`, 0..60): blank the first N camera images ([BlankFrameInjection]). */
+    @Volatile var injectBlankFrames: Int = 0
+        set(value) {
+            field = if (BuildConfig.DEBUG) value.coerceIn(0, BlankFrameInjection.MAX_FRAMES) else 0
+        }
+
+    /**
+     * Experimental (default off, `test_source_media_prewarm`): a broadcast source starts camera and encoder when it begins
+     * connecting to its first viewer instead of after that viewer authenticated ([SourceMediaPrewarm]).
+     */
+    @Volatile var sourceMediaPrewarm: Boolean = true
+        set(value) {
+            // Default on (design decision 2026-10-21); DEBUG launches can pass false as the control arm.
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Design QV review 1, R3 (default on; DEBUG control arm `test_viewer_admission_bounds=false`): a source starts at
+     * most a few new pre-authentication viewer attempts per window, oldest request first ([PreAuthAdmissionGate]).
+     * The bounded rejection tables are not switchable (memory bounds only).
+     */
+    @Volatile var viewerAdmissionBounds: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Failed live joins (default on; DEBUG control arm `test_stream_join_retry=false`): "Couldn't join <title>." with
+     * Try again, and one automatic retry when the stream is listed again ([StreamJoinRetry]).
+     */
+    @Volatile var streamJoinRetry: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default off, `test_skip_redundant_priority`): a connection-priority request for the priority
+     * already requested is not sent when the link's last update already put the interval in that priority's window
+     * ([LeConnectionPriorityKeeper.isRedundant]; line `prio_request: skipped`). A/B for the A15s-source radio join
+     * that dropped 5.07 s after such a request (2026-10-20).
+     */
+    @Volatile var skipRedundantPriority: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * F19 (default on; DEBUG control arm `test_call_ring_timeout=false`): an unanswered call ends: the caller cancels
+     * after 60 s of ringing ("No answer"), the callee declines after 65 s ("Missed call"). [CallRingTimeout]
+     */
+    @Volatile var callRingTimeout: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * F17 Stage A (Experimental, default off, `test_call_stall_tolerance`): keep a call whose peer went quiet while this
+     * phone's own writes still complete, up to [CallStallTolerance.TOLERANCE_NS], showing "Poor connection" from 3 s.
+     */
+    @Volatile var callStallTolerance: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * F17 (default on; control arm `test_call_liveness_hang_up=false`): a best-effort HANG_UP before a local liveness
+     * close, so a peer that can still hear us ends at once instead of after its own 8 s ([LivenessHangUp]).
+     */
+    @Volatile var callLivenessHangUp: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * F11 weak-pair reach: while a verification code is shown the call advert stays low-latency / high TX power, the Meet
+     * scan looks for 30 s with one fresh scanner half-way, and a contact-call wait follows the measured sighting rate.
+     * DEBUG `test_weak_pair_reach=false` is the control arm (10 s searches and waits, the balanced step as before).
+     */
+    @Volatile var weakPairReach: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /** F16 fix 1, Experimental (default off, DEBUG `test_call_link_share=true`): [CallLinkShare] for Automatic calls. */
+    @Volatile var callLinkShare: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /** F16 fix 2, Experimental (default off, DEBUG `test_call_fps_follow=true`): [CallFpsFollow] for Automatic calls. */
+    @Volatile var callFpsFollow: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * F11 item 5, Experimental (default off, DEBUG `test_reachable_scan_yield=true`): the Nearby call list and the Live list
+     * scan at low latency for their first 8 s and then balanced, instead of low latency without end. Hypothesis to A/B:
+     * a callee whose radio scans without pause (the Redmi 12: 100/100 ms on 1M and Coded) misses the caller's CONNECT_IND or
+     * cannot schedule the first connection events, so the caller sees status 133 with HCI 0x3E (failed to be established).
+     * 2026-10-19 counts by target: Xiaomi 42, A15s 26, ASUS 20 failures; measure establishment per pair with it on and off.
+     */
+    @Volatile var reachableScanYield: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
         }
 
     /**
@@ -471,6 +676,37 @@ object DebugTunables {
      * `test_gatt_input_failure_ends_link=false` is the control arm.
      */
     @Volatile var gattInputFailureEndsLink: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental, default off (DEBUG `test_call_link_renewal`): in-call link renewal (Design SR revision 2,
+     * [CallRenewalWire]). A direct GATT call whose one direction stalled replaces its hop link and keeps the call, when
+     * both end-to-end hellos carry bit 4. Both phones need it.
+     */
+    @Volatile var callLinkRenewal: Boolean = true
+        set(value) {
+            // Default on (design decision 2026-10-21); DEBUG launches can pass false as the control arm.
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * DEBUG test hook, default 0 (off): `test_call_tx_stall_after_s=N` makes this phone's call writer stop sending on the
+     * call's first link N s after the call became active, once per call, so a one-way stall can be induced on any pair.
+     */
+    @Volatile var callTxStallAfterS: Int = 0
+        set(value) {
+            field = if (BuildConfig.DEBUG) value.coerceIn(0, 3_600) else 0
+        }
+
+    /**
+     * Default on, where the Android 10-11 entry `android11-gatt-server-connection-untracked` applies
+     * ([GattServerReregisterKeepsAddress]): a server re-registration keeps the running advertising set (same address), and
+     * after a subscribe the set stays on until the first data write. DEBUG launch extra
+     * `test_gatt_reregister_keep_address=false` is the control arm (stop at the subscribe, new set after a re-registration).
+     */
+    @Volatile var gattReregisterKeepAddress: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
         }
@@ -929,6 +1165,37 @@ object DebugTunables {
         }
 
     /**
+     * Default on: the 1M call-setup retry after a 2M setup stall waits (bounded [SetupRetryAclWait.BOUND_MS]) for the stalled
+     * link's ACL to drop before it dials, so it does not dial into the lingering ACL (HCI 0x3E/0x0B, GATT 133). DEBUG launch
+     * extra `test_setup_retry_acl_wait=false` is the control arm (dial at once).
+     */
+    @Volatile var setupRetryAclWait: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Default on: a fast 0x3E failure of the 1M call-setup retry after a 2M stall is redialed up to [StallRetryDials.MAX_ATTEMPTS]
+     * dials, [StallRetryDials.SPACING_MS] apart, inside the early-loss window. DEBUG launch extra `test_stall_retry_dials=false` is
+     * the control arm (the ordinary 2 GATT open attempts 500 ms apart).
+     */
+    @Volatile var stallRetryDials: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Default on: for a rotating (pseudonym) call offer recognised as exactly one contact, the bad-2M memory is written and looked
+     * up under that contact's node label (the key the 1M retry already writes), so a remembered pair starts on 1M; an
+     * unrecognised rotating offer has no memory. The memory stays in local preferences. DEBUG launch extra
+     * `test_phy_memory_contact_key=false` is the control arm (lookup under the pseudonym, no record at the stall).
+     */
+    @Volatile var phyMemoryContactKey: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
      * Experimental, default off (A/B for the A15s-central to ASUS-peripheral pair): the GATT client asks for different PHYs per
      * direction instead of the same one ([GattPhySplit]); `tx2m-rx1m` keeps the central -> peripheral media direction on 2M and
      * moves the peripheral -> central direction, the one that went silent, to 1M. DEBUG launch extra `test_gatt_phy_split`.
@@ -1358,7 +1625,7 @@ object DebugTunables {
         }
 
     /**
-     * Native libopus call audio (docs/SWITCHES.md register "Native libopus call audio"; promoted to Settings >
+     * Native libopus call audio (docs/dev/switches.md register "Native libopus call audio"; promoted to Settings >
      * Features on 2026-10-11, default [ConnectivityFeatureDefaults.NATIVE_OPUS] until phone test T10):
      * calls encode with OPUS_APPLICATION_VOIP and in-band FEC, and decode with libopus PLC on a gap
      * plus FEC recovery from the next packet, instead of MediaCodec (c2.android.opus has neither).

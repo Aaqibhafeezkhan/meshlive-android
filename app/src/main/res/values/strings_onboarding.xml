@@ -8,25 +8,26 @@
     <string name="ob_allow">Allow</string>
     <string name="ob_page_of">Step %1$d of %2$d</string>
 
-    <string name="ob_welcome_title">Calls and live video, no internet needed</string>
-    <string name="ob_welcome_text">MeshLive connects phones directly over Bluetooth. It works with no signal, no Wi-Fi, and where the internet is blocked.</string>
+    <string name="ob_welcome_title">Call and go live with people nearby</string>
+    <string name="ob_welcome_mesh">Nearby phones can help pass livestreams along, extending their reach.</string>
+    <string name="ob_welcome_text">Calls and livestreams over Bluetooth. No internet or account needed.</string>
 
     <string name="ob_how_title">What you can do</string>
     <string name="ob_how_call_title">Call people nearby</string>
-    <string name="ob_how_call_text">Voice or video, encrypted from phone to phone.</string>
+    <string name="ob_how_call_text">Voice or video, encrypted end to end.</string>
     <string name="ob_how_live_title">Go live</string>
-    <string name="ob_how_live_text">Share video, or audio only like a radio, with everyone nearby.</string>
-    <string name="ob_how_relay_title">Phones pass it along</string>
-    <string name="ob_how_relay_text">Each phone reaches about 10 to 30 metres. Phones in between can carry a call or a stream further.</string>
-    <string name="ob_how_private_title">No account, no servers</string>
-    <string name="ob_how_private_text">Nothing goes to the internet. Strangers see a random name, not who you are.</string>
+    <string name="ob_how_live_text">Share video or audio with everyone nearby.</string>
+    <string name="ob_how_relay_title">Reach further</string>
+    <string name="ob_how_relay_text">Other phones can pass calls and video along.</string>
+    <string name="ob_how_private_title">No account</string>
+    <string name="ob_how_private_text">Nothing goes through a server.</string>
 
-    <string name="ob_perm_title">Allow what the app needs</string>
-    <string name="ob_perm_text">Android asks you for each one. You can change them later in Android settings.</string>
+    <string name="ob_perm_title">Allow access</string>
+    <string name="ob_perm_text">You can change this later in Android settings.</string>
     <string name="ob_perm_nearby_title">Nearby devices</string>
-    <string name="ob_perm_nearby_text">To find and connect to phones around you.</string>
+    <string name="ob_perm_nearby_text">MeshLive uses Bluetooth to find and connect to people nearby.</string>
     <string name="ob_perm_location_title">Location</string>
-    <string name="ob_perm_location_text">Older Android needs it to use Bluetooth. MeshLive never reads where you are.</string>
+    <string name="ob_perm_location_text">Older Android needs this for Bluetooth. MeshLive never reads your location.</string>
     <string name="ob_perm_camera_title">Camera</string>
     <string name="ob_perm_camera_text">For video calls and going live.</string>
     <string name="ob_perm_mic_title">Microphone</string>
@@ -36,11 +37,11 @@
     <string name="ob_perm_allowed">Allowed</string>
     <string name="ob_perm_missing">Not allowed yet</string>
 
-    <string name="ob_bg_title">Keep working with the screen off</string>
-    <string name="ob_bg_text">So calls still ring and phones can pass video along while your screen is off. It uses extra battery only while a call, a live video or a relay is on.</string>
+    <string name="ob_bg_title">Work with the screen off</string>
+    <string name="ob_bg_text">Lets calls ring and video keep going while the screen is off.</string>
     <string name="ob_bg_allowed">Done. MeshLive can keep working with the screen off.</string>
     <string name="ob_bg_declined">Not allowed. You can change this later in Settings.</string>
 
-    <string name="ob_ready_title">You are ready</string>
-    <string name="ob_ready_text">Add people you trust in Contacts by scanning each other\'s QR code. Then they can call you by name.</string>
+    <string name="ob_ready_title">You\'re all set</string>
+    <string name="ob_ready_text">To call: both open MeshLive, stay within about 20 m, and tap them in Calls.</string>
 </resources>

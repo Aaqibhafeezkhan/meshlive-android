@@ -7,7 +7,7 @@ import androidx.core.app.NotificationCompat
  * Lock-screen notification privacy (research catalog P10b, 2026-10-10; names rule Q16-A, 2026-10-11).
  *
  * Every call/stream notification is VISIBILITY_PRIVATE with a public version that names only the app,
- * so a secure lock screen shows "Bluetooth Video / Incoming call" and nothing else. The full version,
+ * so a secure lock screen shows "MeshLive / Incoming call" and nothing else. The full version,
  * which Android shows only on an unlocked phone, carries the caller's name. The user can allow names on
  * the lock screen too ([showPeerNames]: Settings > Features, preference [KEY_PEER_NAMES]; DEBUG
  * `test_lock_screen_peer_names`): the incoming-call alert is then VISIBILITY_PUBLIC. The call screen
@@ -20,12 +20,12 @@ import androidx.core.app.NotificationCompat
  * notification stays VISIBILITY_PRIVATE with its name-free public version unless the same lock-screen
  * opt-in is on; an unnamed one is always PRIVATE.
  */
-internal enum class NotificationKind { SESSION, INCOMING_CALL, MESSAGE, AUDIO_LISTEN, AUDIO_BROADCAST }
+internal enum class NotificationKind { SESSION, INCOMING_CALL, MESSAGE, AUDIO_LISTEN, AUDIO_BROADCAST, MISSED_CALL }
 
 internal object NotificationPrivacy {
     const val PREFS = "notification_privacy"
     const val KEY_PEER_NAMES = "lock_screen_peer_names"
-    const val PUBLIC_TITLE = "Bluetooth Video"
+    const val PUBLIC_TITLE = "MeshLive"
     const val PUBLIC_SESSION_TEXT = "Active"
     const val PUBLIC_INCOMING_CALL_TEXT = "Incoming call"
     /** Audio-only live (Design AL): neutral lock-screen text, never a name or a title. */
@@ -52,7 +52,7 @@ internal object NotificationPrivacy {
         // [peerNamesOptIn] is true only when the notification carries a name and the user allowed names there.
         NotificationKind.SESSION ->
             if (peerNamesOptIn) NotificationCompat.VISIBILITY_PUBLIC else NotificationCompat.VISIBILITY_PRIVATE
-        NotificationKind.INCOMING_CALL ->
+        NotificationKind.INCOMING_CALL, NotificationKind.MISSED_CALL ->
             if (peerNamesOptIn) NotificationCompat.VISIBILITY_PUBLIC else NotificationCompat.VISIBILITY_PRIVATE
         NotificationKind.MESSAGE ->
             if (peerNamesOptIn) NotificationCompat.VISIBILITY_PRIVATE else NotificationCompat.VISIBILITY_SECRET
@@ -91,6 +91,7 @@ internal object NotificationPrivacy {
     fun publicText(kind: NotificationKind): String = when (kind) {
         NotificationKind.SESSION -> PUBLIC_SESSION_TEXT
         NotificationKind.INCOMING_CALL -> PUBLIC_INCOMING_CALL_TEXT
+        NotificationKind.MISSED_CALL -> "Missed call"
         NotificationKind.MESSAGE -> "New message"
         NotificationKind.AUDIO_LISTEN -> PUBLIC_AUDIO_LISTEN_TEXT
         NotificationKind.AUDIO_BROADCAST -> PUBLIC_AUDIO_BROADCAST_TEXT

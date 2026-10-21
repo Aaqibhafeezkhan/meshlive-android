@@ -107,7 +107,7 @@ internal interface SecurityUi {
 
     /**
      * Erases identity, contacts, messages and settings and normally ends the process. [panic] is
-     * the no-confirmation gesture; otherwise [confirmationText] is what the user typed ("WIPE").
+     * the no-confirmation gesture; otherwise [confirmationText] is what the user typed ("DELETE").
      * Returns null on success or an error text. Call it off the main thread.
      */
     fun wipe(context: Context, panic: Boolean, confirmationText: String?): String?
@@ -115,6 +115,19 @@ internal interface SecurityUi {
 
 internal object SecurityUiBackend {
     @Volatile var current: SecurityUi = CoreSecurityUi
+}
+
+/**
+ * A process-wide notice that this phone's user verified someone (safety code, BVMID1 or BVMID2 scan), from whichever
+ * screen did it. MainActivity listens: a call with that person may now exchange presence leases, and a stranger's recent
+ * entry becomes the contact's. [listener] may run on any thread; it must only post work.
+ */
+internal object VerificationEvents {
+    @Volatile var listener: ((nodeIdHex: String, fingerprintHex: String) -> Unit)? = null
+
+    fun verified(nodeIdHex: String, fingerprintHex: String) {
+        runCatching { listener?.invoke(nodeIdHex.lowercase(), fingerprintHex.lowercase()) }
+    }
 }
 
 /**
@@ -182,7 +195,7 @@ internal object CoreSecurityUi : SecurityUi {
         }
         val name = runCatching { IdentityQrCodec.normalizeName(displayName) }.getOrDefault("")
         return when (core.markVerified(id, confirmed, name, method)) {
-            MarkVerifiedResult.VERIFIED -> MarkVerifiedOutcome.VERIFIED
+            MarkVerifiedResult.VERIFIED -> MarkVerifiedOutcome.VERIFIED.also { VerificationEvents.verified(id.toString(), confirmed.hex) }
             MarkVerifiedResult.NO_AUTHENTICATED_SESSION -> MarkVerifiedOutcome.NO_AUTHENTICATED_SESSION
             MarkVerifiedResult.FINGERPRINT_MISMATCH -> MarkVerifiedOutcome.FINGERPRINT_MISMATCH
             MarkVerifiedResult.PREFIX_CONFLICT -> MarkVerifiedOutcome.PREFIX_CONFLICT

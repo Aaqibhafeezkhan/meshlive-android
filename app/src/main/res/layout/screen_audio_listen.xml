@@ -157,6 +157,15 @@
             </LinearLayout>
         </LinearLayout>
 
+        <TextView
+            android:id="@+id/audioListenReport"
+            style="@style/Widget.App.RowTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:gravity="center_vertical"
+            android:text="@string/report_action" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/audioListenBlock"
             style="@style/Widget.App.Button.Text"

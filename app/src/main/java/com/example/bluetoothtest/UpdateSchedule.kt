@@ -2,7 +2,7 @@ package com.example.bluetoothtest
 
 /**
  * When the online update check may contact GitHub, and the one-time question that turns it on
- * (docs/SWITCHES.md "Check for updates"). Pure and JVM-tested; [UpdateCheckStore] persists the state.
+ * (docs/dev/switches.md "Check for updates"). Pure and JVM-tested; [UpdateCheckStore] persists the state.
  *
  * The rules: nothing at all until the user said yes; at most one request a day on its own; after a
  * request that reached GitHub (any HTTP answer) the next one waits 24 hours, after a rate limit until
@@ -41,13 +41,14 @@ object UpdateSchedule {
 
     fun manualAllowed(state: UpdateCheckState, nowMs: Long): Boolean {
         val since = nowMs - state.lastAttemptMs
-        return state.lastAttemptMs == 0L || since !in 0 until MANUAL_MIN_GAP_MS
+        return nowMs >= state.notBeforeMs && (state.lastAttemptMs == 0L || since !in 0 until MANUAL_MIN_GAP_MS)
     }
 
     /** Milliseconds until a manual check is allowed again (0: now). */
     fun manualWaitMs(state: UpdateCheckState, nowMs: Long): Long {
         val since = nowMs - state.lastAttemptMs
-        return if (state.lastAttemptMs == 0L || since !in 0 until MANUAL_MIN_GAP_MS) 0 else MANUAL_MIN_GAP_MS - since
+        val gap = if (state.lastAttemptMs == 0L || since !in 0 until MANUAL_MIN_GAP_MS) 0L else MANUAL_MIN_GAP_MS - since
+        return maxOf(gap, (state.notBeforeMs - nowMs).coerceAtLeast(0L))
     }
 
     /** After GitHub answered (200, 304 or an error status). [rateLimitedUntilMs] is the reset time of a 403/429, if any. */
@@ -69,9 +70,11 @@ object UpdateSchedule {
     /** The reset time of a rate-limited answer from its headers, or null when none says so. */
     fun rateLimitReset(status: Int, retryAfterSeconds: Long?, resetEpochSeconds: Long?, remaining: Long?, nowMs: Long): Long? {
         if (status != 403 && status != 429) return null
-        if (retryAfterSeconds != null) return nowMs + retryAfterSeconds * 1000
-        if (remaining == 0L && resetEpochSeconds != null) return resetEpochSeconds * 1000
-        return if (status == 429) nowMs + NETWORK_RETRY_MS else null
+        if (retryAfterSeconds != null) return nowMs + retryAfterSeconds.coerceIn(0, DAY_MS / 1000) * 1000
+        if (remaining == 0L && resetEpochSeconds != null) {
+            return resetEpochSeconds.coerceIn(nowMs / 1000, (nowMs + DAY_MS) / 1000) * 1000
+        }
+        return if (status == 429 || remaining == null || remaining == 0L) nowMs + NETWORK_RETRY_MS else null
     }
 }
 
@@ -89,6 +92,29 @@ object UpdatePrompt {
         benchmarkLaunch: Boolean,
         homeIdle: Boolean,
     ): Boolean = updaterAvailable && installedHasReleaseKey && askedAtMs == 0L && !benchmarkLaunch && homeIdle
+}
+
+/** What the home screen does when it comes back to the front and is idle. */
+enum class UpdateResumeAction { ASK, CHECK_NOW, NOTHING }
+
+object UpdateResume {
+    /**
+     * The question first (when it is due), else the automatic check (only after a yes), else nothing. A build that cannot
+     * update itself, a copy without the release key, and a busy home screen (a call, a stream, onboarding) do nothing.
+     */
+    fun action(
+        updaterAvailable: Boolean,
+        onlineOffered: Boolean,
+        homeIdle: Boolean,
+        askedAtMs: Long,
+        benchmarkLaunch: Boolean,
+        checkEnabled: Boolean,
+    ): UpdateResumeAction = when {
+        !updaterAvailable || !onlineOffered || !homeIdle -> UpdateResumeAction.NOTHING
+        UpdatePrompt.shouldAsk(updaterAvailable, onlineOffered, askedAtMs, benchmarkLaunch, homeIdle) -> UpdateResumeAction.ASK
+        checkEnabled -> UpdateResumeAction.CHECK_NOW
+        else -> UpdateResumeAction.NOTHING
+    }
 }
 
 /** Where [UpdateCheckState] lives (SharedPreferences in the app, a map in tests). */

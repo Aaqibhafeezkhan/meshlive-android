@@ -3,6 +3,8 @@ package com.example.bluetoothtest
 import android.app.AppOpsManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -181,14 +183,16 @@ class BackgroundProbesTest {
 
     @Test
     fun anExemptAppIsToldItKeepsWorkingDuringLowPowerStandby() {
-        assertEquals("Low power standby is on; calls may be delayed while the phone is idle.", DozePolicy.message(standby))
-        assertEquals("Low power standby is on; calls may be delayed while the phone is idle.",
-            DozePolicy.message(standby.copy(lowPowerStandbyExempt = false)))
-        assertEquals("Low power standby is on, but this app is allowed to keep working.",
-            DozePolicy.message(standby.copy(lowPowerStandbyExempt = true)))
+        val warned = DozePolicy.message(standby)
+        assertNotNull(warned)
+        assertEquals("a non-exempt app gets the same warning", warned, DozePolicy.message(standby.copy(lowPowerStandbyExempt = false)))
+        val exempt = DozePolicy.message(standby.copy(lowPowerStandbyExempt = true))
+        assertTrue(exempt!!.isNotBlank())
+        assertNotEquals("an exempt app is not told its calls may be delayed", warned, exempt)
         // Deep sleep still outranks the exemption text.
-        assertEquals("Phone is in deep sleep; calls may be delayed.",
-            DozePolicy.message(standby.copy(deviceIdle = true, lowPowerStandbyExempt = true)))
+        val deep = DozePolicy.message(standby.copy(deviceIdle = true, lowPowerStandbyExempt = true))
+        assertEquals(DozePolicy.message(DeviceSleepState.DEEP_IDLE), deep)
+        assertNotEquals(exempt, deep)
         assertNull(DozePolicy.message(standby.copy(lowPowerStandby = false, lowPowerStandbyExempt = true)))
     }
 

@@ -6,6 +6,8 @@ internal enum class StatusKind(val labelRes: Int, val problem: Boolean) {
     BLUETOOTH_OFF(R.string.status_bluetooth_off, true),
     BLUETOOTH_UNAVAILABLE(R.string.status_bluetooth_unavailable, true),
     PERMISSIONS(R.string.status_permissions, true),
+    WATCHING(R.string.status_calls_paused_watch, true),
+    LIVE(R.string.status_calls_paused_live, true),
     HIDDEN(R.string.status_hidden, true),
     BATTERY_SAVER(R.string.status_battery_saver, true),
     HOT(R.string.status_hot, true),
@@ -17,10 +19,14 @@ internal enum class StatusKind(val labelRes: Int, val problem: Boolean) {
  * from heat. [hidden], [relayPaused] and [hot] come from the existing reachability, battery and thermal
  * logic; this adds no behaviour of its own.
  */
-internal fun statusKind(readiness: HomeReadiness, hidden: Boolean, relayPaused: Boolean, hot: Boolean): StatusKind = when {
+internal fun statusKind(readiness: HomeReadiness, hidden: Boolean, relayPaused: Boolean, hot: Boolean,
+    screen: ReachabilityScreen = ReachabilityScreen.HOME, honest: Boolean = true,
+): StatusKind = when {
     readiness == HomeReadiness.UNSUPPORTED -> StatusKind.BLUETOOTH_UNAVAILABLE
     readiness == HomeReadiness.BLUETOOTH_OFF -> StatusKind.BLUETOOTH_OFF
     readiness == HomeReadiness.PERMISSIONS_NEEDED -> StatusKind.PERMISSIONS
+    honest && screen == ReachabilityScreen.WATCH -> StatusKind.WATCHING
+    honest && screen == ReachabilityScreen.LIVE -> StatusKind.LIVE
     hidden -> StatusKind.HIDDEN
     relayPaused -> StatusKind.BATTERY_SAVER
     hot -> StatusKind.HOT

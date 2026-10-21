@@ -105,6 +105,7 @@ internal class ConversationRowsController(
                     index.summaries(showPreview = true, sending = { node.exchangeRunning(it) }).associateBy { it.peer.toString() }
                 } else emptyMap()
                 ConversationRows.build(refs, summaries, prefixes, text, time)
+                    .filterNot { LocalReporting.hidden(context, it.nodeIdHex) }
             } catch (error: Exception) {
                 null
             } finally {

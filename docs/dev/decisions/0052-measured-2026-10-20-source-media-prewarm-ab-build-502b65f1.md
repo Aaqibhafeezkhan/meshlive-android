@@ -1,0 +1,3 @@
+# Measured 2026-10-20: source media prewarm A/B (build 502b65f1)
+
+S22<->ASUS, 320x240/15/200 VP9, GATT and CoC, both directions, OFF/ON/OFF/ON, 2 runs per arm per case, `--parallel 1` (benchmarks/runs/prewarm-ab-20261020a-d; catalog prewarm-ab-20261020). Pooled medians, OFF -> ON: selection-to-first-surface 3400 -> 2587 ms (about -0.8 s, now under the 3 s gate); launch-to-first-surface 4801 -> 3859 ms; surface p99 133.5 -> 84 ms (one ON run 151 ms). Every case improved by 0.75-1.6 s on first surface; nothing broke. The S22 source's first 3 frames stay `encoder_first_frames_suspect verdict=BLACK` in both arms (yMean 0, so a separate cause from the encoder start time); the ASUS source logs none. All 16 cases still FAIL the launch-based 3 s gate (Q-STARTUP-GATE).

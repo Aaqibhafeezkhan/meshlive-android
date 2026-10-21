@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Messaging v2 (phase 1a): executable reference and test-vector generator.
 
-Normative companion of docs/PROTOCOL.md "Messaging v2". Host tooling, not app code. It builds, from the
+Normative companion of docs/dev/protocol/README.md "Messaging v2". Host tooling, not app code. It builds, from the
 document's byte layouts alone, the content `BSM2`, the attachment manifest, the receipt body, the segment
 keys, a complete version 3 class 4 (bulk) bundle and the BSF1 version 2 messages, and writes the byte-exact
 vectors that the Android JVM test (`MessagingV2VectorTest`) replays against the Kotlin implementation.

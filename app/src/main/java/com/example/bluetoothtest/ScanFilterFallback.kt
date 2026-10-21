@@ -25,6 +25,12 @@ internal object ScanFilterFallback {
     /** Whether the discovery scanners should hand an empty filter to the stack and match in software. */
     fun softwareFiltering(): Boolean = stage == ScanFilterStage.SOFTWARE
 
+    /**
+     * Software matching for one scanner: its own option (the Meet scan, F11 [DebugTunables.meetSoftwareFilter]) or the
+     * process-wide S-06 stage above.
+     */
+    fun softwareFor(scannerOption: Boolean): Boolean = scannerOption || softwareFiltering()
+
     fun setStage(value: ScanFilterStage) {
         stage = value
     }

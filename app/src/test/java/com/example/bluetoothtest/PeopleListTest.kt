@@ -32,6 +32,30 @@ class PeopleListTest {
     }
 
     @Test
+    fun sessionOrderSurvivesScanReorderingRenamesAndDisappearance() {
+        val session = NearbyPeopleSession()
+        val first = person("c", "Zoe")
+        val second = person("d", "Alex")
+        assertEquals(listOf("Zoe", "Alex"), names(session.rows(listOf(first, second), emptySet())))
+        assertEquals(listOf("Zoe", "Alex"), names(session.rows(listOf(second, first), emptySet())))
+        session.rows(listOf(second), emptySet())
+        assertEquals(listOf("Renamed", "Alex"), names(session.rows(listOf(second, first.copy(name = "Renamed")), emptySet())))
+        assertEquals(listOf("Alex", "Zoe"), names(session.rows(listOf(first, second), setOf("d"))))
+    }
+
+    @Test
+    fun searchFiltersNamesWithoutLosingOrderOrHidingAnActiveQuery() {
+        val session = NearbyPeopleSession()
+        val people = (1..9).map { person(it.toString(), "Person $it") }
+        assertTrue(session.showSearch(people, ""))
+        assertEquals(listOf("Person 2"), names(session.rows(people, emptySet(), "PERSON 2")))
+        assertTrue(session.rows(people, emptySet(), "nobody").isEmpty())
+        assertTrue(session.showSearch(emptyList(), "nobody"))
+        assertEquals(false, session.showSearch(people.take(8), ""))
+        assertEquals(people.map { it.name }, names(session.rows(people.reversed(), emptySet(), "")))
+    }
+
+    @Test
     fun nobodyNearbyMeansNoRows() {
         assertTrue(nearbyRows(emptyList(), contactKeys).isEmpty())
     }

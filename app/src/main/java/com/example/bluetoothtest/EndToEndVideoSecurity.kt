@@ -30,6 +30,12 @@ enum class EndToEndContentType(val wireValue: Int) {
      * PRESENCE_LEASE); only after both call endpoint hellos set bit 3 (0x08).
      */
     DISCOVERY(11),
+
+    /**
+     * Experimental in-call link renewal (Design SR, `test_call_link_renewal`): one `RENEW` record (OFFER, ARMED, REFUSED,
+     * BIND); only after this endpoint signed end-to-end hello bit 4 ([CallRenewalWire]).
+     */
+    RENEW(12),
 }
 
 enum class StreamLifecycleState(val wireValue: Int) {
@@ -115,6 +121,8 @@ data class EndToEndContentRecord(
     val type: EndToEndContentType,
     val flags: Int,
     val payload: ByteArray,
+    /** The record's `BME1` sequence when it came from an opener (link renewal checks BIND against it); -1 otherwise. */
+    val sequence: Long = -1L,
 )
 
 class EndToEndContentSealer internal constructor(key: ByteArray) : Closeable {
@@ -142,6 +150,11 @@ class EndToEndContentSealer internal constructor(key: ByteArray) : Closeable {
         nextSequence++
         return header + ciphertext
     }
+
+    /** Seals [payloadFor] of the sequence it gets, atomically (link renewal's BIND names its own next sequence). */
+    @Synchronized
+    internal fun sealNext(type: EndToEndContentType, flags: Int, payloadFor: (Long) -> ByteArray): ByteArray =
+        seal(type, flags, payloadFor(nextSequence))
 
     internal fun corruptNextRecordForTest() {
         corruptNextRecord = true
@@ -175,11 +188,17 @@ class EndToEndContentOpener internal constructor(key: ByteArray) : Closeable {
      */
     @Volatile internal var acceptDiscovery = false
 
+    /**
+     * Experimental in-call link renewal: only a call endpoint that signed end-to-end hello bit 4 sets this. Every other
+     * opener rejects content type 12 exactly as an unknown type, as before.
+     */
+    @Volatile internal var acceptRenewal = false
+
     internal fun copyKeyForForwarding(): ByteArray = key.copyOf()
 
     @Synchronized
     fun open(encoded: ByteArray): EndToEndContentRecord {
-        val metadata = EndToEndContentProtocol.inspect(encoded, acceptVideoFragments, acceptLabels, acceptDiscovery)
+        val metadata = EndToEndContentProtocol.inspect(encoded, acceptVideoFragments, acceptLabels, acceptDiscovery, acceptRenewal)
         require(metadata.sequence >= nextSequence) {
             "Replayed or reordered end-to-end sequence ${metadata.sequence}; expected at least $nextSequence"
         }
@@ -195,7 +214,7 @@ class EndToEndContentOpener internal constructor(key: ByteArray) : Closeable {
             )
         }
         nextSequence = metadata.sequence + 1
-        return EndToEndContentRecord(metadata.type, metadata.flags, plaintext)
+        return EndToEndContentRecord(metadata.type, metadata.flags, plaintext, metadata.sequence)
     }
 
     override fun close() = key.fill(0)
@@ -226,6 +245,7 @@ object EndToEndContentProtocol {
         acceptVideoFragments: Boolean = false,
         acceptLabels: Boolean = false,
         acceptDiscovery: Boolean = false,
+        acceptRenewal: Boolean = false,
     ): EndToEndContentMetadata {
         require(encoded.size >= HEADER_BYTES) { "Truncated end-to-end content" }
         val input = DataInputStream(ByteArrayInputStream(encoded, 0, HEADER_BYTES))
@@ -236,6 +256,7 @@ object EndToEndContentProtocol {
             ?.takeIf { it != EndToEndContentType.VIDEO_FRAGMENT || acceptVideoFragments }
             ?.takeIf { it != EndToEndContentType.LABELS || acceptLabels }
             ?.takeIf { it != EndToEndContentType.DISCOVERY || acceptDiscovery }
+            ?.takeIf { it != EndToEndContentType.RENEW || acceptRenewal }
             ?: error("Unknown end-to-end content type $typeValue")
         val sequence = input.readLong()
         require(sequence >= 0) { "Invalid end-to-end content sequence" }
@@ -266,6 +287,8 @@ data class EndToEndVideoSession(
     val reveal: Bmh3RevealSession? = null,
     /** BVMID2 (responder): the handshake's tag was the displayed verification code's; the session is verify-only. */
     val qrTagMatched: Boolean = false,
+    /** Experimental in-call link renewal (Design SR): `K_renew`, derived from the two content keys; zeroed at close. */
+    val renewalKey: ByteArray? = null,
 ) : Closeable {
     /** True while the peer is only a declared throwaway key: show "unverified stranger", never a node ID. */
     val peerIsPseudonym: Boolean get() = reveal?.peerPseudonymous == true && reveal.revealed == null
@@ -277,10 +300,19 @@ data class EndToEndVideoSession(
     val effectivePeerFingerprint: IdentityFingerprint
         get() = reveal?.revealed?.let { IdentityFingerprint.fromPublicKey(it.spki) } ?: peerFingerprint
 
+    /**
+     * Whether the person of this session is a verified contact in [stateOf] (a verified-contact store lookup). Judged on the
+     * real identity ([effectivePeerNodeId]): after a BMH3 reveal the revealed person, never the throwaway, which is never a
+     * contact; a peer that is still a throwaway is never verified. Presence records, labels and claims all use this rule.
+     */
+    fun peerVerifiedIn(stateOf: (NodeId, IdentityFingerprint) -> VerificationState?): Boolean =
+        !peerIsPseudonym && stateOf(effectivePeerNodeId, effectivePeerFingerprint) == VerificationState.VERIFIED
+
     override fun close() {
         sealer.close()
         opener.close()
         reveal?.close()
+        renewalKey?.fill(0)
     }
 }
 
@@ -538,7 +570,7 @@ object EndToEndVideoHandshake {
         link.writer.flush()
         val remote = readHello(link)
         val keys = MeshHandshake.finish(pending, remote)
-        return session(remote, keys)
+        return session(remote, keys, renewal = CallRenewalWire.bothSigned(capabilities, remote.capabilities))
     }
 
     /**
@@ -577,7 +609,7 @@ object EndToEndVideoHandshake {
         val keys = MeshHandshake.finish(pending, remote)
         link.writer.write(SecureRecordType.END_TO_END_HANDSHAKE, HandshakeHelloCodec.encode(pending.hello))
         link.writer.flush()
-        return session(remote, keys)
+        return session(remote, keys, renewal = CallRenewalWire.bothSigned(capabilities, remote.capabilities))
     }
 
     private fun readHello(link: SecureBluetoothSession, firstRecord: SecureRecord? = null): SignedHandshakeHello {
@@ -588,9 +620,11 @@ object EndToEndVideoHandshake {
         return HandshakeHelloCodec.decode(record.payload)
     }
 
+    /** [renewal]: both hellos signed the link-renewal bit (a call with renewal on); only then is `K_renew` derived. */
     private fun session(
         remote: SignedHandshakeHello,
         keys: MeshSessionKeys,
+        renewal: Boolean,
     ): EndToEndVideoSession {
         // Throws before any content key exists when a verified contact's prefix shows another key.
         val fingerprint = try {
@@ -600,19 +634,21 @@ object EndToEndVideoHandshake {
             keys.receiveKey.fill(0)
             throw error
         }
-        return sessionWithFingerprint(remote, keys, fingerprint)
+        return sessionWithFingerprint(remote, keys, fingerprint, renewal)
     }
 
     private fun sessionWithFingerprint(
         remote: SignedHandshakeHello,
         keys: MeshSessionKeys,
         fingerprint: IdentityFingerprint,
+        renewal: Boolean,
     ): EndToEndVideoSession = EndToEndVideoSession(
         peerNodeId = keys.peerNodeId,
         peerCapabilities = remote.capabilities,
         sealer = EndToEndContentSealer(keys.sendKey),
         opener = EndToEndContentOpener(keys.receiveKey),
         peerFingerprint = fingerprint,
+        renewalKey = if (renewal) CallRenewalCrypto.renewalKey(keys.sendKey, keys.receiveKey) else null,
     ).also {
         keys.sendKey.fill(0)
         keys.receiveKey.fill(0)

@@ -14,7 +14,7 @@ import kotlin.math.pow
  * to a start rung; the existing adaptation (LinkRateController, [CallResolutionLadder],
  * [FrameRateLadder]) then moves along the same rungs. Everything here is a pure function.
  *
- * Evidence (docs/DECISIONS.md "Measured Auto ladder"; offline analysis of 1,077 scored phone runs and
+ * Evidence (docs/dev/decisions/README.md "Measured Auto ladder"; offline analysis of 1,077 scored phone runs and
  * 139 offline encodes): equal-quality bitrate scales with pixels^0.3-0.5 and fps^0.5-0.6 (not 0.85);
  * dropping 30 -> 15 FPS gains more than dropping 480p -> 360p; 360p beats 240p from ~150 kbps; 480p
  * overtakes 360p near 330 kbps (VP9) / 430-490 kbps (AV1). Confidence is low below 200 kbps (no video

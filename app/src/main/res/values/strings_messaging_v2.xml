@@ -8,11 +8,11 @@
 
     <string name="mv2_note_photo_reencoded">Made smaller; location and camera details removed.</string>
     <string name="mv2_note_jpeg_metadata_removed">Sent as the original picture; location and camera details removed.</string>
-    <string name="mv2_note_original_hidden_data">Sent unchanged. This kind of picture may carry hidden data such as location.</string>
+    <string name="mv2_note_original_hidden_data">Sent unchanged. Photo details, including location, may be included.</string>
     <string name="mv2_note_animation_kept">Sent unchanged to keep the animation. It may carry hidden data.</string>
     <string name="mv2_note_jpeg_unreadable">The picture could not be copied exactly, so it was made smaller instead.</string>
     <string name="mv2_note_video_remuxed">Sent without location details. The video itself is not changed.</string>
-    <string name="mv2_note_video_as_file">This video could not be cleaned and is sent as it is. It may carry its location.</string>
+    <string name="mv2_note_video_as_file">Sent unchanged. Location details may be included.</string>
     <string name="mv2_note_sent_as_is">Sent as it is.</string>
 
     <string name="mv2_file_open">Open</string>

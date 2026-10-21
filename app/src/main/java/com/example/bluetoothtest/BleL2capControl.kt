@@ -61,6 +61,8 @@ data class BleL2capPeer(
      * first helper's, [announcement] names the target at the route cost, and the call sends SETUP.
      */
     val relayRoute: RelayRoute? = null,
+    /** A compact call offer's receive form (legacy or extended, compared ADs) for the copied-ID PC exemption; else null. */
+    val twinForm: AdvertTwinForm? = null,
 )
 
 class BleL2capDiscovery(
@@ -84,6 +86,16 @@ class BleL2capDiscovery(
      * mode (screen off, not charging) instead of balanced. Ignored when [startLowLatency] is set.
      */
     private val lowPower: Boolean = false,
+    /**
+     * A visible scanner (Nearby call list, Live list): restart the system scan when it has heard nothing at all for a
+     * while ([ScanStallWatch]), through the scan-start gate. Off with `test_scan_recovery=false` (the control arm).
+     */
+    private val stallRecovery: Boolean = false,
+    /**
+     * F11: no offloaded (hardware) filter for this scanner; the service UUID is matched in software ([addResult]). Only
+     * the screen-on, time-limited Meet scan passes true ([DebugTunables.meetSoftwareFilter]).
+     */
+    private val softwareFilter: Boolean = false,
 ) : Closeable {
     private val handler = Handler(Looper.getMainLooper())
     private val running = AtomicBoolean(false)
@@ -95,11 +107,26 @@ class BleL2capDiscovery(
      * off for this scanner and the rest of the process ([CompactFilterGuard]).
      */
     @Volatile private var compactDiscovery = CompactDiscoveryFeature.filterActive()
-    private val stats = ScanStats(Integer.toHexString(System.identityHashCode(this)), compactDiscovery)
+    /**
+     * "Find PCs" (Experimental, [PcAnnouncementFeature]): adds one service-data filter and extended scan settings, only on
+     * a controller that reports extended advertising and only for a scanner that accepts rotating offers (the call list). A refused filter turns it off for this scanner and the rest of the
+     * process, before the compact filter is touched ([PcFilterGuard]).
+     */
+    private val pcWanted: Boolean = PcAnnouncementFeature.filterActive() && acceptRotating
+    private val pcUnsupported: Boolean = pcWanted && !extendedAdvertisingSupported()
+    @Volatile private var pcDiscovery = pcWanted && !pcUnsupported
+    private val pcDecodedLog = PcLogLimiter()
+    private val pcRejectedLog = PcLogLimiter()
+    private val stats = ScanStats(Integer.toHexString(System.identityHashCode(this)), compactDiscovery, pcDiscovery)
+    /** DEBUG: why decoded announcements were not accepted (F11), once per address. */
+    private val rejectLog = ScanRejectLog()
     private val backoff = ScanRecoveryBackoff()
     private var failureCode: Int? = null
     private var firstFailureMs = 0L
     private val retryScan = Runnable { restartAfterFailure() }
+    private val stallWatch = ScanStallWatch()
+    private val stallCheck = Runnable { checkStall() }
+    private var lastQuotaFullLogMs = 0L
 
     /** Batch S: this scanner's name in [ScanRegistry], and whether renewal/Bluetooth-off has it paused. */
     private val registryName = "discovery-" + stats.scanner
@@ -204,7 +231,20 @@ class BleL2capDiscovery(
                 "compact_filter: event=started | scanner=${stats.scanner} | filters=${scanFilters().size} | mode=$activeScanMode",
             )
         }
+        if (pcDiscovery) {
+            android.util.Log.i(
+                "BluetoothVideo",
+                "pc_scan: event=started | scanner=${stats.scanner} | filters=${scanFilters().size} | extended_supported=true | legacy=false | phy=1M | mode=$activeScanMode",
+            )
+        } else if (pcUnsupported) {
+            android.util.Log.i("BluetoothVideo", "pc_scan: unsupported reason=no_extended | extended_supported=false | scanner=${stats.scanner}")
+        }
         if (BuildConfig.DEBUG) handler.postDelayed(::logScanStats, SCAN_STATS_INTERVAL_MS)
+        if (stallRecovery && DebugTunables.scanRecovery) {
+            stallWatch.onStarted(SystemClock.elapsedRealtime())
+            handler.removeCallbacks(stallCheck)
+            handler.postDelayed(stallCheck, ScanStallWatch.CHECK_INTERVAL_MS)
+        }
         if (scanDurationMs > 0) {
             handler.postDelayed({ stop(notify = true) }, scanDurationMs)
         } else if (startLowLatency && !continuousLowLatency) {
@@ -230,6 +270,7 @@ class BleL2capDiscovery(
             .onSuccess {
                 ScanRuntime.onScanStart()
                 ScanRegistry.shared.markStarted(registryName)
+                stallWatch.onStarted(SystemClock.elapsedRealtime())
                 logDuty()
             }
             .onFailure {
@@ -237,9 +278,54 @@ class BleL2capDiscovery(
             }
     }
 
+    /**
+     * Scan-stall recovery ([ScanStallWatch]): a running, unpaused scan that heard nothing for the required silence is
+     * stopped and started again, only when the scan-start gate has a free slot now (a full quota is waited out, never
+     * queued past it). Every [ScanStallWatch.CHECK_INTERVAL_MS] while this scanner runs.
+     */
+    @SuppressLint("MissingPermission")
+    private fun checkStall() {
+        if (!running.get()) return
+        handler.postDelayed(stallCheck, ScanStallWatch.CHECK_INTERVAL_MS)
+        if (scanPaused || failureCode != null) return
+        val now = SystemClock.elapsedRealtime()
+        if (!stallWatch.due(now)) return
+        val silentMs = stallWatch.silentMs(now)
+        val scanner = adapter.bluetoothLeScanner ?: return
+        if (!ScanStartGate.shared.tryReserve(scanBudget)) {
+            if (now - lastQuotaFullLogMs >= ScanStallWatch.STALL_MS) {
+                lastQuotaFullLogMs = now
+                logStall(silentMs, "quota_full")
+            }
+            return
+        }
+        runCatching { scanner.stopScan(callback) }
+        EncoderBenchGuard.check("BleL2capControl.scanStall")
+        val restarted = runCatching { scanner.startScan(scanFilters(), scanSettings(activeScanMode), callback) }.isSuccess
+        stallWatch.onRestarted(now)
+        if (restarted) {
+            ScanRuntime.onScanStart()
+            ScanRegistry.shared.markStarted(registryName)
+        }
+        logStall(silentMs, if (restarted) "yes" else "failed")
+    }
+
+    private fun logStall(silentMs: Long, restart: String) {
+        android.util.Log.i(
+            "BluetoothVideo",
+            (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                ScanStallWatch.line(stats.scanner, silentMs, restart, ScanStartGate.shared.used(scanBudget)),
+        )
+    }
+
     /** DEBUG: the duty cycle the stack is expected to apply for this SDK and mode (SCAN-06), per (re)start. */
     private fun logDuty() {
-        if (BuildConfig.DEBUG) scanLog(ScanDutyCycle.line(Build.VERSION.SDK_INT, activeScanMode, ScanRuntime.screenOnHint, stats.scanner))
+        if (BuildConfig.DEBUG) {
+            scanLog(
+                ScanDutyCycle.line(Build.VERSION.SDK_INT, activeScanMode, ScanRuntime.screenOnHint, stats.scanner) +
+                    " | phy=${if (scanOnLe1m()) "1M" else "all"}",
+            )
+        }
     }
 
     /**
@@ -279,6 +365,7 @@ class BleL2capDiscovery(
             .onSuccess {
                 ScanRuntime.onScanStart()
                 ScanRegistry.shared.markStarted(registryName)
+                stallWatch.onStarted(SystemClock.elapsedRealtime())
             }
             .onFailure {
                 if (halt()) {
@@ -304,6 +391,22 @@ class BleL2capDiscovery(
                         "uncleanExits=${ScanRuntime.uncleanExits} | scanner=${stats.scanner}",
                 )
             }
+        }
+        if (PcFilterGuard.dropFor(errorCode, pcDiscovery, compactDiscovery) == PcFilterGuard.Drop.PC) {
+            // The newest, experimental filter goes first: the PC service-data filter (and the extended scan settings that
+            // come with it). The compact filter and the app's own filter are untouched; a repeat failure then drops compact.
+            pcDiscovery = false
+            PcAnnouncementFeature.filterRejected = true
+            android.util.Log.w(
+                "BluetoothVideo",
+                "pc_filter: event=dropped | scanner=${stats.scanner} | code=$errorCode | " +
+                    "name=${ScanFailurePolicy.name(errorCode)} | action=restart_without_pc_filter",
+            )
+            failureCode = errorCode
+            handler.removeCallbacks(retryScan)
+            runCatching { adapter.bluetoothLeScanner?.stopScan(callback) }
+            handler.post(retryScan)
+            return
         }
         if (compactDiscovery && CompactFilterGuard.refusesFilter(errorCode)) {
             // The masked iPhone filter is the likely cause: keep the app's own filter and restart at once.
@@ -384,6 +487,30 @@ class BleL2capDiscovery(
             }
     }
 
+    private fun pcLogPrefix(): String = if (BuildConfig.DEBUG) "BENCHMARK " else ""
+
+    /** One line per decoded PC announcement, at most one per address every 10 s. The address is logged in DEBUG only. */
+    private fun logPcDecoded(result: ScanResult, decoded: PcAnnouncement) {
+        if (!pcDecodedLog.allow(result.device.address, SystemClock.elapsedRealtime())) return
+        android.util.Log.i(
+            "BluetoothVideo",
+            pcLogPrefix() + "pc_announcement: scanner=${stats.scanner} | rdi=" +
+                decoded.rdi.joinToString("") { "%02x".format(it) } +
+                " | relay=${decoded.relayCapable} | consent=${decoded.relayConsent} | codecs=${decoded.codecs} | " +
+                "cost=${decoded.cost} | rssi=${result.rssi}" + if (BuildConfig.DEBUG) " | addr=${result.device.address}" else "",
+        )
+    }
+
+    /** One line per rejected PC announcement (and error), at most one per address every 10 s. */
+    private fun logPcRejected(result: ScanResult, error: PcAnnouncementError, data: ByteArray?) {
+        if (!pcRejectedLog.allow(result.device.address, SystemClock.elapsedRealtime())) return
+        android.util.Log.i(
+            "BluetoothVideo",
+            pcLogPrefix() + "pc_announcement_rejected: scanner=${stats.scanner} | error=$error | " +
+                "len=${data?.size ?: -1} | rssi=${result.rssi}" + if (BuildConfig.DEBUG) " | addr=${result.device.address}" else "",
+        )
+    }
+
     private fun logRecovery(event: String, code: Int, step: ScanRecoveryStep) {
         if (!BuildConfig.DEBUG) return
         android.util.Log.i(
@@ -400,35 +527,55 @@ class BleL2capDiscovery(
      * The app's service UUID, plus (experimental compact discovery) the masked iPhone UUID. Filters
      * are ORed and one scan start covers both, so the scan quota is unchanged.
      */
-    private fun scanFilters(): List<ScanFilter> = if (ScanFilterFallback.softwareFiltering()) {
-        // S-06 (Experimental, screen on only): no hardware filter; addResult matches the service UUID in software.
-        emptyList()
-    } else buildList {
-        add(ScanFilter.Builder().setServiceUuid(ParcelUuid(BleL2capControlProtocol.SERVICE_UUID)).build())
-        if (compactDiscovery) {
-            add(
-                ScanFilter.Builder()
-                    .setServiceUuid(
-                        ParcelUuid(CompactDiscoveryAnnouncement.FILTER_UUID),
-                        ParcelUuid(CompactDiscoveryAnnouncement.FILTER_MASK),
-                    )
-                    .build(),
-            )
+    private fun scanFilters(): List<ScanFilter> =
+        // S-06 (Experimental, screen on only) or this scanner's own F11 option: no hardware filter; addResult matches the
+        // service UUID in software. [DiscoveryScanPlan] is the pure, tested description of what is built here.
+        DiscoveryScanPlan.filters(ScanFilterFallback.softwareFor(softwareFilter), compactDiscovery, pcDiscovery).map { spec ->
+            when (spec) {
+                is ScanFilterSpec.ServiceUuid -> ScanFilter.Builder().also { builder ->
+                    if (spec.mask == null) {
+                        builder.setServiceUuid(ParcelUuid(spec.uuid))
+                    } else {
+                        builder.setServiceUuid(ParcelUuid(spec.uuid), ParcelUuid(spec.mask))
+                    }
+                }.build()
+                // Empty data: matches any payload under the PC announcement UUID (AOSP prefix match).
+                is ScanFilterSpec.ServiceDataAny -> ScanFilter.Builder()
+                    .setServiceData(ParcelUuid(spec.uuid), ByteArray(0))
+                    .build()
+            }
         }
+
+    private fun scanSettings(mode: Int): ScanSettings {
+        // F11: this app's adverts are legacy, always on LE 1M; the default PHY_LE_ALL_SUPPORTED makes Android 13+
+        // stacks scan LE 1M and Coded in turn ([DebugTunables.scanLe1mOnly], WeakPairReach). "Find PCs" needs extended
+        // adverts, so while its filter is active it asks for them instead ([DiscoveryScanPlan.settings]).
+        val spec = DiscoveryScanPlan.settings(mode, scanOnLe1m(), pcDiscovery)
+        return ScanSettings.Builder()
+            .setScanMode(spec.mode)
+            .also { builder ->
+                spec.legacy?.let(builder::setLegacy)
+                spec.phy?.let(builder::setPhy)
+            }
+            .build()
     }
 
-    private fun scanSettings(mode: Int): ScanSettings = ScanSettings.Builder()
-        .setScanMode(mode)
-        .build()
+    @SuppressLint("MissingPermission")
+    private fun extendedAdvertisingSupported(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && runCatching { adapter.isLeExtendedAdvertisingSupported }.getOrDefault(false)
+
+    private fun scanOnLe1m(): Boolean = DebugTunables.scanLe1mOnly && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
 
     @SuppressLint("MissingPermission")
     private fun addResult(result: ScanResult) {
         if (!running.get()) return
         stats.raw++
-        if (ScanFilterFallback.softwareFiltering()) {
+        stallWatch.onResult(SystemClock.elapsedRealtime())
+        if (ScanFilterFallback.softwareFor(softwareFilter)) {
             val uuids = result.scanRecord?.serviceUuids?.map(ParcelUuid::getUuid)
             val wanted = ScanFilterFallback.matchesService(uuids, BleL2capControlProtocol.SERVICE_UUID) ||
-                (compactDiscovery && CompactDiscoveryAnnouncement.firstCandidate(uuids) != null)
+                (compactDiscovery && CompactDiscoveryAnnouncement.firstCandidate(uuids) != null) ||
+                (pcDiscovery && result.scanRecord?.getServiceData(ParcelUuid(PcAnnouncement.UUID)) != null)
             if (!wanted) return
         }
         ScanRuntime.onScanResult()
@@ -469,38 +616,71 @@ class BleL2capDiscovery(
             NamePageCodec.decode(requireNotNull(announcementBytes))?.let(NameWindowBoard::onPage)
             return
         }
+        var twinForm: AdvertTwinForm? = null
         val announcement = if (announcementBytes != null) {
             runCatching { DiscoveryAnnouncementCodec.decode(announcementBytes, acceptRotating, acceptWindow = windowOn) }
                 .getOrNull()
-                ?: return
+                ?: run {
+                    stats.undecodable++
+                    return
+                }
         } else {
             // Experimental: an iPhone cannot send manufacturer data; its one service UUID is the
-            // announcement. The 22-byte form always wins when both are present.
+            // announcement. The 22-byte form always wins when both are present; then the compact UUID; then the
+            // "Find PCs" service data (Design QW).
             val compact = if (compactDiscovery) {
                 CompactDiscoveryAnnouncement.firstCandidate(result.scanRecord?.serviceUuids?.map(ParcelUuid::getUuid))
             } else {
                 null
             }
-            if (compact == null) {
-                stats.withoutAnnouncement++
-                return
-            }
-            runCatching { CompactDiscoveryAnnouncement.decode(compact, acceptRotating) }
-                .onSuccess { stats.compact++ }
-                .getOrNull()
-                ?: run {
+            val pcData = if (pcDiscovery) result.scanRecord?.getServiceData(ParcelUuid(PcAnnouncement.UUID)) else null
+            when (val outcome = ScanRecordForms.resolve(compact, pcData, acceptRotating)) {
+                ScanRecordForms.Outcome.None -> {
+                    stats.withoutAnnouncement++
+                    return
+                }
+                ScanRecordForms.Outcome.CompactInvalid -> {
                     stats.compactInvalid++
                     return
                 }
+                is ScanRecordForms.Outcome.Compact -> {
+                    stats.compact++
+                    if (outcome.announcement.isPrivateCallOffer()) {
+                        twinForm = AdvertTwinAds.compared(result.scanRecord?.bytes)?.let { compared ->
+                            AdvertTwinForm(result.isLegacy, !result.isLegacy && result.secondaryPhy != 0, compared)
+                        }
+                    }
+                    outcome.announcement
+                }
+                is ScanRecordForms.Outcome.Pc -> {
+                    stats.pc++
+                    logPcDecoded(result, outcome.decoded)
+                    outcome.announcement
+                }
+                is ScanRecordForms.Outcome.PcInvalid -> {
+                    stats.pcInvalid++
+                    logPcRejected(result, outcome.error, pcData)
+                    return
+                }
+            }
         }
         if (!acceptAnnouncement(announcement)) {
             stats.rejected++
+            if (BuildConfig.DEBUG) {
+                rejectLog.line(stats.scanner, result.device.address, announcement, result.rssi)
+                    ?.let { android.util.Log.i("BluetoothVideo", "BENCHMARK $it") }
+            }
             return
         }
         stats.accepted++
         if (announcement.isWindowOffer) NameWindowBoard.onOffer(announcement)
         val device = result.device
-        logAddressChurn(announcement, device.address)
+        // A phone bonded to the advertiser resolves its RPA with the stored IRK and reports the identity address
+        // (possibly the public one): that is resolution, not a leak, so the address lines say whether we are bonded.
+        // Asked only when a DEBUG line is written: bondState is a binder call, not one per scan result.
+        logAddressChurn(announcement, device.address, result.rssi) {
+            runCatching { device.bondState == android.bluetooth.BluetoothDevice.BOND_BONDED }.getOrDefault(false)
+        }
         // Experimental relayed calls: every sighting of a cost-0 call offer refreshes the reach table
         // (before the duplicate filter, like PeerAddressBook). Off: nothing runs.
         if (RelayedCallsFeature.enabled && announcement.routeCost == 0 && announcement.isPrivateCallOffer()) {
@@ -529,6 +709,7 @@ class BleL2capDiscovery(
                 "$name [$nodeLabel] (${device.address})",
                 announcement,
                 advertisedName = name.takeUnless { it == "Nearby device" },
+                twinForm = twinForm,
             ),
         )
     }
@@ -542,7 +723,7 @@ class BleL2capDiscovery(
     private val lastAddressByNode = HashMap<String, String>()
     private val lastNodeByAddress = HashMap<String, String>()
 
-    private fun logAddressChurn(announcement: DiscoveryAnnouncement, address: String) {
+    private fun logAddressChurn(announcement: DiscoveryAnnouncement, address: String, rssi: Int, bonded: () -> Boolean) {
         if (!BuildConfig.DEBUG) return
         val node = announcement.nodeIdPrefix.joinToString("") { "%02x".format(it) }
         // Hardening: a new rotating ID under an address that announced another one is the legacy-controller defect
@@ -554,7 +735,7 @@ class BleL2capDiscovery(
                 android.util.Log.i(
                     "BluetoothVideo",
                     "BENCHMARK rotid_address_reuse: event=observed | scanner=${stats.scanner} | address=$address | node=$node | " +
-                        "previousNode=$before | wallMs=${System.currentTimeMillis()}",
+                        "previousNode=$before | wallMs=${System.currentTimeMillis()} | bonded=${bonded()}",
                 )
             }
         }
@@ -564,7 +745,7 @@ class BleL2capDiscovery(
             "BluetoothVideo",
             "BENCHMARK adv_address_seen: scanner=${stats.scanner} | node=$node | version=${announcement.version} | " +
                 "address=$address | previous=${previous ?: "none"} | elapsedMs=${SystemClock.elapsedRealtime()} | " +
-                "wallMs=${System.currentTimeMillis()}",
+                "wallMs=${System.currentTimeMillis()} | rssi=$rssi | bonded=${bonded()}",
         )
     }
 
@@ -607,8 +788,33 @@ class BleL2capDiscovery(
     }
 }
 
+/**
+ * DEBUG (F11): one line per address the first time a scanner decodes its announcement and rejects it, with what the
+ * acceptance rules look at, so a phone that never reaches another can tell "heard but refused" (and why) from "never
+ * heard". At most [max] lines per scanner. Main thread only.
+ */
+internal class ScanRejectLog(private val max: Int = 24) {
+    private val seen = HashSet<String>()
+
+    fun line(scanner: String, address: String, announcement: DiscoveryAnnouncement, rssi: Int): String? {
+        if (seen.size >= max || !seen.add(address)) return null
+        return "scan_reject: scanner=$scanner | address=$address | version=${announcement.version} | " +
+            "rotating=${announcement.rotating} | callOffer=${announcement.isPrivateCallOffer()} | " +
+            "window=${announcement.isWindowOffer} | cost=${announcement.routeCost} | " +
+            "flags=0x%02x | id=%s | rssi=%d".format(
+                announcement.flags,
+                announcement.nodeIdPrefix.joinToString("") { "%02x".format(it) },
+                rssi,
+            )
+    }
+}
+
 /** Counts of one discovery scan's results (main-thread callbacks; DEBUG log only). */
-internal class ScanStats(val scanner: String, private val compactDiscovery: Boolean = false) {
+internal class ScanStats(
+    val scanner: String,
+    private val compactDiscovery: Boolean = false,
+    private val pcDiscovery: Boolean = false,
+) {
     @Volatile var raw = 0
     @Volatile var withoutAnnouncement = 0
     @Volatile var rejected = 0
@@ -616,6 +822,11 @@ internal class ScanStats(val scanner: String, private val compactDiscovery: Bool
     /** Experimental compact discovery: decoded iPhone UUIDs, and magic-matching UUIDs that failed. */
     @Volatile var compact = 0
     @Volatile var compactInvalid = 0
+    /** Experimental "Find PCs": decoded PC service-data announcements and rejected ones (never the compact counters). */
+    @Volatile var pc = 0
+    @Volatile var pcInvalid = 0
+    /** Manufacturer data of this app that did not decode (before F11 these left no trace). */
+    @Volatile var undecodable = 0
     private var startedMs = System.currentTimeMillis()
     private var startedElapsedMs = elapsedOrMinusOne()
 
@@ -626,6 +837,9 @@ internal class ScanStats(val scanner: String, private val compactDiscovery: Bool
         accepted = 0
         compact = 0
         compactInvalid = 0
+        pc = 0
+        pcInvalid = 0
+        undecodable = 0
         startedMs = System.currentTimeMillis()
         startedElapsedMs = elapsedOrMinusOne()
     }
@@ -633,12 +847,14 @@ internal class ScanStats(val scanner: String, private val compactDiscovery: Bool
     /** SystemClock is not available in plain JVM tests; -1 then means "no connect-overlap tagging". */
     private fun elapsedOrMinusOne(): Long = runCatching { android.os.SystemClock.elapsedRealtime() }.getOrDefault(-1L)
 
-    /** Unchanged with compact discovery off; on, it appends the two compact counters. */
+    /** Unchanged with compact discovery and "Find PCs" off; on, each appends its own two counters. */
     fun line(state: String): String =
         "scan_stats: scanner=$scanner | state=$state | " +
             "elapsedMs=${System.currentTimeMillis() - startedMs} | raw=$raw | " +
             "withoutAnnouncement=$withoutAnnouncement | rejected=$rejected | accepted=$accepted" +
             (if (compactDiscovery) " | compact=$compact | compactInvalid=$compactInvalid" else "") +
+            (if (pcDiscovery) " | pc=$pc | pcInvalid=$pcInvalid" else "") +
+            (if (undecodable > 0) " | undecodable=$undecodable" else "") +
             connectOverlapTag()
 
     /** S-07 diagnostic: the part of this window that overlapped an own connect attempt; empty when none. */
@@ -980,6 +1196,11 @@ class BleL2capControlServer(
 
     private fun switchToBalancedAdvertising() {
         if (closed.get()) return
+        // F11: while a verification code is shown the set stays low-latency / high power; checked again later.
+        if (AdvertisingBoost.holding()) {
+            advertiseHandler.postDelayed(::switchToBalancedAdvertising, LOW_LATENCY_ADVERTISE_BURST_MS)
+            return
+        }
         // Same set, same address: a peer that just discovered it can still connect.
         if (DebugTunables.stableAdvertisingAddress && advertising && advertisement.switchToBalanced()) return
         thread(name = "BleControlAdvertiseBalance") {

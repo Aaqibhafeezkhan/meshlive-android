@@ -17,6 +17,8 @@ internal data class ApkFacts(
      * the new one.
      */
     val lineageSha256: List<String> = emptyList(),
+    val minSdk: Int = 1,
+    val nativeAbis: Set<String> = emptySet(),
 )
 
 /** The installed app. */
@@ -24,6 +26,8 @@ internal data class InstalledFacts(
     val packageName: String,
     val versionCode: Long,
     val signersSha256: List<String>,
+    val sdkInt: Int = Int.MAX_VALUE,
+    val supportedAbis: Set<String> = emptySet(),
 )
 
 internal enum class UpdateRefusal {
@@ -32,6 +36,7 @@ internal enum class UpdateRefusal {
     WRONG_PACKAGE,
     NOT_NEWER,
     WRONG_ABI,
+    SDK_TOO_OLD,
     SIGNER_COUNT,
     SIGNER_NOT_INSTALLED,
     SIGNER_NOT_PINNED,
@@ -113,6 +118,13 @@ internal object UpdateVerifier {
             if (candidateRelease == null || (candidateAbi != installedAbi && candidateAbi != ReleaseNumber.ABI_UNIVERSAL)) {
                 return UpdateVerdict.Refused(UpdateRefusal.WRONG_ABI, "ABI digit $candidateAbi, installed $installedAbi")
             }
+        }
+        if (candidate.minSdk > installed.sdkInt) {
+            return UpdateVerdict.Refused(UpdateRefusal.SDK_TOO_OLD, "requires Android API ${candidate.minSdk}")
+        }
+        if (candidate.nativeAbis.isNotEmpty() && installed.supportedAbis.isNotEmpty() &&
+            candidate.nativeAbis.none { it in installed.supportedAbis }) {
+            return UpdateVerdict.Refused(UpdateRefusal.WRONG_ABI, "no native libraries for this phone")
         }
         return UpdateVerdict.Accepted
     }

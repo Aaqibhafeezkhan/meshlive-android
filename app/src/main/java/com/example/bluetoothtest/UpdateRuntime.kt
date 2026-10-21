@@ -125,6 +125,16 @@ internal object UpdateConsent {
     }
 
     /**
+     * The "Check for updates" switch in Settings changed (its preference already holds the new value): the choice counts
+     * as the answer to the question, and turning it off also forgets what the check learned.
+     */
+    fun onSwitchChanged(context: Context, prefs: SharedPreferences) {
+        val yes = prefs.getBoolean(UpdateSettings.PREF_CHECK_FOR_UPDATES, false)
+        set(context, prefs, yes)
+        if (!yes) prefs.edit().remove(UpdateCheckStore.LATEST).apply()
+    }
+
+    /**
      * A "yes" that arrived without its marker (restored from a backup, or a marker lost) is forgotten: the
      * preference is removed and the question will be asked again. Returns true when it did so.
      */

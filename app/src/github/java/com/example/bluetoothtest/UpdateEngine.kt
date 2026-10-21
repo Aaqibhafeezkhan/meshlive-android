@@ -36,7 +36,7 @@ internal sealed class PrepareResult {
     /** [kind] picks the sentence shown to the user; [log] is for the DEBUG log only. */
     data class Failed(val kind: Kind, val log: String, val refusal: UpdateRefusal? = null) : PrepareResult()
 
-    enum class Kind { OFFLINE, SERVER, RATE_LIMITED, NO_FILE, NO_HASH, HASH_MISMATCH, REFUSED, STORAGE, CANCELLED, UNREADABLE, CHECKS_OFF }
+    enum class Kind { BUSY, OFFLINE, SERVER, RATE_LIMITED, NO_FILE, NO_HASH, HASH_MISMATCH, REFUSED, STORAGE, CANCELLED, UNREADABLE, CHECKS_OFF }
 }
 
 internal sealed class CheckResult {
@@ -55,6 +55,7 @@ internal sealed class CheckResult {
  */
 internal object UpdateEngine {
     private const val TAG = "BluetoothVideo"
+    @Volatile private var processInstallSession = -1
 
     /** A picked file must be read within this time. */
     private const val IMPORT_BUDGET_MS = 3 * 60_000L
@@ -63,13 +64,13 @@ internal object UpdateEngine {
 
     fun directory(context: Context): File = File(context.noBackupFilesDir, "updates").also { it.mkdirs() }
 
-    /** One file per origin, so a picked file and a download never overwrite each other (security review F6). */
-    private fun candidate(context: Context, origin: String) = File(directory(context), "candidate-$origin.apk")
+    /** A queued screen result owns its candidate; a later attempt must not overwrite it before cancellation/installation. */
+    private fun candidate(context: Context, origin: String) = File(directory(context), "candidate-$origin-${java.util.UUID.randomUUID()}.apk")
 
     private fun partial(context: Context, origin: String) = File(directory(context), "candidate-$origin.part")
 
     /** Deletes leftovers (an installed update's file, an abandoned download). Safe at any time but during an install. */
-    fun sweep(context: Context, keepIfNewerThanMs: Long = 0) {
+    fun sweep(context: Context, keepIfNewerThanMs: Long = 0) = UpdateFileWork.run({ Unit }) {
         val dir = File(context.noBackupFilesDir, "updates")
         val now = System.currentTimeMillis()
         dir.listFiles()?.forEach { if (keepIfNewerThanMs == 0L || now - it.lastModified() > keepIfNewerThanMs) it.delete() }
@@ -103,6 +104,7 @@ internal object UpdateEngine {
     private val checkLock = Any()
 
     private fun checkLocked(context: Context, manual: Boolean): CheckResult {
+        if (OfflineAppShareGate.liveSessionActive()) return CheckResult.Skipped
         val prefs = context.getSharedPreferences(UpdateSettings.PREFERENCES_FILE, Context.MODE_PRIVATE)
         val store = UpdateCheckStore(PrefsUpdateStore(prefs))
         val build = InstalledBuild.read(context) ?: return CheckResult.Failed("installed build unreadable")
@@ -133,6 +135,9 @@ internal object UpdateEngine {
             }
             store.save(UpdateSchedule.afterAnswer(state, System.currentTimeMillis(), tag, answer.rateLimitedUntilMs))
             if (BuildConfig.DEBUG) Log.i(TAG, "BENCHMARK update_check: manual=$manual | status=${answer.status} | outcome=${outcome::class.java.simpleName} | tag=$tag")
+            if (answer.rateLimitedUntilMs != null) {
+                return CheckResult.TooSoon(UpdateSchedule.manualWaitMs(store.load(), System.currentTimeMillis()))
+            }
             when (outcome) {
                 is CheckOutcome.Available, is CheckOutcome.NoFileForThisPhone -> CheckResult.Answered(tag, newer = true)
                 is CheckOutcome.UpToDate -> CheckResult.Answered(tag, newer = false)
@@ -156,7 +161,12 @@ internal object UpdateEngine {
         context: Context,
         isCancelled: () -> Boolean,
         onProgress: (done: Long, total: Long) -> Unit,
-    ): PrepareResult {
+    ): PrepareResult = UpdateFileWork.run({ PrepareResult.Failed(PrepareResult.Kind.BUSY, "another update operation") }) {
+        downloadReserved(context, isCancelled, onProgress)
+    }
+
+    private fun downloadReserved(context: Context, isCancelled: () -> Boolean, onProgress: (Long, Long) -> Unit): PrepareResult {
+        if (OfflineAppShareGate.liveSessionActive()) return PrepareResult.Failed(PrepareResult.Kind.BUSY, "media active")
         val build = InstalledBuild.read(context)
             ?: return PrepareResult.Failed(PrepareResult.Kind.UNREADABLE, "installed build unreadable")
         if (!UpdateRuntime.onlineCheckOffered(build)) {
@@ -167,7 +177,21 @@ internal object UpdateEngine {
         if (!online(context)) return PrepareResult.Failed(PrepareResult.Kind.OFFLINE, "offline")
         val source = UpdateRuntime.source()
         try {
-            val answer = UpdateHttp.get(source.latestUrl, source, GitHubReleases.MAX_LATEST_BYTES)
+            val answer = synchronized(checkLock) {
+                val store = UpdateCheckStore(PrefsUpdateStore(prefs))
+                val state = store.load()
+                if (System.currentTimeMillis() < state.notBeforeMs) {
+                    return PrepareResult.Failed(PrepareResult.Kind.RATE_LIMITED, "waiting for rate limit reset")
+                }
+                try {
+                    UpdateHttp.get(source.latestUrl, source, GitHubReleases.MAX_LATEST_BYTES).also {
+                        store.save(UpdateSchedule.afterAnswer(state, System.currentTimeMillis(), null, it.rateLimitedUntilMs))
+                    }
+                } catch (e: UpdateHttp.TransportException) {
+                    store.save(UpdateSchedule.afterNetworkFailure(state, System.currentTimeMillis()))
+                    throw e
+                }
+            }
             if (answer.rateLimitedUntilMs != null) return PrepareResult.Failed(PrepareResult.Kind.RATE_LIMITED, "HTTP ${answer.status}")
             if (answer.status != 200) return PrepareResult.Failed(PrepareResult.Kind.SERVER, "HTTP ${answer.status}")
             val outcome = UpdateFlow.evaluate(String(answer.body, Charsets.UTF_8), build.versionName, build.versionCode, Build.SUPPORTED_ABIS.toList(), source)
@@ -190,7 +214,7 @@ internal object UpdateEngine {
             part.delete()
             val result = try {
                 FileOutputStream(part).use { out ->
-                    UpdateHttp.download(offer.apk.url, source, out, GitHubReleases.MAX_APK_BYTES, offer.apk.size, isCancelled) {
+                    UpdateHttp.download(offer.apk.url, source, out, GitHubReleases.MAX_APK_BYTES, offer.apk.size, { isCancelled() || OfflineAppShareGate.liveSessionActive() }) {
                         onProgress(it, offer.apk.size)
                     }
                 }
@@ -211,7 +235,10 @@ internal object UpdateEngine {
             }
             val file = candidate(context, "github")
             file.delete()
-            if (!part.renameTo(file)) return PrepareResult.Failed(PrepareResult.Kind.STORAGE, "rename failed")
+            if (!part.renameTo(file)) {
+                part.delete()
+                return PrepareResult.Failed(PrepareResult.Kind.STORAGE, "rename failed")
+            }
             return verifyFile(context, file, result.sha256, build, requirePinned = true, origin = "github")
         } catch (e: UpdateHttp.TransportException) {
             return PrepareResult.Failed(PrepareResult.Kind.OFFLINE, e.message.orEmpty())
@@ -223,7 +250,12 @@ internal object UpdateEngine {
      * private directory while hashing it, then verified like a download except that it needs the *installed*
      * signer, not the pinned release key.
      */
-    fun importAndVerify(context: Context, uri: Uri, isCancelled: () -> Boolean): PrepareResult {
+    fun importAndVerify(context: Context, uri: Uri, isCancelled: () -> Boolean): PrepareResult =
+        UpdateFileWork.run({ PrepareResult.Failed(PrepareResult.Kind.BUSY, "another update operation") }) {
+            importReserved(context, uri, isCancelled)
+        }
+
+    private fun importReserved(context: Context, uri: Uri, isCancelled: () -> Boolean): PrepareResult {
         val build = InstalledBuild.read(context)
             ?: return PrepareResult.Failed(PrepareResult.Kind.UNREADABLE, "installed build unreadable")
         val part = partial(context, "nearby")
@@ -258,7 +290,10 @@ internal object UpdateEngine {
         }
         val file = candidate(context, "nearby")
         file.delete()
-        if (!part.renameTo(file)) return PrepareResult.Failed(PrepareResult.Kind.STORAGE, "rename failed")
+        if (!part.renameTo(file)) {
+            part.delete()
+            return PrepareResult.Failed(PrepareResult.Kind.STORAGE, "rename failed")
+        }
         return verifyFile(context, file, result.sha256, build, requirePinned = false, origin = "nearby")
     }
 
@@ -271,7 +306,7 @@ internal object UpdateEngine {
         origin: String,
     ): PrepareResult {
         val facts = readApkFacts(context, file)
-        val verdict = UpdateVerifier.verify(facts, build.facts(), requirePinned, UpdateRuntime.pinned(build))
+        val verdict = UpdateVerifier.verify(facts, build.facts().copy(sdkInt = Build.VERSION.SDK_INT, supportedAbis = Build.SUPPORTED_ABIS.toSet()), requirePinned, UpdateRuntime.pinned(build))
         if (verdict is UpdateVerdict.Refused) {
             file.delete()
             return PrepareResult.Failed(PrepareResult.Kind.REFUSED, verdict.detail, verdict.reason)
@@ -305,6 +340,11 @@ internal object UpdateEngine {
             versionCode = info.longVersionCode,
             signersSha256 = signing.apkContentsSigners.map { ReleaseSigner.sha256Colon(it.toByteArray()) },
             multipleSigners = multiple,
+            minSdk = info.applicationInfo?.minSdkVersion ?: return null,
+            nativeAbis = java.util.zip.ZipFile(file).use { zip ->
+                zip.entries().asSequence().map { it.name }.filter { it.startsWith("lib/") && it.endsWith(".so") }
+                    .map { it.substringAfter("lib/").substringBefore('/') }.toSet()
+            },
             lineageSha256 = if (multiple) {
                 emptyList()
             } else {
@@ -321,7 +361,11 @@ internal object UpdateEngine {
      * the user to confirm (`USER_ACTION_REQUIRED`: never silent). Throws on any failure after abandoning
      * the session.
      */
-    fun install(context: Context, update: PreparedUpdate): Int {
+    fun install(context: Context, update: PreparedUpdate): Int =
+        UpdateFileWork.run({ throw UpdateBusyException() }) { installReserved(context, update) }
+
+    private fun installReserved(context: Context, update: PreparedUpdate): Int {
+        if (!UpdateInstallPolicy.allowed(OfflineAppShareGate.liveSessionActive(), installPending(context))) throw UpdateBusyException()
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(context.packageName)
@@ -330,8 +374,10 @@ internal object UpdateEngine {
             if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
             if (Build.VERSION.SDK_INT >= 33) setPackageSource(PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE)
         }
-        abandonSessions(context)
         val id = installer.createSession(params)
+        processInstallSession = id
+        context.getSharedPreferences(UpdateSettings.PREFERENCES_FILE, Context.MODE_PRIVATE).edit()
+            .putInt(UpdateInstallReceiver.PREF_SESSION, id).apply()
         var session: PackageInstaller.Session? = null
         try {
             session = installer.openSession(id)
@@ -347,14 +393,40 @@ internal object UpdateEngine {
                 Intent(context, UpdateInstallReceiver::class.java).setPackage(context.packageName),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
             )
+            if (OfflineAppShareGate.liveSessionActive()) throw UpdateBusyException()
             session.commit(callback.intentSender)
             return id
         } catch (e: Exception) {
+            context.getSharedPreferences(UpdateSettings.PREFERENCES_FILE, Context.MODE_PRIVATE).edit()
+                .remove(UpdateInstallReceiver.PREF_SESSION).apply()
             runCatching { session?.abandon() ?: installer.abandonSession(id) }
             throw e
         } finally {
             runCatching { session?.close() }
         }
+    }
+
+    /** A system confirmation Intent is process-local. After process death explicitly restart instead of waiting forever. */
+    fun recoverInterruptedInstall(context: Context) {
+        val prefs = context.getSharedPreferences(UpdateSettings.PREFERENCES_FILE, Context.MODE_PRIVATE)
+        val id = prefs.getInt(UpdateInstallReceiver.PREF_SESSION, -1)
+        if (id < 0 || id == processInstallSession || UpdateInstallReceiver.pendingConfirm != null) return
+        val installer = context.packageManager.packageInstaller
+        val interrupted = installer.getSessionInfo(id) != null
+        if (interrupted) runCatching { installer.abandonSession(id) }
+            .onFailure { Log.w(TAG, "Interrupted update session could not be abandoned", it) }
+        prefs.edit().remove(UpdateInstallReceiver.PREF_SESSION).apply {
+            if (interrupted) {
+                putInt(UpdateInstallReceiver.PREF_LAST_STATUS, PackageInstaller.STATUS_FAILURE)
+                putString(UpdateInstallReceiver.PREF_LAST_MESSAGE, "Installation was interrupted. Download or choose the APK again.")
+            }
+        }.apply()
+    }
+
+    fun installPending(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(UpdateSettings.PREFERENCES_FILE, Context.MODE_PRIVATE)
+        val id = prefs.getInt(UpdateInstallReceiver.PREF_SESSION, -1)
+        return id >= 0 && context.packageManager.packageInstaller.getSessionInfo(id) != null
     }
 
     fun canInstall(context: Context): Boolean = context.packageManager.canRequestPackageInstalls()

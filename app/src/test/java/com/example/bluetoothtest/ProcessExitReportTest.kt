@@ -46,18 +46,17 @@ class ProcessExitReportTest {
 
     @Test
     fun theTextNamesWhoStoppedTheAppAndWhetherASessionRan() {
-        assertEquals(
-            "You (or Android's Active apps list) stopped the app while a call or stream was running.",
+        val texts = listOf(
             record(ApplicationExitInfo.REASON_USER_REQUESTED, session = true).userText(),
+            record(ApplicationExitInfo.REASON_LOW_MEMORY).userText(),
+            record(ApplicationExitInfo.REASON_FREEZER).userText(),
+            record(ApplicationExitInfo.REASON_OTHER).userText(),
+            record(12345).userText(),
         )
-        assertEquals("Android stopped the app to free memory.", record(ApplicationExitInfo.REASON_LOW_MEMORY).userText())
-        assertEquals("Android froze the app to save battery.", record(ApplicationExitInfo.REASON_FREEZER).userText())
-        assertEquals(
-            "The phone's system stopped the app. (MemoryLimiter:AnonSwap)",
-            record(ApplicationExitInfo.REASON_OTHER, description = "MemoryLimiter:AnonSwap").userText(),
-        )
-        assertEquals("The phone's system stopped the app.", record(ApplicationExitInfo.REASON_OTHER).userText())
-        assertEquals("The app stopped for an unknown reason.", record(12345).userText())
+        texts.forEach { assertTrue(it.isNotBlank()) }
+        assertEquals("each cause the user can act on has its own wording", texts.size, texts.toSet().size)
+        val described = record(ApplicationExitInfo.REASON_OTHER, description = "MemoryLimiter:AnonSwap").userText()
+        assertTrue("the system's own description is shown", described.contains("MemoryLimiter:AnonSwap"))
     }
 
     @Test

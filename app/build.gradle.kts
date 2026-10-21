@@ -12,7 +12,7 @@ val enableArmeabiV7a = (project.findProperty("enableArmeabiV7a") as String?)?.to
 
 // Per-ABI release APKs (tools/make_release.py passes -PsplitAbis=true -PenableArmeabiV7a=true; default OFF, so
 // debug and benchmark builds stay one APK). Splits produce arm64-v8a, armeabi-v7a and a universal APK, each with
-// its own versionCode = versionCode * 10 + ABI digit (the F-Droid/Signal convention; docs/ARCHITECTURE.md "Distribution and releases").
+// its own versionCode = versionCode * 10 + ABI digit (the F-Droid/Signal convention; docs/dev/architecture.md "Distribution and releases").
 val splitAbis = (project.findProperty("splitAbis") as String?)?.toBoolean() == true
 val universalApk = (project.findProperty("universalApk") as String?)?.toBoolean() != false
 val abiVersionDigits = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2)
@@ -39,22 +39,37 @@ android {
     namespace = "com.example.bluetoothtest"
     compileSdk = 36
 
-    // Distribution flavours (docs/SWITCHES.md "Check for updates"): `github` is what make_release.py builds and ships on the
+    // Distribution flavours (docs/dev/switches.md "Check for updates"): `github` is what make_release.py builds and ships on the
     // release page; it holds the opt-in updater (online check, download, PackageInstaller) and declares
     // REQUEST_INSTALL_PACKAGES. `fdroid` is what the F-Droid recipe builds: no updater code runs, no
-    // install permission, no network request of its own. Both carry the "newer version nearby" notice.
-    // Build commands name the flavour: assembleGithubDebug, assembleGithubRelease, assembleFdroidRelease.
+    // install permission, no network request of its own. `play` is the Google Play build (docs/dev/architecture.md "Distribution and releases"): Play
+    // updates it, so no updater and no install permission. All three offer "Share app nearby" with the same split-install
+    // refusal: outbound sharing is not self-updating (docs/PLAY_RELEASE.md). Play omits the `location` foreground-service
+    // type pending a supported justification for the Android 10-11 background-scan use. All three carry the
+    // "newer version nearby" notice and share one application id.
+    // Build commands name the flavour: assembleGithubDebug, assembleGithubRelease, assembleFdroidRelease, bundlePlayRelease.
     flavorDimensions += "distribution"
     productFlavors {
         create("github") {
             dimension = "distribution"
             buildConfigField("boolean", "UPDATER_AVAILABLE", "true")
             buildConfigField("String", "DISTRIBUTION", "\"github\"")
+            buildConfigField("boolean", "APP_SHARE_AVAILABLE", "true")
+            buildConfigField("boolean", "LOCATION_FGS_AVAILABLE", "true")
         }
         create("fdroid") {
             dimension = "distribution"
             buildConfigField("boolean", "UPDATER_AVAILABLE", "false")
             buildConfigField("String", "DISTRIBUTION", "\"fdroid\"")
+            buildConfigField("boolean", "APP_SHARE_AVAILABLE", "true")
+            buildConfigField("boolean", "LOCATION_FGS_AVAILABLE", "true")
+        }
+        create("play") {
+            dimension = "distribution"
+            buildConfigField("boolean", "UPDATER_AVAILABLE", "false")
+            buildConfigField("String", "DISTRIBUTION", "\"play\"")
+            buildConfigField("boolean", "APP_SHARE_AVAILABLE", "true")
+            buildConfigField("boolean", "LOCATION_FGS_AVAILABLE", "false")
         }
     }
 
@@ -118,20 +133,35 @@ android {
             ?: file("${System.getProperty("user.home")}/.bluetoothtest-release/keystore.properties")
         if (file.isFile) file.inputStream().use { stream -> load(stream) }
     }
+    // Google Play upload key (docs/dev/architecture.md "Distribution and releases"), separate from the release key above so a Play bundle is never signed
+    // with the GitHub/F-Droid key by accident. Path override: -PplayUploadKeystoreProperties=<file>; default
+    // ~/.meshlive-play-upload/keystore.properties. Without it bundlePlayRelease is unsigned (sign it before uploading).
+    val playUploadKeystoreProperties = Properties().apply {
+        val file = (project.findProperty("playUploadKeystoreProperties") as String?)?.let(::file)
+            ?: file("${System.getProperty("user.home")}/.meshlive-play-upload/keystore.properties")
+        if (file.isFile) file.inputStream().use { stream -> load(stream) }
+    }
     signingConfigs {
-        if (releaseKeystoreProperties.getProperty("storeFile") != null) {
-            create("release") {
-                storeFile = file(releaseKeystoreProperties.getProperty("storeFile"))
-                storePassword = releaseKeystoreProperties.getProperty("storePassword")
-                keyAlias = releaseKeystoreProperties.getProperty("keyAlias")
-                keyPassword = releaseKeystoreProperties.getProperty("keyPassword")
+        for ((name, properties) in listOf("release" to releaseKeystoreProperties, "playUpload" to playUploadKeystoreProperties)) {
+            if (properties.getProperty("storeFile") == null) continue
+            create(name) {
+                storeFile = file(properties.getProperty("storeFile"))
+                storePassword = properties.getProperty("storePassword")
+                keyAlias = properties.getProperty("keyAlias")
+                keyPassword = properties.getProperty("keyPassword")
             }
         }
+    }
+    // Release signing is chosen per flavour (the release build type sets none, so the flavour's applies; debug keeps
+    // the debug key): github and fdroid use the release key, play only the upload key.
+    productFlavors {
+        getByName("github") { signingConfigs.findByName("release")?.let { signingConfig = it } }
+        getByName("fdroid") { signingConfigs.findByName("release")?.let { signingConfig = it } }
+        getByName("play") { signingConfigs.findByName("playUpload")?.let { signingConfig = it } }
     }
 
     buildTypes {
         release {
-            signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -158,6 +188,13 @@ android {
 
 androidComponents {
     onVariants { variant ->
+        // Google Play takes one bundle per release (Play makes the per-ABI APKs itself), so the play release's
+        // versionCode is the universal one, versionCode * 10 + 0: the same release number (versionCode / 10,
+        // ReleaseVersion) as the GitHub APKs of that release, and strictly increasing per release as Play requires.
+        if (variant.flavorName == "play" && variant.buildType == "release") {
+            variant.outputs.forEach { output -> output.versionCode.get()?.let { output.versionCode.set(it * 10) } }
+            return@onVariants
+        }
         if (!splitAbis) return@onVariants
         variant.outputs.forEach { output ->
             val abi = output.filters.firstOrNull { it.filterType == com.android.build.api.variant.FilterConfiguration.FilterType.ABI }?.identifier
@@ -173,11 +210,11 @@ androidComponents {
 // class: `:app:testGithubDebugUnitTest --tests <class>`.
 tasks.register("testDebugUnitTest") {
     group = "verification"
-    description = "Unit tests of the github flavour (debug) and a compile check of the fdroid flavour's tests."
-    dependsOn("testGithubDebugUnitTest", "compileFdroidDebugUnitTestKotlin")
+    description = "Unit tests of the github flavour (debug) and a compile check of the fdroid and play flavours' tests."
+    dependsOn("testGithubDebugUnitTest", "compileFdroidDebugUnitTestKotlin", "compilePlayDebugUnitTestKotlin")
 }
 
-// Every resolved configuration is locked in app/gradle.lockfile (docs/ARCHITECTURE.md "Build notes", toolchain pins).
+// Every resolved configuration is locked in app/gradle.lockfile (docs/dev/architecture.md "Build notes", toolchain pins).
 dependencyLocking {
     lockAllConfigurations()
 }

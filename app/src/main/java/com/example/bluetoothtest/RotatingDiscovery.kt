@@ -24,7 +24,7 @@ object RotatingDiscoveryFeature {
     const val PREF = "experimental_rotating_ids"
 
     /**
-     * The one default constant (docs/SWITCHES.md register "Rotating discovery IDs"): what a user launch without a stored choice
+     * The one default constant (docs/dev/switches.md register "Rotating discovery IDs"): what a user launch without a stored choice
      * uses. A DEBUG benchmark launch (any `test_` extra) never reads it and uses [EXTRA] only, as every promoted feature
      * does ([FeatureCatalog.resolve]). The neutral Bluetooth name is a separate option and stays off by default.
      */

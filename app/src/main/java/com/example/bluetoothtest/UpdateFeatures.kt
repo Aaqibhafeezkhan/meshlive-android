@@ -1,7 +1,7 @@
 package com.example.bluetoothtest
 
 /**
- * Shipped defaults of the update features (docs/SWITCHES.md register, "Experimental, alternative and optional
+ * Shipped defaults of the update features (docs/dev/switches.md register, "Experimental, alternative and optional
  * behaviour"; design decision 2026-10-11). One constant per feature, as in [ConnectivityFeatureDefaults].
  */
 internal object UpdateFeatureDefaults {

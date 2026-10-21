@@ -1,13 +1,18 @@
 package com.example.bluetoothtest
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.net.Uri
+import android.provider.Settings
 import android.os.Bundle
 import android.view.View
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -37,6 +42,13 @@ class VerifyContactActivity : AppCompatActivity() {
         result.contents?.let(::onScanned)
     }
 
+    /** The app's own camera request before the scanner ([CameraScanGate]); zxing's own failure text blames the phone. */
+    private val cameraRequest = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        scanLaunched = false
+        val rationale = shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)
+        onCameraStep(CameraScanGate.afterRequest(granted, rationale))
+    }
+
     // ----- BVMID2 (Naming v2, `bvmid2`): expiring one-use code, scan with confirmation, mutual outcome -----
     private var meet = false
     private var scanLaunched = false
@@ -44,6 +56,17 @@ class VerifyContactActivity : AppCompatActivity() {
     private val meetSession = MeetSession()
     private val meetHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var meetScanning = false
+    /** DEBUG harness ([DebugMeetControl]): "show" or "scan", the injected code and the scripted answer. */
+    private var debugMeet: String? = null
+    private var debugConfirm: Boolean? = null
+    private var debugHarness = false
+    private val debugPoll = object : Runnable {
+        override fun run() {
+            if (!debugHarness || isDestroyed) return
+            DebugMeetControl.takeCommand(applicationContext)?.let(::applyDebugMeet)
+            meetHandler.postDelayed(this, 1_000L)
+        }
+    }
 
     private val meetEvents = object : QrDisplayEvents {
         override fun onScanCompleted(peer: IdentityFingerprint) {
@@ -88,7 +111,11 @@ class VerifyContactActivity : AppCompatActivity() {
         }
         peerNodeId = intent.getStringExtra(EXTRA_PEER_NODE_ID)?.lowercase()
         peerName = intent.getStringExtra(EXTRA_PEER_NAME).orEmpty()
-        meet = MeetBridge.available()
+        // During a call the endpoint serves that call and the camera is the call's: the screen verifies this call's peer by
+        // its safety code, never by the Meet flow (which would ask the busy endpoint to stay on air for a second connection).
+        meet = MeetBridge.available() && !intent.getBooleanExtra(EXTRA_IN_CALL, false)
+        // Design QL (review R1): a new visit of this screen; only scans confirmed in it let this phone answer as displayer.
+        if (meet && savedInstanceState == null) QrMeet.visit.begin()
         // The picture of a live code is a secret: no screenshots or recents thumbnails while it can be shown.
         if (meet) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
         findViewById<View>(R.id.verifyBackButton).setOnClickListener { finish() }
@@ -104,14 +131,9 @@ class VerifyContactActivity : AppCompatActivity() {
                         .show()
                     return@setOnClickListener
                 }
-                scanLaunched = true
-                scan.launch(
-                    ScanOptions()
-                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                        .setPrompt(getString(R.string.verify_scan_prompt))
-                        .setBeepEnabled(false)
-                        .setOrientationLocked(true),
-                )
+                val granted = ContextCompat.checkSelfPermission(this@VerifyContactActivity, Manifest.permission.CAMERA) ==
+                    PackageManager.PERMISSION_GRANTED
+                onCameraStep(CameraScanGate.beforeScan(granted))
             }
         }
         findViewById<View>(R.id.verifyUnavailableText).visibility =
@@ -119,17 +141,60 @@ class VerifyContactActivity : AppCompatActivity() {
         findViewById<View>(R.id.verifyNoSessionText).visibility = if (peerNodeId == null && !meet) View.VISIBLE else View.GONE
         loadOwnCode()
         bindSession()
-        showSegment(showCode = false)
+        // Settings > Your code and "Show my code" open on the code (identity terms, audit 2026-10-21).
+        showSegment(showCode = intent.getBooleanExtra(EXTRA_SHOW_CODE, false))
+        debugHarness = BuildConfig.DEBUG && meet && intent.getBooleanExtra(EXTRA_DEBUG_MEET, false) &&
+            DebugContactControl.allowed(this)
         findViewById<View>(R.id.verifyStoreReset).setOnClickListener { confirmStoreReset() }
         val main = android.os.Handler(mainLooper)
         // The listener may run under the store lock: it only posts a refresh.
         stopWatchingStore = security.watchStoreProblems(applicationContext) { main.post { refreshStoreBanner() } }
     }
 
+    private fun onCameraStep(step: CameraScanGate.Step) {
+        when (step) {
+            CameraScanGate.Step.LAUNCH -> {
+                scanLaunched = true
+                scan.launch(
+                    ScanOptions()
+                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        .setPrompt(getString(R.string.verify_scan_prompt))
+                        .setBeepEnabled(false)
+                        .setOrientationLocked(true)
+                        // Keeps the prompt above the navigation bar on Android 15+ (edge to edge).
+                        .setCaptureActivity(ScannerCaptureActivity::class.java),
+                )
+            }
+            CameraScanGate.Step.REQUEST -> {
+                // The prompt covers this screen like the scanner does: the Meet endpoint stays on air meanwhile.
+                scanLaunched = true
+                cameraRequest.launch(Manifest.permission.CAMERA)
+            }
+            CameraScanGate.Step.EXPLAIN -> MaterialAlertDialogBuilder(this)
+                .setMessage(R.string.verify_camera_needed)
+                .setPositiveButton(R.string.action_close, null)
+                .show()
+            CameraScanGate.Step.SETTINGS -> MaterialAlertDialogBuilder(this)
+                .setMessage(R.string.verify_camera_off)
+                .setPositiveButton(R.string.action_open_settings) { _, _ ->
+                    runCatching {
+                        startActivity(
+                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.fromParts("package", packageName, null)),
+                        )
+                    }
+                }
+                .setNegativeButton(R.string.action_close, null)
+                .show()
+        }
+    }
+
     override fun onStart() {
         super.onStart()
         if (meet) {
             QrMeet.display.events = meetEvents
+            // Kept while the camera covers the screen (cleared in onDestroy): a lease can arrive during the confirmation.
+            QrMeet.onLeaseStored = { peer -> runOnUiThread { if (!isDestroyed) onLeaseStored(peer) } }
+            if (debugHarness) meetHandler.post(debugPoll)
             MeetBridge.host?.begin()
             if (showingCode) meetHandler.post(meetTick)
         }
@@ -139,6 +204,7 @@ class VerifyContactActivity : AppCompatActivity() {
         if (meet) {
             meetHandler.removeCallbacksAndMessages(null)
             QrMeet.display.events = QrDisplayEvents.NONE
+            if (debugMeet == "show") DebugMeetControl.writeCode(applicationContext, null)
             // Leaving the screen kills the code. The camera covering this screen also leaves it, but the endpoint stays
             // on air for the scan that follows; everything else restores the user's reachability.
             QrMeet.display.leave()
@@ -148,6 +214,12 @@ class VerifyContactActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
+        // The name the other person sees for this phone nearby, so the two of you can match up (OwnNearbyName).
+        findViewById<android.widget.TextView>(R.id.verifyAppearAs)?.let { view ->
+            val line = OwnNearbyName.currentLine(this)
+            view.text = line.orEmpty()
+            view.visibility = if (line == null) android.view.View.GONE else android.view.View.VISIBLE
+        }
         super.onResume()
         // No "recovered" signal exists, so the state is polled whenever the screen returns.
         refreshStoreBanner()
@@ -188,10 +260,25 @@ class VerifyContactActivity : AppCompatActivity() {
         if (meet) {
             MeetBridge.host?.end()
             QrMeet.display.events = QrDisplayEvents.NONE
+            QrMeet.onLeaseStored = null
         }
         stopWatchingStore()
         worker.shutdownNow()
         super.onDestroy()
+    }
+
+    /** DEBUG harness ([DebugMeetControl]): switch to "Show my code", or inject a scanned code and its scripted answer. */
+    private fun applyDebugMeet(command: DebugMeetControl.Command) {
+        if (debugMeet == "show" && command.mode != "show") DebugMeetControl.writeCode(applicationContext, null)
+        debugMeet = command.mode
+        debugConfirm = command.confirm
+        when (command.mode) {
+            "show" -> showSegment(showCode = true)
+            "scan" -> command.code?.let { code ->
+                showSegment(showCode = false)
+                onScanned(code)
+            }
+        }
     }
 
     /** "Scan their code" or "Show my code": the only place this phone's code and ID are shown. */
@@ -290,6 +377,8 @@ class VerifyContactActivity : AppCompatActivity() {
         toggle.setOnCheckedChangeListener(null)
         toggle.isChecked = vault.visibleToThem(node)
         toggle.setOnCheckedChangeListener { _, checked ->
+            // Q-QL2b: turning it off starts a new key for every contact; say so plainly.
+            if (!checked) Toast.makeText(this, R.string.ql_visibility_off_warning, Toast.LENGTH_LONG).show()
             worker.execute {
                 runCatching { vault.setVisible(node, checked) }
                 RotatingDiscovery.requestRecognitionRebuild()
@@ -422,6 +511,9 @@ class VerifyContactActivity : AppCompatActivity() {
         worker.execute {
             val fingerprint = security.ownFingerprint(context)?.let { runCatching { IdentityFingerprint.fromHex(it.lowercase()) }.getOrNull() }
             val payload = fingerprint?.let { QrMeet.display.show(it, rdi) }
+            // F11: a live code on screen: the call listener advertises at low latency / high power while it lasts.
+            if (payload != null) runOnUiThread { MeetBridge.host?.codeShown() }
+            if (debugMeet == "show") DebugMeetControl.writeCode(context, payload?.let(Bvmid2::encode))
             val qr = payload?.let {
                 runCatching { BarcodeEncoder().encodeBitmap(Bvmid2.encode(it), BarcodeFormat.QR_CODE, size, size) }.getOrNull()
             }
@@ -448,20 +540,62 @@ class VerifyContactActivity : AppCompatActivity() {
     private fun showMeetOutcome(peer: IdentityFingerprint) {
         val status = findViewById<TextView>(R.id.verifyMeetStatus)
         val name = peerDisplay(peer)
-        val text = when (meetSession.outcome(peer)) {
+        val oneScan = when (meetSession.outcome(peer)) {
             MeetSession.Outcome.NONE -> null
             MeetSession.Outcome.YOU_VERIFIED -> getString(R.string.meet_you_scanned, name)
             MeetSession.Outcome.THEY_SCANNED_YOU -> getString(R.string.meet_they_scanned, name)
-            MeetSession.Outcome.VERIFIED_EACH_OTHER -> getString(R.string.meet_each_other, name)
+            MeetSession.Outcome.VERIFIED_EACH_OTHER -> getString(
+                if (meetSession.recognises(peer)) R.string.meet_each_other_recognised else R.string.meet_each_other,
+                name,
+            )
         } ?: return
+        // Design QL revision 2 (ql_consent_ui): a plain result, and Call now after a lease stored in this visit.
+        val text = if (QlConsent.enabled) {
+            when (meetSession.qlResult(peer)) {
+                MeetSession.QlResult.RECOGNISED -> getString(R.string.ql_result_recognised, name)
+                MeetSession.QlResult.DECLINED -> getString(R.string.ql_result_declined, name)
+                MeetSession.QlResult.NOT_FINISHED -> getString(R.string.ql_result_not_finished, name)
+                MeetSession.QlResult.ONE_SCAN, null -> oneScan + " " + getString(R.string.ql_result_one_scan)
+            }
+        } else {
+            oneScan
+        }
         status.text = text
         status.visibility = View.VISIBLE
+        bindCallNow(peer)
         if (meetSession.outcome(peer) == MeetSession.Outcome.VERIFIED_EACH_OTHER) {
             val context = applicationContext
             val now = System.currentTimeMillis()
             worker.execute { runCatching { ContactClaims.store(context).markScannedBothWays(peer, now) } }
         }
     }
+
+    /** Design QL: a verification session stored [peer]'s presence lease, so Contacts can call that phone now. */
+    private fun onLeaseStored(peer: IdentityFingerprint) {
+        meetSession.leaseStored(peer, android.os.SystemClock.elapsedRealtime())
+        showMeetOutcome(peer)
+    }
+
+    /**
+     * Design QL revision 2: "Call now" for 60 s after the lease was stored. It starts an ordinary Contacts call (a new
+     * connection), never on the verification link, whose scope forbids an invite.
+     */
+    private fun bindCallNow(peer: IdentityFingerprint) {
+        val button = findViewById<View>(R.id.verifyCallNowButton) ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        val visible = QlConsent.enabled && meetSession.callNowVisible(peer, now) && MeetBridge.host != null
+        button.visibility = if (visible) View.VISIBLE else View.GONE
+        if (!visible) return
+        button.setOnClickListener {
+            MeetBridge.host?.callContact(peer)
+            finish()
+        }
+        meetHandler.postDelayed({ if (!isDestroyed) bindCallNow(peer) }, MeetSession.CALL_NOW_MS)
+    }
+
+    /** A recognition choice can be stored only in a persistent presence store with rotating IDs on. */
+    private fun presenceVaultUsable(): Boolean =
+        RotatingDiscoveryFeature.enabled && RotatingDiscovery.presenceVault()?.persistent == true
 
     /** An inbound verification session on the code this phone showed completed with [peer]'s real key. */
     private fun onPeerScannedMe(peer: IdentityFingerprint) {
@@ -517,29 +651,78 @@ class VerifyContactActivity : AppCompatActivity() {
     private fun askWhoseScreen(peer: IdentityFingerprint) {
         val name = peerDisplay(peer)
         meetSession.scanReached(peer, name)
+        debugConfirm?.let { yes ->
+            // DEBUG harness: the scripted answer instead of the human's (token-gated in DebugMeetControl).
+            android.util.Log.i("BluetoothVideo", "BENCHMARK meet_debug confirm=$yes peer=${peer.nodePrefixHex}")
+            if (meetSession.confirmScreen(peer, yes = yes) && yes) {
+                markScannedVerified(peer)
+            } else {
+                MeetBridge.host?.scanConfirmed(peer, yes = false)
+            }
+            return
+        }
+        // Design QL revision 2 (ql_consent_ui): the recognition choice is made here, before the first lease can leave.
+        val consent = if (QlConsent.enabled && presenceVaultUsable()) {
+            android.widget.CheckBox(this).apply {
+                text = getString(R.string.ql_consent_checkbox, name)
+                isChecked = true // Q-QL2a: on by default
+            }
+        } else {
+            null
+        }
+        val consentView = consent?.let { box ->
+            android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                val pad = (20 * resources.displayMetrics.density).toInt()
+                setPadding(pad, pad / 2, pad, 0)
+                addView(box)
+                addView(TextView(this@VerifyContactActivity).apply {
+                    setText(R.string.ql_consent_line)
+                    setTextAppearance(R.style.TextAppearance_App_Body)
+                })
+            }
+        }
         MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.meet_confirm_title, name))
             .setMessage(getString(R.string.meet_confirm_message, IdentityHandle.fromPrefixHex(peer.nodePrefixHex)))
+            .apply { consentView?.let(::setView) }
             .setPositiveButton(R.string.meet_confirm_yes) { _, _ ->
-                if (meetSession.confirmScreen(peer, yes = true)) markScannedVerified(peer)
+                if (meetSession.confirmScreen(peer, yes = true)) markScannedVerified(peer, consent?.isChecked)
             }
             .setNegativeButton(R.string.meet_confirm_no) { _, _ ->
                 meetSession.confirmScreen(peer, yes = false)
+                MeetBridge.host?.scanConfirmed(peer, yes = false)
                 findViewById<TextView>(R.id.verifyMeetStatus).setText(R.string.meet_cancelled_scan)
             }
             .setOnCancelListener {
                 meetSession.confirmScreen(peer, yes = false)
+                MeetBridge.host?.scanConfirmed(peer, yes = false)
                 findViewById<TextView>(R.id.verifyMeetStatus).setText(R.string.meet_cancelled_scan)
             }
             .show()
     }
 
-    private fun markScannedVerified(peer: IdentityFingerprint) {
+    private fun markScannedVerified(peer: IdentityFingerprint, recognise: Boolean? = null) {
         val context = applicationContext
         worker.execute {
             val outcome = runCatching {
                 security.markVerified(context, peer.nodeId.toString(), peer.hex, "", viaQr = true, bvmid2Scan = true)
             }.getOrDefault(MarkVerifiedOutcome.UNAVAILABLE)
+            if (outcome == MarkVerifiedOutcome.VERIFIED) QrMeet.visit.confirm(peer)
+            // Design QL revision 2: the recognition answer is written after the shield and before the session may offer;
+            // a declined or failed write withholds the lease (fails closed).
+            val mayOffer = if (outcome == MarkVerifiedOutcome.VERIFIED && recognise != null) {
+                if (!recognise) runOnUiThread { meetSession.declinedRecognition(peer) }
+                val vault = if (RotatingDiscoveryFeature.enabled) RotatingDiscovery.presenceVault() else null
+                QlConsent.applyAnswer(recognise, vault?.persistent == true) { visible ->
+                    vault!!.setVisible(peer.nodeId, visible)
+                    RotatingDiscovery.requestRecognitionRebuild()
+                }
+            } else {
+                true
+            }
+            // Design QL: only a stored shield lets the scanning session offer a presence lease; anything else ends it.
+            MeetBridge.host?.scanConfirmed(peer, yes = outcome == MarkVerifiedOutcome.VERIFIED && mayOffer)
             val saved = if (outcome == MarkVerifiedOutcome.VERIFIED) {
                 security.contacts(context).firstOrNull { it.fingerprintHex.equals(peer.hex, ignoreCase = true) }
             } else {
@@ -603,17 +786,21 @@ class VerifyContactActivity : AppCompatActivity() {
         const val EXTRA_PEER_NODE_ID = "verify_peer_node_id"
         const val EXTRA_PEER_NAME = "verify_peer_name"
         const val EXTRA_IN_CALL = "verify_in_call"
+        const val EXTRA_DEBUG_MEET = "verify_debug_meet"
+        const val EXTRA_SHOW_CODE = "verify_show_code"
 
         fun intent(
             context: Context,
             peerNodeIdHex: String? = null,
             peerName: String? = null,
             inCall: Boolean = false,
+            showCode: Boolean = false,
         ): Intent =
             Intent(context, VerifyContactActivity::class.java).apply {
                 peerNodeIdHex?.let { putExtra(EXTRA_PEER_NODE_ID, it) }
                 peerName?.let { putExtra(EXTRA_PEER_NAME, it) }
                 putExtra(EXTRA_IN_CALL, inCall)
+                if (showCode) putExtra(EXTRA_SHOW_CODE, true)
             }
     }
 }

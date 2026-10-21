@@ -5,7 +5,7 @@ import android.content.Intent
 /**
  * Switches of device-family batch P (PHY and link-layer procedures). Every arm is DEBUG-only (a launch
  * extra from another app must not change a release build) and default OFF: they are Experimental and
- * listed in docs/SWITCHES.md ("Experimental, alternative and optional behaviour"). Behaviour that ships
+ * listed in docs/dev/switches.md ("Experimental, alternative and optional behaviour"). Behaviour that ships
  * ON in this batch (the Android 13 PHY readPhy backstop, the priority-request supervision log, the
  * dual-role probe log) is controlled by its device-policy entry instead: `test_device_policy_off=<id>`.
  *

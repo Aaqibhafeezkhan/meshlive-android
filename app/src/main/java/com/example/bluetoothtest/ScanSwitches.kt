@@ -5,7 +5,7 @@ import android.content.Intent
 /**
  * Switches of batch S (BLE scanning and adapter state). Every arm is DEBUG-only: a launch extra from
  * another app must not change a release build, so each setter keeps the shipped default there. The
- * register of switches is docs/SWITCHES.md ("Experimental, alternative and optional behaviour").
+ * register of switches is docs/dev/switches.md ("Experimental, alternative and optional behaviour").
  *
  * Shipped ON (no switch here, off through `test_device_policy_off=<id>`): the Location-switch
  * diagnostics (`android10-11-location-switch-scan-gate`), the SDK-aware scan restart interval, the

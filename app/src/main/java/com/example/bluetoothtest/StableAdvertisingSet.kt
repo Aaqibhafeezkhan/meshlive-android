@@ -152,6 +152,7 @@ internal class StableAdvertisingSet(
         // The value is fixed for this set's life: the in-place step must pass the same one (a refusal by another set
         // in between must not flip a running set).
         val callback = SetCallback(nonDiscoverable = discoverableOff())
+        callback.lowLatency = lowLatency
         synchronized(this) {
             stopLocked()
             current = callback
@@ -166,7 +167,7 @@ internal class StableAdvertisingSet(
             callback.status = AdvertisingSetCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS
             callback.started.countDown()
         } else {
-            logPayload(callback)
+            logPayload(callback, lowLatency)
             val refused = request(advertiser, callback, lowLatency)
             if (refused != null) {
                 requestThrew = true
@@ -209,7 +210,7 @@ internal class StableAdvertisingSet(
     }
 
     /** DEBUG: the platform-formula sizes against the budget of this SDK (ADV-01), so a phone log shows the margin. */
-    private fun logPayload(callback: SetCallback) {
+    private fun logPayload(callback: SetCallback, lowLatency: Boolean) {
         if (!BuildConfig.DEBUG) return
         val primary = AdvertisingPayloadMeter.measure(data)
         val scan = AdvertisingPayloadMeter.measure(scanResponse)
@@ -220,7 +221,9 @@ internal class StableAdvertisingSet(
             "BluetoothVideo",
             "BENCHMARK adv_payload: label=$label | " +
                 AdvertisingPayload.describe(primary, scan, connectable, discoverable, Build.VERSION.SDK_INT) +
-                " | sdk=${Build.VERSION.SDK_INT} | connectable=$connectable | fits=$fits",
+                " | sdk=${Build.VERSION.SDK_INT} | connectable=$connectable | fits=$fits | " +
+                // F11: the parameters of [parameters]: INTERVAL_LOW 160 or INTERVAL_MEDIUM 400 units of 0.625 ms.
+                if (lowLatency) "mode=low_latency | intervalMs=100 | tx=high" else "mode=balanced | intervalMs=250 | tx=medium",
         )
     }
 
@@ -259,9 +262,55 @@ internal class StableAdvertisingSet(
     @SuppressLint("MissingPermission")
     @Synchronized
     fun switchToBalanced(): Boolean {
+        if (AdvertisingSwitches.inPlaceBoost) return switchMode(lowLatency = false)
         val callback = current ?: return false
         val set = callback.set ?: return false
-        if (callback.stopped || !callback.steps.begin()) return false
+        if (callback.stopped) return false
+        // This phone's stack never confirmed an in-place disable: the set keeps its address and its low latency.
+        if (InPlaceStepHealth.skipBalanced(AdvertisingSwitches.inPlaceKeepSet)) {
+            logChurn("balanced_skipped", callback)
+            return true
+        }
+        if (!callback.steps.begin()) return false
+        handler.postDelayed({ callback.onStepTimeout() }, SWITCH_TIMEOUT_MS)
+        set.enableAdvertising(false, 0, 0)
+        return true
+    }
+
+    /**
+     * Moves the running set to low-latency (true) or balanced (false) parameters in place: disable, set parameters,
+     * enable, so the set and its address stay (default on; control arm `test_adv_inplace_boost=false`).
+     *
+     * 2026-10-20 edge-case suite (m31-a15s-redmi-1): showing the Meet code replaced the A15s's call-listener set with a new
+     * low-latency one (a new random address), and 10 s later the balanced step found that set's one-time step already
+     * used and replaced it again (another address). A caller that had just seen the old address dialled a gone one, and
+     * every handover counted toward "More than one phone is using this ID". Now the boost and its end are in-place steps,
+     * any number of times per set. Already in [lowLatency]: nothing to do (true). A phone whose stack never confirmed an
+     * in-place disable ([InPlaceStepHealth], the ASUS DeadObject case) keeps the set as it is (it stays low latency) and
+     * returns true, as its balanced step already does. False when there is no running set or a step is still running:
+     * the caller replaces the set as before. A step that fails or stalls replaces the set in the target mode.
+     */
+    @SuppressLint("MissingPermission")
+    @Synchronized
+    fun switchMode(lowLatency: Boolean): Boolean {
+        val callback = current
+        val set = callback?.set
+        val decision = ModeSwitch.decide(
+            running = callback != null && set != null && !callback.stopped,
+            currentLowLatency = callback?.lowLatency == true,
+            target = lowLatency,
+            unreliableInPlace = InPlaceStepHealth.skipBalanced(AdvertisingSwitches.inPlaceKeepSet),
+        )
+        when (decision) {
+            ModeSwitch.Decision.NO_SET -> return false
+            ModeSwitch.Decision.ALREADY -> return true
+            ModeSwitch.Decision.KEEP_SET -> {
+                if (callback != null) logChurn(if (lowLatency) "boost_skipped" else "balanced_skipped", callback)
+                return true
+            }
+            ModeSwitch.Decision.STEP -> Unit
+        }
+        if (callback == null || set == null || !callback.steps.begin(lowLatency)) return false
         handler.postDelayed({ callback.onStepTimeout() }, SWITCH_TIMEOUT_MS)
         set.enableAdvertising(false, 0, 0)
         return true
@@ -331,12 +380,26 @@ internal class StableAdvertisingSet(
         )
     }
 
-    /** The old step: a new balanced set (new address). Used only when the in-place step fails. */
+    /**
+     * The stack disabled the set but its confirmation never reached us ([InPlaceStepHealth]): enable the same set again,
+     * so it keeps its address and its parameters (low latency). Unconfirmed, like the disable.
+     */
+    @SuppressLint("MissingPermission")
+    @Synchronized
+    private fun reenableSameSet(callback: SetCallback) {
+        if (current !== callback || callback.stopped) return
+        onStatus("$label advertising: the in-place disable was never confirmed; same set enabled again (same address, low latency)")
+        runCatching { callback.set?.enableAdvertising(true, 0, 0) }
+        logChurn("reenable_same_set", callback)
+    }
+
+    /** The old step: a new set (new address) in the failed step's target mode. Used only when the in-place step fails. */
     @SuppressLint("MissingPermission")
     @Synchronized
     private fun restartBalanced(failed: SetCallback, reason: String) {
         if (current !== failed || failed.stopped) return
-        onStatus("$label advertising: in-place balanced step failed ($reason); restarting the set")
+        val lowLatency = failed.steps.target
+        onStatus("$label advertising: in-place ${modeLabel(lowLatency)} step failed ($reason); restarting the set")
         stopLocked()
         val advertiser = adapter.bluetoothLeAdvertiser
         if (advertiser == null) {
@@ -344,6 +407,7 @@ internal class StableAdvertisingSet(
             return
         }
         val replacement = SetCallback(replacement = true, nonDiscoverable = discoverableOff())
+        replacement.lowLatency = lowLatency
         current = replacement
         // Bounded: no start callback within the timeout counts as a failed replacement.
         handler.postDelayed({ onReplacementResult(replacement, null) }, REPLACEMENT_TIMEOUT_MS)
@@ -353,12 +417,12 @@ internal class StableAdvertisingSet(
             if (current === replacement && !replacement.stopped) {
                 val refused = if (AdvertisingPolicy.nonThrowingStart()) {
                     AdvertisingStart.request(
-                        advertiser, parameters(false, replacement.nonDiscoverable), data, scanResponse, replacement,
+                        advertiser, parameters(lowLatency, replacement.nonDiscoverable), data, scanResponse, replacement,
                         duration = AdvertisingStart.UNLIMITED_DURATION, maxEvents = AdvertisingStart.UNLIMITED_EVENTS,
                     )
                 } else {
                     runCatching {
-                        advertiser.startAdvertisingSet(parameters(false, replacement.nonDiscoverable), data, scanResponse, null, null, replacement)
+                        advertiser.startAdvertisingSet(parameters(lowLatency, replacement.nonDiscoverable), data, scanResponse, null, null, replacement)
                     }.exceptionOrNull()?.let { START_THREW }
                 }
                 if (refused != null) onReplacementResult(replacement, refused)
@@ -385,7 +449,7 @@ internal class StableAdvertisingSet(
         val failure = replacementFailure(status)
         if (failure == null) {
             budget.acquire(replacement, AdvertisingSetRole.STABLE)
-            onStatus("$label advertising restarted in balanced mode (new set)")
+            onStatus("$label advertising restarted in ${modeLabel(replacement.lowLatency)} mode (new set)")
             return
         }
         if (status == AdvertisingSetCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS) {
@@ -495,6 +559,8 @@ internal class StableAdvertisingSet(
         @Volatile var status: Int = -1
         @Volatile var set: AdvertisingSet? = null
         @Volatile var stopped = false
+        /** The mode the set advertises in now: its start mode, then each completed in-place step's target. */
+        @Volatile var lowLatency = false
         /** Replacement only: its outcome was handled (success, failure or timeout). */
         var settled = false
         val steps = BalancedSwitchSteps()
@@ -527,8 +593,12 @@ internal class StableAdvertisingSet(
             if (stopped) return
             val success = status == ADVERTISE_SUCCESS && advertisingSet != null
             val stepBefore = steps.step
-            act(steps.onEnabled(enable, success), advertisingSet, "enable($enable) status $status")
-            if (success && enable) logChurn("balanced_in_place", this)
+            val action = steps.onEnabled(enable, success)
+            act(action, advertisingSet, "enable($enable) status $status")
+            // Only our own step's enable is balanced_in_place; the stack re-arming a legacy connectable set after an
+            // inbound connection (or an address rotation) is stack_enable (2026-10-20: the S24 logged ~42 per minute
+            // while a paired laptop connected about once a second, and they were read as our own churn).
+            if (success && enable) logChurn(BalancedSwitchSteps.churnEvent(action, steps.target), this)
             watch(enable, success, status, stepBefore)
         }
 
@@ -568,16 +638,28 @@ internal class StableAdvertisingSet(
         }
 
         fun onStepTimeout() {
-            if (!stopped) act(steps.onTimeout(), set, "timeout")
+            if (stopped) return
+            val before = steps.step
+            val action = steps.onTimeout()
+            if (action == BalancedSwitchSteps.Action.RESTART &&
+                InPlaceStepHealth.onTimeout(before, AdvertisingSwitches.inPlaceKeepSet) == InPlaceStepHealth.Recovery.REENABLE_SAME_SET
+            ) {
+                reenableSameSet(this)
+                return
+            }
+            act(action, set, "timeout")
         }
 
         @SuppressLint("MissingPermission")
         private fun act(action: BalancedSwitchSteps.Action, advertisingSet: AdvertisingSet?, detail: String) {
             when (action) {
-                BalancedSwitchSteps.Action.SET_PARAMETERS -> advertisingSet?.setAdvertisingParameters(parameters(false, nonDiscoverable))
+                BalancedSwitchSteps.Action.SET_PARAMETERS ->
+                    advertisingSet?.setAdvertisingParameters(parameters(steps.target, nonDiscoverable))
                 BalancedSwitchSteps.Action.ENABLE -> advertisingSet?.enableAdvertising(true, 0, 0)
-                BalancedSwitchSteps.Action.DONE ->
-                    onStatus("$label advertising is balanced (same advertising set and address)")
+                BalancedSwitchSteps.Action.DONE -> {
+                    lowLatency = steps.target
+                    onStatus("$label advertising is ${modeLabel(steps.target)} (same advertising set and address)")
+                }
                 BalancedSwitchSteps.Action.RESTART -> restartBalanced(this, detail)
                 BalancedSwitchSteps.Action.NONE -> Unit
             }
@@ -585,6 +667,8 @@ internal class StableAdvertisingSet(
     }
 
     companion object {
+        fun modeLabel(lowLatency: Boolean): String = if (lowLatency) "low latency" else "balanced"
+
         /** Each step is one HCI command; a missing callback must not leave the phone unadvertised. */
         private const val SWITCH_TIMEOUT_MS = 2_000L
 
@@ -617,6 +701,52 @@ internal class StableAdvertisingSet(
 }
 
 /**
+ * 2026-10-20 (win-userflow asus-winvideo, -r2): on the ASUS (Android 11) every in-place balanced step timed out. The
+ * stack did disable the set (`onAdvertisingSetEnabled() - advertiserId=0, enable=false, status=0`) but threw
+ * DeadObjectException delivering that callback (`An exception was thrown by callback 'enableSetCb'`), although the app
+ * and the set's callback were alive; the app never heard it, waited the 2 s step timeout and replaced the set, so the
+ * address changed 12 s after every low-latency start. A PC that found the advert 8 s in had its connect in flight when
+ * the address went away (services query Unreachable). Now (default on, control arm `test_adv_inplace_keep_set=false`):
+ * a step that times out still waiting for the disable enables the same set again (same address, low-latency
+ * parameters kept) instead of replacing it, and this process skips later balanced steps (they would fail the same way),
+ * trading the balanced step's power saving for a stable address. A timeout in the later steps restarts as before.
+ */
+/** The decision of [StableAdvertisingSet.switchMode], kept free of Android calls for JVM tests. */
+internal object ModeSwitch {
+    enum class Decision { NO_SET, ALREADY, KEEP_SET, STEP }
+
+    fun decide(running: Boolean, currentLowLatency: Boolean, target: Boolean, unreliableInPlace: Boolean): Decision = when {
+        !running -> Decision.NO_SET
+        currentLowLatency == target -> Decision.ALREADY
+        // The ASUS case: an in-place disable is never confirmed, so the set stays as it is (low latency) with its address.
+        unreliableInPlace -> Decision.KEEP_SET
+        else -> Decision.STEP
+    }
+}
+
+internal object InPlaceStepHealth {
+    enum class Recovery { RESTART, REENABLE_SAME_SET }
+
+    @Volatile var unreliable = false
+        private set
+
+    fun onTimeout(stepBefore: BalancedSwitchSteps.Step, enabled: Boolean): Recovery =
+        if (enabled && stepBefore == BalancedSwitchSteps.Step.DISABLING) {
+            unreliable = true
+            Recovery.REENABLE_SAME_SET
+        } else {
+            Recovery.RESTART
+        }
+
+    fun skipBalanced(enabled: Boolean): Boolean = enabled && unreliable
+
+    /** Tests only. */
+    internal fun reset() {
+        unreliable = false
+    }
+}
+
+/**
  * Order of the in-place balanced step: disable -> set parameters -> enable, each confirmed by its
  * callback. Any failure or a step that stalls past the timeout asks for the old restart.
  */
@@ -627,10 +757,27 @@ internal class BalancedSwitchSteps {
     @Volatile var step: Step = Step.IDLE
         private set
 
-    /** Starts the step once per set; false when it already ran or is running. */
+    /** The mode the running (or last) step moves to: true low latency, false balanced. */
+    @Volatile var target: Boolean = false
+        private set
+
+    /** The balanced step, once per set (the control arm of [StableAdvertisingSet.switchMode]). */
     @Synchronized
     fun begin(): Boolean {
         if (step != Step.IDLE) return false
+        target = false
+        step = Step.DISABLING
+        return true
+    }
+
+    /**
+     * A step to [lowLatency], again after an earlier one completed (boost, its end, the balanced step); false while a
+     * step runs or after one failed (the set was replaced).
+     */
+    @Synchronized
+    fun begin(lowLatency: Boolean): Boolean {
+        if (step != Step.IDLE && step != Step.DONE) return false
+        target = lowLatency
         step = Step.DISABLING
         return true
     }
@@ -669,5 +816,16 @@ internal class BalancedSwitchSteps {
     private fun fail(): Action {
         step = Step.FAILED
         return Action.RESTART
+    }
+
+    companion object {
+        /** The adv_set_churn event for a successful enable: ours completes the step, any other is the stack's. */
+        fun churnEvent(action: Action): String = churnEvent(action, target = false)
+
+        fun churnEvent(action: Action, target: Boolean): String = when {
+            action != Action.DONE -> "stack_enable"
+            target -> "boost_in_place"
+            else -> "balanced_in_place"
+        }
     }
 }

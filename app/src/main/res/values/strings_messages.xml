@@ -12,7 +12,7 @@
     <string name="messages_copy_card">Copy my card</string>
     <string name="messages_add_contact">Add contact</string>
     <string name="messages_section_pending">Cards received nearby</string>
-    <string name="messages_pending_row">%1$s\nSafety number %2$s</string>
+    <string name="messages_pending_row">%1$s\nChat safety code %2$s</string>
     <string name="messages_accept">Accept</string>
     <string name="messages_ignore">Ignore</string>
     <string name="messages_none">None</string>
@@ -63,14 +63,14 @@
     <string name="messages_cannot_play">Cannot play: %1$s</string>
 
     <string name="messages_card_copied_title">Your contact card (copied)</string>
-    <string name="messages_card_copied_body">%1$s\n\nGive this text to a contact in person (for example as a QR code) or exchange cards over an encrypted link with Exchange messages. Your node: %2$s\n\nYour safety number: %3$s\nCompare it in person with the number your contact sees for you.</string>
+    <string name="messages_card_copied_body">%1$s\n\nGive this text to a contact in person (for example as a QR code) or exchange cards over an encrypted link with Exchange messages. Your ID: %2$s\n\nYour chat safety code: %3$s\nCompare it in person with the code your contact sees for you.</string>
     <string name="messages_add_title">Add contact from card text</string>
     <string name="messages_card_hint">BCC1:…</string>
     <string name="messages_name_hint">Name</string>
     <string name="messages_add_done">Contact added</string>
     <string name="messages_add_failed">Card not added: %1$s</string>
     <string name="messages_accept_title">Accept %1$s?</string>
-    <string name="messages_accept_body">This card came over an encrypted link from that phone. Accept it only if you know who it is.\n\nSafety number: %1$s\nAsk them to read their safety number from their Messages screen (Copy my card) and check that it matches.</string>
+    <string name="messages_accept_body">This card came over an encrypted link from that phone. Accept it only if you know who it is.\n\nChat safety code: %1$s\nAsk them to read their chat safety code from their Messages screen (Copy my card) and check that it matches.</string>
     <string name="messages_accept_opened">%1$d waiting message(s) opened</string>
     <string name="messages_accept_failed">Not accepted: %1$s</string>
     <string name="messages_key_reset_title">Message key reset</string>

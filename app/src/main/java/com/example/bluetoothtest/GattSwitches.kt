@@ -5,7 +5,7 @@ import android.content.Intent
 /**
  * Switches of batch G (GATT links and capacity). Defaults are the shipped behaviour. Every arm other than the
  * defaults is DEBUG-only (a launch extra from another app must not change a release build's behaviour); the
- * default-on behaviours keep their off arm so an A/B can compare them. Register of switches: docs/SWITCHES.md.
+ * default-on behaviours keep their off arm so an A/B can compare them. Register of switches: docs/dev/switches.md.
  *
  * Launch extras (DEBUG): `test_gatt_busy_wedge=legacy|recover` (default legacy), `test_gatt_close_deferral=true|false`,
  * `test_gatt_pool_backoff=true|false`,

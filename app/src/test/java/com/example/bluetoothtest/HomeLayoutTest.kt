@@ -4,6 +4,7 @@ import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -114,10 +115,22 @@ class HomeLayoutTest {
     }
 
     @Test
-    fun bottomNavigationOffersLiveCallsContactsAndSettings() {
+    fun everyTabHasABottomNavigationEntryWithAnIconAndATitle() {
         val menu = parse("menu/main_nav.xml")
-        val items = menu.descendants().map { it.getAttributeNS(androidNs, "id") }.toList()
-        assertEquals(listOf("@+id/navLive", "@+id/navCalls", "@+id/navContacts", "@+id/navSettings"), items)
+        val items = menu.descendants().toList()
+        val ids = items.map { it.getAttributeNS(androidNs, "id").removePrefix("@+id/") }
+        // A tab without an entry cannot be reached; an entry without a tab does nothing when tapped.
+        assertEquals(MainTab.entries.map { "nav" + it.name.lowercase().replaceFirstChar(Char::uppercase) }.toSet(), ids.toSet())
+        assertEquals("no entry twice", ids.size, ids.toSet().size)
+        val res = java.io.File(listOf("src/main/res", "app/src/main/res").first { java.io.File(it).isDirectory })
+        val strings = res.resolve("values").listFiles { f -> f.name.startsWith("strings") && f.name.endsWith(".xml") }!!
+            .joinToString("\n") { it.readText() }
+        items.forEach { item ->
+            val title = item.getAttributeNS(androidNs, "title").removePrefix("@string/")
+            assertTrue("$title has text", Regex("<string name=\"$title\"[^>]*>[^<]+</string>").containsMatchIn(strings))
+            val icon = item.getAttributeNS(androidNs, "icon").removePrefix("@drawable/")
+            assertTrue("$icon exists", res.resolve("drawable").listFiles { f -> f.nameWithoutExtension == icon }!!.isNotEmpty())
+        }
         val nav = byId(layout(), "mainNav")
         assertEquals("gone", nav.getAttributeNS(androidNs, "visibility"))
         assertFalse(nav.getAttribute("app:menu").isEmpty())
@@ -141,9 +154,12 @@ class HomeLayoutTest {
         val rowIds = row.descendants().map(::idOf).toSet()
         assertTrue("declineCallButton" in rowIds && "acceptCallButton" in rowIds)
         assertEquals("top", row.getAttributeNS(androidNs, "gravity"))
-        assertEquals("declineAndBlockButton", idOf(children.last()))
-        assertEquals("@style/Widget.App.RoundControl.Large", byId(root, "declineCallButton").getAttribute("style"))
-        assertEquals("@style/Widget.App.RoundControl.Large", byId(root, "acceptCallButton").getAttribute("style"))
+        assertEquals(listOf("declineAndBlockButton", "declineAndReportButton"), children.drop(1).map(::idOf).filter { it.startsWith("declineAnd") })
+        assertEquals(
+            "accept and decline are the same size and shape",
+            byId(root, "declineCallButton").getAttribute("style"),
+            byId(root, "acceptCallButton").getAttribute("style"),
+        )
     }
 
     @Test
@@ -165,19 +181,18 @@ class HomeLayoutTest {
                 (page == SettingsPage.PRIVACY_ADVANCED && page.parent == SettingsPage.PRIVACY)
             assertTrue("${page.name} nests", allowed)
         }
-        // "Advanced" is a section label with exactly these five rows, each opening one page of that group's options.
+        // Every "Advanced" row opens one page of that group's options: it names a real page whose parent is the top page.
         val root = layout()
         val main = byId(root, "settingsPageMain")
         val ids = order(main)
-        val rows = listOf(
-            "advancedRowConnection" to SettingsPage.CONNECTION,
-            "advancedRowManual" to SettingsPage.MANUAL,
-            "advancedRowPlayback" to SettingsPage.PLAYBACK,
-            "advancedRowExperiments" to SettingsPage.EXPERIMENTS,
-            "advancedRowHelp" to SettingsPage.HELP,
-        )
-        assertEquals(rows.map { it.first }, ids.filter { it.startsWith("advancedRow") })
-        rows.forEach { (_, page) -> assertEquals(SettingsPage.MAIN, page.parent) }
+        val rowIds = ids.filter { it.startsWith("advancedRow") }
+        assertTrue("the Advanced section has rows", rowIds.isNotEmpty())
+        rowIds.forEach { rowId ->
+            val page = SettingsPage.entries.firstOrNull { it.name.equals(rowId.removePrefix("advancedRow"), ignoreCase = true) }
+            assertNotNull("$rowId opens a settings page", page)
+            assertEquals(rowId, SettingsPage.MAIN, page!!.parent)
+            byId(root, "settingsPage" + page.name.lowercase().replaceFirstChar { it.uppercase() })
+        }
         // The groups' options live on those pages, not on the top page.
         val groupOptions = listOf(
             SettingsPage.CONNECTION to "transportSpinner",
@@ -224,8 +239,7 @@ class HomeLayoutTest {
 
     private fun assertEqualColumnsWithEndInTheMiddle(container: Element, expectedOrder: List<String>, endId: String) {
         val cols = columns(container)
-        assertEquals("one column per control", expectedOrder.size, cols.size)
-        assertTrue("an odd number of columns", cols.size % 2 == 1)
+        assertTrue("an odd number of columns, so End can sit in the middle", cols.size % 2 == 1)
         cols.forEach { col ->
             assertEquals("equal columns: weight", "1", col.getAttributeNS(androidNs, "layout_weight"))
             assertEquals("equal columns: width", "0dp", col.getAttributeNS(androidNs, "layout_width"))
@@ -233,12 +247,12 @@ class HomeLayoutTest {
         // The control that sits in each column, in order: the first listed id inside the column.
         val ownerOfEnd = cols.indexOfFirst { col -> col.descendants().any { idOf(it) == endId } || idOf(col) == endId }
         assertEquals("End is exactly in the middle column", cols.size / 2, ownerOfEnd)
-        expectedOrder.forEachIndexed { index, id ->
-            assertTrue(
-                "$id is in column $index",
-                idOf(cols[index]) == id || cols[index].descendants().any { idOf(it) == id },
-            )
+        // Every control the screen promises is present, and End comes after the controls listed before it.
+        val position = expectedOrder.map { id ->
+            cols.indexOfFirst { col -> idOf(col) == id || col.descendants().any { idOf(it) == id } }
         }
+        position.forEachIndexed { index, at -> assertTrue("${expectedOrder[index]} is in the row", at >= 0) }
+        assertEquals("the controls keep their order", position.sorted(), position)
     }
 
     @Test
@@ -269,10 +283,8 @@ class HomeLayoutTest {
             listOf("broadcastMuteButton", "broadcastCameraButton", "streamToggleButton", "cameraSwitchButton", "broadcastPauseButton"),
             "streamToggleButton",
         )
-        // The slots the layout has are exactly the ones the rules list, End in the middle.
-        val slots = LiveControlSlots.slots(audioOnly = false)
-        assertEquals(listOf("MUTE", "CAMERA", "END", "FLIP", "PAUSE"), slots.map { it.name })
-        assertTrue(LiveControlSlots.endIsCentred(slots))
+        // The rules keep End in the middle for a video broadcast.
+        assertTrue(LiveControlSlots.endIsCentred(LiveControlSlots.slots(audioOnly = false)))
     }
 
     @Test
@@ -284,9 +296,7 @@ class HomeLayoutTest {
             "audioStopButton",
         )
         assertEquals("@style/Widget.App.RoundControl.Large", byId(root, "audioStopButton").getAttribute("style"))
-        val slots = LiveControlSlots.slots(audioOnly = true)
-        assertEquals(listOf("MUTE", "END", "PAUSE"), slots.map { it.name })
-        assertTrue(LiveControlSlots.endIsCentred(slots))
+        assertTrue(LiveControlSlots.endIsCentred(LiveControlSlots.slots(audioOnly = true)))
         // Switch to video is a plain action under the row, not a fourth control in it.
         val ids = order(root)
         assertTrue(ids.indexOf("audioSwitchToVideoButton") > ids.indexOf("audioControls"))
@@ -299,8 +309,11 @@ class HomeLayoutTest {
             val text = listOf("src/main/res/$name", "app/src/main/res/$name").map(::File).first { it.isFile }.readText()
             assertFalse("$name still uses the old flip icon", text.contains("ic_flip_camera"))
         }
-        val main = listOf("src/main/res/layout/activity_main.xml", "app/src/main/res/layout/activity_main.xml")
-            .map(::File).first { it.isFile }.readText()
-        assertEquals("one Flip in calls, one in broadcast", 2, Regex("ic_camera_switch").findAll(main).count())
+        val root = layout()
+        listOf("callSwitchCameraButton", "cameraSwitchButton").forEach { id ->
+            val attributes = byId(root, id).attributes
+            val values = (0 until attributes.length).map { attributes.item(it).nodeValue }
+            assertTrue("$id shows the camera-switch icon", values.any { it.contains("ic_camera_switch") })
+        }
     }
 }

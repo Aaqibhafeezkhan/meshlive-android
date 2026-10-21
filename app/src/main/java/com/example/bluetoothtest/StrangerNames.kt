@@ -240,9 +240,21 @@ internal object GeneratedNameRows {
  * addresses carry the same RDI at the same route cost and both were heard within [SIMULTANEOUS_MS] of each other, on more
  * than one occasion. One ID on a second address inside an epoch (the stack's own address timer) and a relay's mirror of a
  * child's ID at route cost + 1 are NOT copies. It disables nothing; the screen asks for a second tap.
+ *
+ * Overlap rule (default on; DEBUG control arm `test_copied_id_overlap=false`). Two addresses count only when their
+ * sightings interleave: the other address was heard again after this one first appeared. 2026-10-20 edge-case suite
+ * (m31-a15s-redmi-1, steps 3 to 6): the A15s replaced its call-listener advertising set (a new random address each
+ * time) when it showed its Meet code (boost to low latency) and again when the boost ended, the old set stopping 31 ms
+ * before the new one started. The M31 heard the old address last moments before the new one first, which the
+ * 2-second rule counted as a coincidence, twice, so "More than one phone is using this ID" showed on every call. A
+ * handover never interleaves; two senders on the air at once do (a copy, or the PC's legacy and extended twin).
  */
-internal class CopiedIdTracker(private val simultaneousMs: Long = SIMULTANEOUS_MS) {
-    private class Seen(val address: String, var lastMs: Long)
+internal class CopiedIdTracker(
+    private val simultaneousMs: Long = SIMULTANEOUS_MS,
+    private val requireOverlap: () -> Boolean = { CopiedIdOverlapRule.enabled },
+    private val pcPairExempt: () -> Boolean = { CopiedIdPcPair.enabled },
+) {
+    private class Seen(val address: String, val firstMs: Long, var lastMs: Long, var form: AdvertTwinForm?)
 
     private val perKey = HashMap<String, MutableList<Seen>>()
     private val touched = HashMap<String, Long>()
@@ -251,18 +263,20 @@ internal class CopiedIdTracker(private val simultaneousMs: Long = SIMULTANEOUS_M
 
     /** Records one advert. Returns true when the warning is now due for [rdiHex]. */
     @Synchronized
-    fun observe(rdiHex: String, address: String, routeCost: Int, nowMs: Long): Boolean {
+    fun observe(rdiHex: String, address: String, routeCost: Int, nowMs: Long, form: AdvertTwinForm? = null): Boolean {
         val key = "$rdiHex/$routeCost"
         touched[key] = nowMs
         if (touched.size > MAX_KEYS) prune(nowMs)
         val list = perKey.getOrPut(key) { mutableListOf() }
-        val own = list.firstOrNull { it.address == address }
-        if (own != null) {
-            own.lastMs = nowMs
-        } else {
-            list += Seen(address, nowMs)
+        val own = list.firstOrNull { it.address == address }?.also { it.lastMs = nowMs; it.form = form }
+            ?: Seen(address, nowMs, nowMs, form).also { list += it }
+        val overlap = requireOverlap()
+        val recent = list.filter { nowMs - it.lastMs <= simultaneousMs }
+        val other = !(pcPairExempt() && pcTwin(recent)) && list.any {
+            it.address != address && nowMs - it.lastMs <= simultaneousMs &&
+                // The other address was heard after this one appeared: both on the air, not one replacing the other.
+                (!overlap || it.lastMs > own.firstMs)
         }
-        val other = list.any { it.address != address && nowMs - it.lastMs <= simultaneousMs }
         if (other) {
             val previous = lastCoincidenceMs[key]
             if (previous == null || nowMs - previous > simultaneousMs) {
@@ -271,6 +285,19 @@ internal class CopiedIdTracker(private val simultaneousMs: Long = SIMULTANEOUS_M
             }
         }
         return (coincidences[key] ?: 0) >= REPEATS
+    }
+
+    /**
+     * Q-PC-COPIED-ID option A (Design CI): a Windows PC sends its compact call offer as one legacy and one extended set
+     * from two addresses. Exactly two recent addresses, one legacy and one extended, with byte-identical compared ADs
+     * (Flags and the UUID lists, which carry 0x180A) are one sender. A third address or any difference still counts.
+     */
+    private fun pcTwin(recent: List<Seen>): Boolean {
+        if (recent.size != 2) return false
+        val (a, b) = recent
+        val fa = a.form ?: return false
+        val fb = b.form ?: return false
+        return fa.legacy != fb.legacy && (if (fa.legacy) fb else fa).extendedSecondaryPhy && fa.compared == fb.compared
     }
 
     /** True when the warning is currently due for [rdiHex] at any route cost. */
@@ -304,6 +331,62 @@ internal class CopiedIdTracker(private val simultaneousMs: Long = SIMULTANEOUS_M
         const val STALE_MS = 20 * 60_000L
         const val MAX_KEYS = 512
     }
+}
+
+/**
+ * How one compact call-offer advert was received, for [CopiedIdTracker]'s PC exemption: [legacy] is ScanResult.isLegacy,
+ * [extendedSecondaryPhy] an extended advert with a secondary PHY, [compared] the AD bytes both sets must share.
+ */
+data class AdvertTwinForm(val legacy: Boolean, val extendedSecondaryPhy: Boolean, val compared: String)
+
+/** The ADs a PC's legacy and extended twin must carry byte for byte (Design CI rule 2), from the raw advertising bytes. */
+internal object AdvertTwinAds {
+    private val COMPARED_TYPES = setOf(0x01, 0x02, 0x03, 0x06, 0x07)
+
+    /**
+     * Flags, the 16-bit and the 128-bit UUID lists in their order, as hex; null when the 16-bit list lacks 0x180A (the
+     * Windows sets carry it) or the bytes are malformed. Other ADs (the PC's service data) are not compared.
+     */
+    fun compared(bytes: ByteArray?): String? {
+        if (bytes == null) return null
+        val out = StringBuilder()
+        var has180a = false
+        var index = 0
+        while (index < bytes.size) {
+            val length = bytes[index].toInt() and 0xff
+            if (length == 0) break
+            if (index + length > bytes.size - 1) return null
+            val type = bytes[index + 1].toInt() and 0xff
+            if (type in COMPARED_TYPES) {
+                for (i in index..index + length) out.append("%02x".format(bytes[i].toInt() and 0xff))
+                if (type == 0x02 || type == 0x03) {
+                    var u = index + 2
+                    while (u + 1 <= index + length) {
+                        if ((bytes[u].toInt() and 0xff) == 0x0a && (bytes[u + 1].toInt() and 0xff) == 0x18) has180a = true
+                        u += 2
+                    }
+                }
+            }
+            index += length + 1
+        }
+        return out.toString().takeIf { has180a }
+    }
+}
+
+/** Q-PC-COPIED-ID option A, default on; DEBUG `test_copied_id_pc_pair=false` restores the warning for a PC's twin sets. */
+internal object CopiedIdPcPair {
+    @Volatile var enabled: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+}
+
+/** [CopiedIdTracker]'s overlap rule: default on; a DEBUG launch can restore the 2-second rule (`test_copied_id_overlap=false`). */
+internal object CopiedIdOverlapRule {
+    @Volatile var enabled: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
 }
 
 /** The rotating discovery ID of a version 5 / compact v2 advert (its six prefix bytes), or null for a fixed-prefix advert. */

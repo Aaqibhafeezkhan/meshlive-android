@@ -596,9 +596,10 @@ object AudioLiveShed {
 /**
  * Penalties for an audio-only marker that disagrees with the header (Design AL review 17). Offers are
  * unauthenticated, so a mismatch is only evidence about the route that was attempted. A penalty keys on the
- * advertising route (address, prefix, route token), expires, and the table is bounded. A mismatch seen on an
- * authenticated link also penalises that authenticated node ID, for a longer time. The logical stream
- * (prefix or token alone) is never penalised.
+ * advertising route (address, prefix, route token), expires, and the table is bounded. The app records the route
+ * only (it passes no node, Design QV review 1, R1): the false marker is in the unauthenticated advert, so a node
+ * penalty would let a copier or forwarder get an honest source refused. The node arm stays for a later decision.
+ * The logical stream (prefix or token alone) is never penalised.
  */
 class StreamRoutePenalties(
     private val routeTtlMs: Long = ROUTE_TTL_MS,

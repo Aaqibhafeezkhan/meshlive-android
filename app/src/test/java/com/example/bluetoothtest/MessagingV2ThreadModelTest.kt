@@ -32,6 +32,9 @@ internal object XmlThreadText : ThreadText {
 /** Phase 1c: row text, ticks, banners, the composer, file cards and the message list (DECISIONS Design M, UX; Q-M1, Q-M3, Q-M12). */
 class MessagingV2ThreadModelTest {
     private val text = XmlThreadText
+
+    /** The app's string for [key]: the tests pin which message a state shows, not the English wording. */
+    private fun said(key: String, vararg args: Any): String = text.get(key, *args)
     private val zone = ZoneId.of("UTC")
     private val day = 86_400_000L
     private val now = (1_790_000_000_000L / 86_400_000L) * 86_400_000L + 12 * 3_600_000L // 12:00 UTC
@@ -90,21 +93,21 @@ class MessagingV2ThreadModelTest {
 
     @Test
     fun aContactWithoutMessagesShowsNearbyNowOrNothing() {
-        assertEquals("Nearby now", ConversationRows.row(ContactRef(peerHex, "Asha"), summary(), true, text, time).subtitle)
+        assertEquals(said("mv2_ui_nearby_now"), ConversationRows.row(ContactRef(peerHex, "Asha"), summary(), true, text, time).subtitle)
         assertEquals("", ConversationRows.row(ContactRef(peerHex, "Asha"), summary(), false, text, time).subtitle)
-        assertEquals("a contact with no accepted mailbox card yet still has a row", "Nearby now",
+        assertEquals("a contact with no accepted mailbox card yet still has a row", said("mv2_ui_nearby_now"),
             ConversationRows.row(ContactRef(peerHex, "Asha"), null, true, text, time).subtitle)
     }
 
     @Test
     fun anAttachmentPreviewNamesTheKindNotTheFile() {
         fun sub(p: Presentation) = ConversationRows.row(ContactRef(peerHex, "Asha"), summary("", now - 1000, presentation = p), false, text, time).subtitle
-        assertEquals("Photo", sub(Presentation.PICTURE))
-        assertEquals("Video", sub(Presentation.VIDEO))
-        assertEquals("Voice note", sub(Presentation.VOICE))
-        assertEquals("File", sub(Presentation.FILE))
+        assertEquals(said("mv2_ui_preview_photo"), sub(Presentation.PICTURE))
+        assertEquals(said("mv2_ui_preview_video"), sub(Presentation.VIDEO))
+        assertEquals(said("mv2_ui_preview_voice"), sub(Presentation.VOICE))
+        assertEquals(said("mv2_ui_preview_file"), sub(Presentation.FILE))
         // Previews turned off (or an empty text) never leak the words.
-        assertEquals("Message", ConversationRows.row(ContactRef(peerHex, "Asha"), summary("", now - 1000), false, text, time).subtitle)
+        assertEquals(said("mv2_ui_preview_message"), ConversationRows.row(ContactRef(peerHex, "Asha"), summary("", now - 1000), false, text, time).subtitle)
     }
 
     @Test
@@ -117,7 +120,7 @@ class MessagingV2ThreadModelTest {
     fun theRowsOwnGlyphFollowsTheNewestOwnMessageAndNeverShowsOnAnIncomingOne() {
         val own = ConversationRows.row(ContactRef(peerHex, "Asha"), summary("hi", now - 1000, own = OwnMessageState.DELIVERED), false, text, time)
         assertEquals(DeliveryGlyph.CHECK, own.glyph?.glyph)
-        assertEquals("Delivered", own.glyph?.word)
+        assertEquals(said("mv2_ui_state_delivered"), own.glyph?.word)
         val incoming = ConversationRows.row(ContactRef(peerHex, "Asha"), summary("hi", now - 1000), false, text, time)
         assertNull(incoming.glyph)
     }
@@ -125,13 +128,13 @@ class MessagingV2ThreadModelTest {
     @Test
     fun aKeyChangeIsTheRowsSubtitleSoItIsNotMissed() {
         val row = ConversationRows.row(ContactRef(peerHex, "Asha"), summary("hi", now - 1000, link = ConversationLinkState.KEYS_CHANGED), false, text, time)
-        assertEquals("Keys changed. Compare again.", row.subtitle)
+        assertEquals(said("mv2_ui_row_keys_changed"), row.subtitle)
     }
 
     @Test
     fun rowTimesAreTheClockTodayYesterdayThenTheDate() {
         assertEquals("11:00", time.rowTime(now - 3_600_000, text))
-        assertEquals("Yesterday", time.rowTime(now - day, text))
+        assertEquals(said("mv2_ui_yesterday"), time.rowTime(now - day, text))
         assertTrue(time.rowTime(now - 5 * day, text).startsWith("d"))
         assertEquals("", time.rowTime(0, text))
     }
@@ -187,7 +190,7 @@ class MessagingV2ThreadModelTest {
         val failed = ThreadItems.bubble(ConversationEntry.V2(message(notSent = true)), "Asha", false, text, time) { CardInputs(null) }
         assertEquals(OwnMessageState.NOT_SENT, failed.state?.state)
         assertTrue(failed.canRetry)
-        assertEquals("Not sent. Tap Retry to send it again.", failed.stateCaption)
+        assertEquals(said("mv2_ui_caption_not_sent"), failed.stateCaption)
         val sending = ThreadItems.bubble(ConversationEntry.V2(message()), "Asha", true, text, time) { CardInputs(null) }
         assertEquals(OwnMessageState.SENDING, sending.state?.state)
     }
@@ -196,9 +199,9 @@ class MessagingV2ThreadModelTest {
     fun tappingAGlyphGivesAFullSentenceWithTheName() {
         val read = message(delivered = now - 5 * 60_000, read = now - 3_600_000)
         val bubble = ThreadItems.bubble(ConversationEntry.V2(read), "Asha", false, text, time) { CardInputs(null) }
-        assertEquals("Read by Asha, 11:00", bubble.stateCaption)
+        assertEquals(said("mv2_ui_caption_read", "Asha", "11:00"), bubble.stateCaption)
         val waiting = ThreadItems.bubble(ConversationEntry.V2(message()), "Asha", false, text, time) { CardInputs(null) }
-        assertEquals("Waiting for Asha to be nearby", waiting.stateCaption)
+        assertEquals(said("mv2_ui_caption_waiting", "Asha"), waiting.stateCaption)
     }
 
     @Test
@@ -238,8 +241,8 @@ class MessagingV2ThreadModelTest {
             banner(ConversationLinkState.KEYS_CHANGED)?.actions,
         )
         assertEquals(emptyList<BannerAction>(), banner(ConversationLinkState.PEER_APP_OLDER)?.actions)
-        assertEquals("Asha's keys changed. Nothing is sent until you compare again.", banner(ConversationLinkState.KEYS_CHANGED)?.text)
-        assertEquals("Asha's app is older. They need to update to receive.", banner(ConversationLinkState.PEER_APP_OLDER)?.text)
+        assertEquals(said("mv2_ui_banner_keys_changed", "Asha"), banner(ConversationLinkState.KEYS_CHANGED)?.text)
+        assertEquals(said("mv2_ui_banner_peer_older", "Asha"), banner(ConversationLinkState.PEER_APP_OLDER)?.text)
     }
 
     @Test
@@ -247,14 +250,14 @@ class MessagingV2ThreadModelTest {
         val model = ThreadBanners.compose(ConversationLinkState.KEYS_CHANGED, "Asha", text, bannerDismissed = true)
         assertNull(model.banner)
         assertFalse(model.enabled)
-        assertEquals("Compare keys to send messages", model.hint)
+        assertEquals(said("mv2_ui_composer_off_keys_changed"), model.hint)
     }
 
     @Test
     fun theTopBarLineIsNearbyOrNotNearbyAndNeverAnId() {
-        assertEquals("Nearby", ThreadBanners.stateLine(ConversationLinkState.READY, true, text))
-        assertEquals("Not nearby", ThreadBanners.stateLine(ConversationLinkState.READY, false, text))
-        assertEquals("Not verified yet", ThreadBanners.stateLine(ConversationLinkState.CARD_PENDING, true, text))
+        assertEquals(said("mv2_ui_state_nearby"), ThreadBanners.stateLine(ConversationLinkState.READY, true, text))
+        assertEquals(said("mv2_ui_state_not_nearby"), ThreadBanners.stateLine(ConversationLinkState.READY, false, text))
+        assertEquals(said("mv2_ui_state_not_verified"), ThreadBanners.stateLine(ConversationLinkState.CARD_PENDING, true, text))
     }
 
     // ---- file cards ---------------------------------------------------------------------------------------------------------
@@ -272,7 +275,7 @@ class MessagingV2ThreadModelTest {
     fun aFileWaitingForApprovalOffersDownloadWithItsSize() {
         val model = card(message(MessageDirection.IN, attachment = file(state = FileState.AWAITING_APPROVAL)), CardInputs(null))
         assertEquals(listOf(CardAction.DOWNLOAD), model.actions)
-        assertEquals("Download 24 MB", model.downloadLabel)
+        assertEquals(said("mv2_ui_file_download", "24 MB"), model.downloadLabel)
         assertEquals("plan.pdf", model.name)
         assertEquals("24 MB", model.sizeText)
     }
@@ -282,10 +285,10 @@ class MessagingV2ThreadModelTest {
         val incoming = message(MessageDirection.IN, attachment = file(state = FileState.DOWNLOADING))
         val running = card(incoming, CardInputs(null, 0.4f, peerNearby = true))
         assertEquals(listOf(CardAction.CANCEL), running.actions)
-        assertEquals("Downloading 40%", running.status)
+        assertEquals(said("mv2_ui_file_downloading", 40), running.status)
         assertEquals(0.4f, running.progress)
         val away = card(incoming, CardInputs(null, 0.4f, peerNearby = false))
-        assertEquals("Waiting for Asha to be nearby", away.status)
+        assertEquals(said("mv2_ui_file_waiting_for", "Asha"), away.status)
     }
 
     @Test
@@ -319,8 +322,8 @@ class MessagingV2ThreadModelTest {
 
     @Test
     fun damagedAndUnavailableFilesSayWhy() {
-        assertEquals("Damaged. Ask Asha to send it again.", card(message(MessageDirection.IN, attachment = file(state = FileState.DAMAGED)), CardInputs(null)).status)
-        assertEquals("No longer available", card(message(MessageDirection.IN, attachment = file(state = FileState.UNAVAILABLE)), CardInputs(null)).status)
+        assertEquals(said("mv2_ui_file_damaged", "Asha"), card(message(MessageDirection.IN, attachment = file(state = FileState.DAMAGED)), CardInputs(null)).status)
+        assertEquals(said("mv2_ui_file_unavailable"), card(message(MessageDirection.IN, attachment = file(state = FileState.UNAVAILABLE)), CardInputs(null)).status)
     }
 
     @Test
@@ -359,7 +362,7 @@ class MessagingV2ThreadModelTest {
             listOf("Day", "Bubble", "Bubble", "Day", "UnreadMarker", "Bubble", "Bubble"),
             items.map { it::class.simpleName },
         )
-        assertEquals("Today", (items[3] as ThreadItem.Day).label)
+        assertEquals(said("mv2_ui_today"), (items[3] as ThreadItem.Day).label)
         assertEquals(2, (items[4] as ThreadItem.UnreadMarker).count)
         assertTrue("keys are unique", items.map { it.key }.toSet().size == items.size)
     }
@@ -387,7 +390,7 @@ class MessagingV2ThreadModelTest {
         assertNull(bubble.messageId)
         assertNull(bubble.state)
         assertNull(bubble.card)
-        assertEquals("Older message: photo, 30 KB", bubble.text)
+        assertEquals(said("mv2_ui_legacy_kind", "photo", "30 KB"), bubble.text)
         val v1Text = ArchivedSummary("bb".repeat(16), MessageDirection.OUT, peerHex, now, now, MessageKind.TEXT, "text/plain", 5, 0, "hello")
         assertEquals("hello", ThreadItems.bubble(ConversationEntry.Legacy(v1Text), "Asha", false, text, time) { CardInputs(null) }.text)
     }
@@ -397,11 +400,11 @@ class MessagingV2ThreadModelTest {
         val m = message(MessageDirection.IN)
         assertNull(ThreadItems.disappearsText(m, now, text))
         m.disappearAtMs = now + 30 * 60_000
-        assertEquals("Disappears in 30 min", ThreadItems.disappearsText(m, now, text))
+        assertEquals(said("mv2_ui_disappears_minutes", 30), ThreadItems.disappearsText(m, now, text))
         m.disappearAtMs = now + 5 * 3_600_000
-        assertEquals("Disappears in 5 h", ThreadItems.disappearsText(m, now, text))
+        assertEquals(said("mv2_ui_disappears_hours", 5), ThreadItems.disappearsText(m, now, text))
         m.disappearAtMs = now + 5 * day
-        assertEquals("Disappears in 5 days", ThreadItems.disappearsText(m, now, text))
+        assertEquals(said("mv2_ui_disappears_days", 5), ThreadItems.disappearsText(m, now, text))
     }
 
     // ---- choices -----------------------------------------------------------------------------------------------------------

@@ -29,7 +29,15 @@
             layout="@layout/item_status_row" />
 
         <include
+            android:id="@+id/statusRowPermissions"
+            layout="@layout/item_status_row" />
+
+        <include
             android:id="@+id/statusRowCalls"
+            layout="@layout/item_status_row" />
+
+        <include
+            android:id="@+id/statusRowIds"
             layout="@layout/item_status_row" />
 
         <include
@@ -39,6 +47,22 @@
         <include
             android:id="@+id/statusRowBattery"
             layout="@layout/item_status_row" />
+
+        <TextView
+            android:id="@+id/statusNotificationsWarning"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/status_notifications_off"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/statusFullScreenWarning"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:gravity="center_vertical"
+            android:text="@string/status_full_screen_off"
+            android:visibility="gone" />
 
         <!-- "Nearby you appear as <generated name>": filled by the naming work once its API exists; hidden until then. -->
         <include

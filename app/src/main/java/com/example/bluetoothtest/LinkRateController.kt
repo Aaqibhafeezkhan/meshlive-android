@@ -49,6 +49,11 @@ data class LinkRateSample(
      * input; the app queue is [backlogAgeMs]). -1 = unknown.
      */
     val peerQueueMs: Int = -1,
+    /**
+     * F16 (calls): the largest playout lateness of the video this phone RECEIVED from the same peer in this window, or
+     * null when none arrived. It describes the other direction of the shared link ([CallLinkShare]).
+     */
+    val reverseLateMaxMs: Long? = null,
 )
 
 /**

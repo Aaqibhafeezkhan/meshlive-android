@@ -36,6 +36,17 @@
     </LinearLayout>
 
     <ImageButton
+        android:id="@+id/contactRowMessageButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/contact_message"
+        android:padding="12dp"
+        android:src="@drawable/ic_chat"
+        android:visibility="gone"
+        app:tint="@color/text_primary" />
+
+    <ImageButton
         android:id="@+id/contactRowVideoButton"
         android:layout_width="48dp"
         android:layout_height="48dp"

@@ -1,7 +1,7 @@
 IzzyOnDroid notes (https://gitlab.com/IzzyOnDroid/repo, "inclusion request" issue template)
 
 IzzyOnDroid does not build the app: it downloads the developer-signed APKs from the GitHub release and
-serves them unchanged, so the signing key (certificate SHA-256 in docs/USER_GUIDE.md "Verifying a release") stays ours.
+serves them unchanged, so the signing key (certificate SHA-256 in docs/user-guide.md "Verifying a release") stays ours.
 
 Checklist
 - Public GitHub repository with the GPL-3.0-or-later LICENSE (done in the tree) and a tagged release v<versionName>.

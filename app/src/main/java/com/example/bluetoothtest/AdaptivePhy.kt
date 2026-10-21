@@ -580,7 +580,9 @@ internal object AdaptivePhyMemory {
 
     /**
      * PHY to request for a new link to the direct peer advertising [nodePrefix] on [transport]:
-     * 1M while that peer is remembered bad on 2M, otherwise [default].
+     * 1M while that peer is remembered bad on 2M, otherwise [default]. [memoryNode] is the direct peer's memory key
+     * ([offerMemoryNode]: the advertised prefix, or a recognised rotating offer's contact node); null means none (an
+     * unrecognised rotating offer), so the memories are not consulted.
      */
     fun phyFor(
         transport: BluetoothTransportOption,
@@ -588,8 +590,11 @@ internal object AdaptivePhyMemory {
         default: BlePhyPreference,
         link: String,
         relayedOffer: Boolean = false,
+        memoryNode: String? = prefixLabel(nodePrefix),
     ): BlePhyPreference {
-        val node = prefixLabel(nodePrefix)
+        val advertised = prefixLabel(nodePrefix)
+        val node = if (relayedOffer) advertised else memoryNode ?: return default
+        val keySource = if (node == advertised) "prefix" else "contact"
         // A relayed offer is advertised by the hop relay with the far callee's prefix, so the hop's own
         // node is unknown before connecting; its entry is kept under that advertised prefix instead.
         val bad = if (relayedOffer) isBadVia(transport, node) else isBad(transport, node)
@@ -611,7 +616,7 @@ internal object AdaptivePhyMemory {
         Log.i(
             "BluetoothVideo",
             "BENCHMARK adaptive_phy: link=$link | node=$node | from=2M to=1M | reason=remembered | " +
-                "at=connect | via=$relayedOffer",
+                "at=connect | via=$relayedOffer | key=$keySource",
         )
         return BlePhyPreference.ONE_M_ADAPTIVE
     }
@@ -619,10 +624,28 @@ internal object AdaptivePhyMemory {
     internal fun prefixLabel(nodePrefix: ByteArray): String = nodePrefix.joinToString("") { "%02x".format(it) }
 
     /**
+     * The bad-2M memory key of a direct offer advertising [nodePrefix]. A stable advertisement keys by its prefix. A rotating
+     * (pseudonym) offer changes with its epoch, so with [contactKey] (DebugTunables.phyMemoryContactKey) it keys by the node
+     * label of the one contact it is recognised as ([recognisedContact], local presence-lease recognition: the same 12-hex
+     * label the 1M retry records from the authenticated hop node), and has no key when unrecognised. Without [contactKey]
+     * (control arm) the pseudonym itself, which can never match a recorded entry. The memory stays in local preferences.
+     */
+    internal fun offerMemoryNode(
+        rotating: Boolean,
+        nodePrefix: ByteArray,
+        contactKey: Boolean,
+        recognisedContact: () -> String?,
+    ): String? = when {
+        !rotating || !contactKey -> prefixLabel(nodePrefix)
+        else -> runCatching(recognisedContact).getOrNull()?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
      * The memory key (the advertised node prefix label, as [phyFor] looks it up) to record when a first 2M call setup stalled, or
      * null. Only a stalled setup (hop authentication unfinished after the guard), a direct offer (a relayed offer's hop is the
      * relay, which [skipsRelayingHop] keeps out of the memory) and a stable advertised prefix (a rotating pseudonym changes with
-     * its epoch, so an entry under it could never be found again).
+     * its epoch, so an entry under it could never be found again). A rotating offer recognised as one contact is remembered
+     * under [contactNode] instead ([offerMemoryNode]; null when unrecognised or the contact key is off).
      */
     internal fun advertisedPeerToRemember(
         enabled: Boolean,
@@ -630,7 +653,13 @@ internal object AdaptivePhyMemory {
         direct: Boolean,
         rotating: Boolean,
         nodePrefix: ByteArray,
-    ): String? = if (enabled && stalled && direct && !rotating && nodePrefix.isNotEmpty()) prefixLabel(nodePrefix) else null
+        contactNode: String? = null,
+    ): String? = when {
+        !enabled || !stalled || !direct -> null
+        rotating -> contactNode?.takeIf { it.isNotEmpty() }
+        nodePrefix.isNotEmpty() -> prefixLabel(nodePrefix)
+        else -> null
+    }
 
     internal fun viaKey(transport: BluetoothTransportOption, advertisedPrefix: String) =
         "bad2m${FORMAT}via.${transport.name}.$advertisedPrefix"

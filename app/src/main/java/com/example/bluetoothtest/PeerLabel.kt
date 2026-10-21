@@ -117,7 +117,44 @@ internal object SessionPeerLabels {
         entries.remove(prefixHex.lowercase())
     }
 
+    /**
+     * BMH3 reveal: what a throwaway [fromPrefixHex] said in this call now belongs to the revealed identity [toPrefixHex], the
+     * key the call screen and "Save contact as" read. A value already held for [toPrefixHex] wins.
+     */
+    fun move(fromPrefixHex: String, toPrefixHex: String) {
+        val from = fromPrefixHex.lowercase()
+        val to = toPrefixHex.lowercase()
+        if (from == to) return
+        val moved = entries.remove(from) ?: return
+        entries.compute(to) { _, old ->
+            if (old == null) {
+                moved
+            } else {
+                Entry(old.selfName ?: moved.selfName, old.callSubject ?: moved.callSubject, old.streamTitle ?: moved.streamTitle)
+            }
+        }
+    }
+
     fun clearAll() = entries.clear()
+}
+
+/**
+ * The Go live title dialog ("Stream title (optional)"). Save goes live with the typed title, Skip goes live without one, and
+ * Back or a tap outside does not go live. What the user typed prefills the next dialog, so a cancelled dialog loses nothing.
+ */
+internal object StreamTitleChoice {
+    enum class Action { SAVE, SKIP, CANCEL }
+
+    fun goesLive(action: Action): Boolean = action != Action.CANCEL
+
+    /** The title the new stream carries: the saved one, or none after Skip. */
+    fun streamTitle(action: Action, saved: String?): String? = if (action == Action.SAVE) saved else null
+
+    /** The next dialog's prefill: the saved title after Save; what was typed (blank: nothing) after Skip or Back. */
+    fun draftAfter(action: Action, typed: String, saved: String?): String? = when (action) {
+        Action.SAVE -> saved
+        Action.SKIP, Action.CANCEL -> typed.trim().ifEmpty { null }
+    }
 }
 
 /** DESIGN.md 3.1: `prefix48 << 2` as 10 Crockford Base32 symbols, `SSSSS-SSSSS`. */

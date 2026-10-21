@@ -21,6 +21,18 @@ from device_log_capture import LogCapture, merge_dump
 
 PACKAGE = os.environ.get("MESHLIVE_APP_ID", "io.github.meshlive.app")
 COMPONENT = f"{PACKAGE}/com.example.bluetoothtest.MainActivity"
+# DEBUG clean shutdown (app CleanShutdown.ACTION): a broadcast reaches only a running app.
+CLEAN_SHUTDOWN_ACTION = "com.example.bluetoothtest.debug.CLEAN_SHUTDOWN"
+
+
+def clean_shutdown_broadcast_args(nonce):
+    """adb arguments of the clean-shutdown broadcast (drivers: adb -s SERIAL <these>)."""
+    return ("shell", "am", "broadcast", "-a", CLEAN_SHUTDOWN_ACTION, "-p", PACKAGE, "--es", "nonce", nonce)
+
+
+def clean_shutdown_done(logcat_text, nonce):
+    """True when the app logged its clean-shutdown done line for this nonce."""
+    return f"clean_shutdown: done | nonce={nonce} |" in (logcat_text or "")
 
 
 # adb.exe failing before it runs (Windows loader failure under load, 0xC0000142 STATUS_DLL_INIT_FAILED) and a
@@ -334,6 +346,28 @@ TUNABLES = {
     # Call resolution ladder (2026-10-10): app default on for user calls, off for every benchmark
     # launch unless true, so cases keep their exact requested geometry.
     "call_resolution_ladder": ("test_call_resolution_ladder", bool),
+    # F16 experiments (off, 2026-10-20): reverse-direction link sharing and camera-rate follow for Automatic calls.
+    "call_link_share": ("test_call_link_share", bool),
+    "call_fps_follow": ("test_call_fps_follow", bool),
+    "viewer_admission_bounds": ("test_viewer_admission_bounds", bool),
+    "source_media_prewarm": ("test_source_media_prewarm", bool),
+    "drop_leading_blank_frames": ("test_drop_leading_blank_frames", bool),
+    # DEBUG only: blank the first N camera images before the leading-blank gate (0..60), to exercise it on any phone.
+    "inject_blank_frames": ("test_inject_blank_frames", int),
+    # Default on: a GATT chunk gap held 1 s or behind 128 chunks ends the stream with its reason; false is the control arm.
+    "gatt_gap_fast_fail": ("test_gatt_gap_fast_fail", bool),
+    # Experimental, default off: GR1 lost-chunk recovery on GATT links (Design GR option C).
+    "gatt_chunk_recovery": ("test_gatt_chunk_recovery", bool),
+    # DEBUG only: drop the first copy of every received GATT data chunk with sequence N-1 mod N (0 = off).
+    "gatt_drop_received_every": ("test_gatt_drop_received_every", int),
+    # Default on: a user dial follows its person across a rotating-ID epoch (same contact or same address); false = exact key only.
+    "dial_follows_rotation": ("test_dial_follows_rotation", bool),
+    # Default on: the Nearby list says "Bluetooth needs a restart" while its scanner cannot register; false is the control arm.
+    "scan_restart_hint": ("test_scan_restart_hint", bool),
+    # Default on: a copied ID needs two addresses whose sightings interleave (a handover is not a copy); false is the control arm.
+    "copied_id_overlap": ("test_copied_id_overlap", bool),
+    # Default on: write a scrubbed crash report and offer it at the next plain launch; false turns writing off for the run.
+    "crash_reports": ("test_crash_reports", bool),
     # Default-on fixes kept switchable for A/B: pacer seeded at join, early fan-out release at the rate floor.
     "link_pacer_seed": ("test_link_pacer_seed", bool),
     "fanout_early_release": ("test_fanout_early_release", bool),
@@ -360,17 +394,24 @@ TUNABLES = {
     "adaptive_phy": ("test_adaptive_phy", bool),
     "adaptive_phy_memory": ("test_adaptive_phy_memory", bool),
     # Experimental (default off): where the adaptive PHY would move a GATT link 2M -> 1M, move only the peripheral -> central
-    # direction to 1M first (setPreferredPhy tx2M/rx1M); the _dir tunable picks the mirror tx1m-rx2m (docs/SWITCHES.md).
+    # direction to 1M first (setPreferredPhy tx2M/rx1M); the _dir tunable picks the mirror tx1m-rx2m (docs/dev/switches.md).
     "adaptive_phy_split": ("test_adaptive_phy_split", bool),
     "adaptive_phy_split_dir": ("test_adaptive_phy_split_dir", str),
     # Default-on (2026-10-10) call 2M setup-stall guard: a first 2M call link without hop authentication
     # 3 s after it opened is closed and the 1M retry rescans a direct callee; false = control arm.
     "phy_setup_stall": ("test_phy_setup_stall", bool),
+    # Default-on (2026-10-21) fixes of the 1M retry after a call 2M setup stall, false = control arm each: wait for the
+    # stalled link's ACL to drop before dialing; redial fast 0x3E failures (4 dials, 1.5 s apart, inside the 15 s window);
+    # key the bad-2M memory of a rotating offer by its recognised contact's node.
+    "setup_retry_acl_wait": ("test_setup_retry_acl_wait", bool),
+    "stall_retry_dials": ("test_stall_retry_dials", bool),
+    "phy_memory_contact_key": ("test_phy_memory_contact_key", bool),
     # Default-on (2026-10-13) message-exchange dial 2M protections (stall guard, 1M retry, bad-2M memory); false = control arm.
     "message_adaptive_phy": ("test_message_adaptive_phy", bool),
     # Default-on (2026-10-13) progress-aware total limit of a plain Messaging v2 exchange; false = the fixed 120 s.
     "mv2_progress_total": ("test_mv2_progress_total", bool),
     "relay_phy_guard": ("test_relay_phy_guard", bool),
+    "ql_consent_ui": ("test_ql_consent_ui", bool),
     "relay_one_pdu_move": ("test_relay_one_pdu_move", bool),
     "relay_reanchor": ("test_relay_reanchor", bool),
     "coc_single_pdu_sdus": ("test_coc_single_pdu_sdus", bool),
@@ -419,6 +460,10 @@ TUNABLES = {
     # Experimental call arm D (app default off, needs call_video_fragments): size each fragment by link
     # airtime, rate x this many ms (0 = off = fixed 2 KB). The A/B arm uses 40.
     "call_fragment_airtime_ms": ("test_call_fragment_airtime_ms", int),
+    # Experimental in-call link renewal (Design SR, app default off, both endpoints) and its DEBUG stall hook: this
+    # phone stops sending on the call's first link N s after ACTIVE (give it to ONE endpoint, via phone_tunables).
+    "call_link_renewal": ("test_call_link_renewal", bool),
+    "call_tx_stall_after_s": ("test_call_tx_stall_after_s", int),
     "gatt_mtu_probe": ("test_gatt_mtu_probe", bool),
     "receiver_ui_stability": ("test_receiver_ui_stability", bool),
     "call_speech_led_playout": ("test_call_speech_led_playout", bool),
@@ -531,7 +576,7 @@ TUNABLES = {
     # start so three boundaries take minutes; give EVERY phone of the run the same value (unequal lengths fail the
     # two-epoch check by design) and pass the same value to rotid_tracker.py --epoch-s. Presence-lease days stay real.
     "rotid_epoch_s": ("test_rotid_epoch_s", int),
-    # Experimental measured Auto quality ladder (app default off, DEBUG only; docs/SWITCHES.md): set it on
+    # Experimental measured Auto quality ladder (app default off, DEBUG only; docs/dev/switches.md): set it on
     # every participant of the run; the class override is strong|standard|weak (control matrix only).
     "auto_ladder": ("test_auto_ladder", bool),
     "auto_ladder_class": ("test_auto_ladder_class", str),
@@ -785,15 +830,23 @@ class Runner:
 
     def graceful_stop(self, phone, wait_s=3.0):
         """Ask the app to close its Bluetooth sockets, then force-stop. Killing a process with an
-        LE CoC listener open leaked PSMs on older stacks (A15s l2cap_listen failures)."""
+        LE CoC listener open leaked PSMs on older stacks (A15s l2cap_listen failures), and Android
+        10-11 keep scanner/GATT registrations of a process killed while it scans (ASUS uncleanExits=99
+        refilled its 32-slot table within minutes of a Bluetooth restart).
+
+        DEBUG builds since the clean-shutdown control answer a broadcast (it never relaunches an exited
+        app) with `BENCHMARK clean_shutdown: done | nonce=<n>` once nothing of the app is registered;
+        older builds get the former am start control."""
         try:
             # Only a running app gets the control: am start would relaunch an exited app.
-            self.adb(phone, "shell", "pidof", PACKAGE, timeout=5)
-            self.adb(phone, "shell", "am", "start", "-n", COMPONENT, "-W", "--es", "test_control", "shutdown", timeout=10)
-            for _ in range(int(wait_s / 0.25)):
-                if not self.adb(phone, "shell", "pidof", PACKAGE, timeout=5).strip():
-                    break
-                time.sleep(0.25)
+            if self.adb(phone, "shell", "pidof", PACKAGE, timeout=5).strip():
+                done = self.clean_shutdown(phone, wait_s)
+                if not done:
+                    self.adb(phone, "shell", "am", "start", "-n", COMPONENT, "-W", "--es", "test_control", "shutdown", timeout=10)
+                    for _ in range(int(wait_s / 0.25)):
+                        if not self.adb(phone, "shell", "pidof", PACKAGE, timeout=5).strip():
+                            break
+                        time.sleep(0.25)
         except Exception:
             pass
         # The asynchronous shutdown intent can start a fresh process after the app already exited
@@ -824,6 +877,26 @@ class Runner:
                 if quiet >= 6 or cancelled is True:
                     break
             time.sleep(0.5)
+
+    def clean_shutdown(self, phone, wait_s=3.0):
+        """Send the DEBUG clean-shutdown broadcast and wait (at most wait_s) for its done line. True when it came."""
+        nonce = f"r{int(time.time() * 1000) % 1_000_000_000}"
+        done = False
+        try:
+            self.adb(phone, *clean_shutdown_broadcast_args(nonce), timeout=10)
+            for _ in range(max(1, int(wait_s / 0.25))):
+                dump = self.adb(phone, "shell", "logcat", "-d", "-s", "BluetoothVideo:I", "-t", "400", timeout=10)
+                if clean_shutdown_done(dump, nonce):
+                    done = True
+                    break
+                time.sleep(0.25)
+        except Exception:
+            done = False
+        try:
+            self.events.append({"device": phone, "action": "clean_shutdown", "done": done, "nonce": nonce})
+        except Exception:
+            pass
+        return done
 
     def launch(self, phone, source=False):
         self.check_cancelled()

@@ -63,7 +63,7 @@ In scope:
 
 - **Protocol, identity and encryption**: the BMH2 handshakes, BMS1 hop records, BME1 endpoint content, key
   agreement, signatures, replay and ordering protection, and identity verification
-  ([docs/PROTOCOL.md](docs/PROTOCOL.md)).
+  ([protocol reference](docs/dev/protocol/README.md)).
 - **Relay chains and admission**: a relay or child that bypasses admission, reads content it should not, injects or
   reorders records, or defeats the check that the stream comes from the authenticated original source.
 - **Private calls**, including call relay chains and the audio and video carried inside them.
@@ -106,12 +106,12 @@ We list these so you can judge the risk for your own situation. They are open wo
   minutes, calls hide both identities, and strangers see a throwaway identity until you accept. Someone who connects
   to your phone, or whose call you accept, can still learn who you are; a live stream shows its source; Bluetooth
   Classic uses the permanent hardware address; phones paired at the operating-system level can recognise each other;
-  on Android 13 and older a connecting phone can read the Bluetooth device name. See [docs/PRIVACY.md](docs/PRIVACY.md).
+  on Android 13 and older a connecting phone can read the Bluetooth device name. See [privacy.md](docs/privacy.md).
 - **Identity is not a person.** A cryptographic identity does not prove who owns a phone. Compare fingerprints in
   person for contacts you care about; unverified peers are trusted on first use at most.
 - **No live revocation for groups.** Static group forwarding does not support removing a member and re-keying.
 - **Experimental features are experimental.** Anything labelled Experimental in
-  [docs/SWITCHES.md](docs/SWITCHES.md) is off by default and has had less review.
+  [switches.md](docs/dev/switches.md) is off by default and has had less review.
 - **Emergency wipe has stated limits** (PROTOCOL "Emergency wipe"): it cannot reach copies outside the app and cannot
   promise erasure of flash storage.
 - **Reproducible builds are checked on one platform only.** Two clean release builds from different folders produce
@@ -128,7 +128,7 @@ SHA-256 fingerprint is:
 ```
 
 Check `apksigner verify --print-certs app.apk` against it and follow the steps in the "Verifying a release" section
-of [docs/USER_GUIDE.md](docs/USER_GUIDE.md#verifying-a-release). An APK with a different fingerprint comes from a different publisher: do not install it,
+of [user-guide.md](docs/user-guide.md#verifying-a-release). An APK with a different fingerprint comes from a different publisher: do not install it,
 and please tell us where you found it. The signing key lives only on the maintainer's machine; the CI workflow holds
 no signing key and builds no APK.
 

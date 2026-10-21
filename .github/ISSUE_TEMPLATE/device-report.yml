@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you. Reports like this fill in the **Device compatibility** table in docs/DEVICES.md.
+        Thank you. Reports like this fill in the **Device compatibility** table in docs/devices.md.
 
         Please answer for **your own phone**, tested with at least one other phone running MeshLive. For each item,
         choose **Pass** only if it worked for a few minutes without restarting the app or Bluetooth. Choose **Partial**

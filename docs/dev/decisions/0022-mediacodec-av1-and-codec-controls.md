@@ -1,0 +1,9 @@
+# MediaCodec AV1 and codec controls
+
+Codec curves and a decoder A/B separate compute from config/dependency defects. MediaCodec AV1 complexity 4 at 720x480/30/1100 gave 10-16 FPS/froze at 205 renders; keyframe recovery without old dependencies repaired it. S22 complexity 1/2/3 measured 41.31/36.72/33.22 FPS, complexity 1 = 1.377 x real time. Retained policy 1 through 720x480/30, 0 for larger 30 FPS; a corrected ~90 s run held 29.9-30.1 FPS, PTS 33.3/33.5/33.6, rx 2867/rendered 2862, decoder drops 0. Thermal policy at 41.6 C selected 15 FPS/66.7 ms; frozen-frame repair is not efficiency proof.
+
+Extreme-motion AU hashes matched; sender IVF/600-AU replay decoded cleanly on hardware/system dav1d. Two distinct 4-byte configs caused earlier-alone black/final-alone normal. Sender strips keyframe flags from config/uses format csd-0; receiver keeps newest AV1 config. A 406-frame capture at 27.38 recorded FPS peaked 0.57% pink/green detector versus 64.6% broken; inspection/source/transport/decoder loss 0. Moderate policy selected 990 kbps/27 FPS. This is scoped CSD/pixel proof.
+
+S22 controlled 720p/15, 150/150 frames, four AV1 complexity 4 / four VP9 complexity 0 points: overlap VMAF/PSNR BD-rate 44.1%/48.7% lower AV1; SSIM had no overlap/no extrapolation. Warm compute margins 1.05-1.19 x AV1 versus 1.24-1.34 x VP9 expose thermal cost. The 600/800/1000 kbps AV1 captures used separate camera motion.
+
+High-rate files (ASUS, M31; 2026-10-02): ASUS software VP9 1000/1500 measured 85.20/85.79 harness FPS, VMAF 97.54/98.50; M31 software 24.92/23.54. M31 hardware VBR 1000/1500 emitted 1001.628/1501.6768 kbps, 300/300, drops 0, harness 26.40/26.52 FPS. Copy/drain/hash/trace overhead prevents interpreting harness FPS as encoder ceiling.

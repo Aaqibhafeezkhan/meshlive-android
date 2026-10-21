@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12+ backup and device-to-device transfer rules. The app already opts out of Android backup (allowBackup="false"),
+    but a phone maker's transfer tool (for example a "move to a new phone" wizard) is not required to honour that attribute;
+    these explicit rules exclude every domain from both, so contacts, call history and settings are never copied to
+    another phone or to the cloud. Keys are hardware Keystore keys and cannot move anyway.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

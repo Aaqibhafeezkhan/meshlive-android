@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 /**
- * DEBUG encoder bench (`test_encoder_bench`; docs/SWITCHES.md, default off, Experimental). Encodes the declared
+ * DEBUG encoder bench (`test_encoder_bench`; docs/dev/switches.md, default off, Experimental). Encodes the declared
  * raw fixture through the phone's real selected encoder for a fixed time with no Bluetooth, advertising or
  * scanning, logs one `BENCHMARK encoder_bench:` line per second and a summary, then finishes. [MainActivity]
  * hands the launch over before it creates any view, service or radio object; [EncoderBenchGuard] is active for

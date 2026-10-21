@@ -25,6 +25,8 @@ internal object ServiceTypePolicy {
      * the family policy entry is on, the Location switch is on and FINE location is granted, and the start happens
      * with the app visible or the service already holds the type (a later notification update from the background
      * must not drop it). A start from the background never asks for it: Meshtastic dropped it from background starts.
+     * [distributionAllows] is false in the Google Play flavour, whose manifest has no location type
+     * (BuildConfig.LOCATION_FGS_AVAILABLE; asking for an undeclared type throws).
      */
     fun locationTypeWanted(
         sdk: Int,
@@ -33,13 +35,37 @@ internal object ServiceTypePolicy {
         fineLocationGranted: Boolean,
         appVisible: Boolean,
         alreadyHeld: Boolean,
-    ): Boolean = policyActive && sdk in 29..30 && locationEnabled && fineLocationGranted && (appVisible || alreadyHeld)
+        distributionAllows: Boolean = BuildConfig.LOCATION_FGS_AVAILABLE,
+    ): Boolean = distributionAllows && policyActive && sdk in 29..30 && locationEnabled && fineLocationGranted &&
+        (appVisible || alreadyHeld)
 
     /**
      * RunningAppProcessInfo.IMPORTANCE_FOREGROUND is 100 (an activity of the app is on screen); a process that only runs
      * a foreground service reports IMPORTANCE_FOREGROUND_SERVICE (125) and is not "visible" for the location rule.
      */
     fun isForegroundImportance(importance: Int): Boolean = importance <= 100
+
+    private const val CAMERA: Int = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+    private const val MICROPHONE: Int = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+
+    /**
+     * Android 14+ (targetSdk 34+) refuses a camera or microphone type whose runtime permission is not granted, with a plain
+     * SecurityException ("Starting FGS with type camera ... requires permissions: ...") thrown inside the service's own
+     * start, which closed the whole app. 2026-10-21 Android 16 / HyperOS desk check, risk #1: HyperOS "Ask every time"
+     * and one-time grants make it reachable. Such a type is not asked for at all; the rest of the session keeps running.
+     * Returns the types to ask for and the dropped ones. Below Android 14 nothing is dropped (no such prerequisite).
+     */
+    fun withoutUngrantedTypes(sdk: Int, types: Int, cameraGranted: Boolean, microphoneGranted: Boolean): Pair<Int, Int> {
+        if (sdk < 34) return types to 0
+        var dropped = 0
+        if (types and CAMERA != 0 && !cameraGranted) dropped = dropped or CAMERA
+        if (types and MICROPHONE != 0 && !microphoneGranted) dropped = dropped or MICROPHONE
+        return (types and dropped.inv()) to dropped
+    }
+
+    /** `BENCHMARK fgs_type_refused` line: types the session could not hold, and why. */
+    fun refusedLine(types: Int, reason: String, stage: String): String =
+        "fgs_type_refused: types=${foregroundTypeLabelsWithLocation(types)} | reason=$reason | stage=$stage"
 
     fun hasLocation(types: Int): Boolean = types and LOCATION != 0
 
@@ -94,6 +120,10 @@ internal class ForegroundStartSequence(
     private val start: (Int) -> Unit,
     private val fallbackEnabled: () -> Boolean,
     private val isRefusal: (Throwable) -> Boolean,
+    /** A type whose permission is missing (see [isForegroundTypePermissionMissing]): never a crash, whatever the policy says. */
+    private val isMissingPermission: (Throwable) -> Boolean = ::isForegroundTypePermissionMissing,
+    /** Called with the types of an attempt Android refused for a missing permission (the service logs `fgs_type_refused`). */
+    private val onTypeRefused: (Int) -> Unit = {},
 ) {
     fun run(requested: Int): ForegroundServiceOutcome {
         var attempt = requested
@@ -111,7 +141,9 @@ internal class ForegroundStartSequence(
             start(attempt)
             return ForegroundServiceOutcome(requested, attempt, locationNote)
         } catch (error: RuntimeException) {
-            if (!fallbackEnabled() || !isRefusal(error)) throw error
+            val missing = isMissingPermission(error)
+            if (!missing && (!fallbackEnabled() || !isRefusal(error))) throw error
+            if (missing) onTypeRefused(attempt)
             listOfNotNull(locationNote, describe(error)).joinToString("; ")
         }
         val fallbackType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
@@ -120,7 +152,7 @@ internal class ForegroundStartSequence(
             start(fallbackType)
             ForegroundServiceOutcome(requested, fallbackType, refusal)
         } catch (error: RuntimeException) {
-            if (!isRefusal(error)) throw error
+            if (!isRefusal(error) && !isMissingPermission(error)) throw error
             ForegroundServiceOutcome(requested, 0, "$refusal; fallback ${describe(error)}")
         }
     }

@@ -48,7 +48,7 @@ class BatteryExemptionPromptTest {
 
     @Test
     fun theRequestIntentIsTheSystemOneTapPromptForThisPackage() {
-        val spec = BatteryExemptionPrompt.requestSpec("com.example.bluetoothtest")
+        val spec = BatteryExemptionPrompt.directSpec("com.example.bluetoothtest")
         assertEquals("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", spec.action)
         assertEquals("package:com.example.bluetoothtest", spec.dataUri)
     }

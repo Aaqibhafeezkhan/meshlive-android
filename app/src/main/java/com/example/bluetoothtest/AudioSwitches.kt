@@ -24,6 +24,16 @@ object AudioSwitches {
         }
 
     /**
+     * `test_capture_silence_evidence` (default on; false is the control arm, the old 2 s warning): the "microphone is not
+     * picking up any sound" notice for a blank capture needs [BlankCaptureEvidence] (no signal since the recorder
+     * started, or a 30 s zero run), not one 2 s run of zeros, which noise suppression produces in a quiet room (F18).
+     */
+    @Volatile var captureSilenceEvidence: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
      * `test_audio_off_main` (Experimental, default off): AudioRecord/AudioTrack/AudioManager teardown (and the
      * opt-in [MicrophoneOpusEncoder.startOffMain]) run on the serialized [AudioCommandQueue] instead of the
      * caller's main thread. Aimed at the M31/Exynos 9611 audio ANR class (Oboe #1216/#1474).
@@ -82,6 +92,7 @@ object AudioSwitches {
     /** Reads the DEBUG launch extras `test_audio_*` and `test_capture_source_fallback`. */
     fun applyExtras(boolExtra: (String, Boolean) -> Boolean) {
         captureSourceFallback = boolExtra("test_capture_source_fallback", false)
+        captureSilenceEvidence = boolExtra("test_capture_silence_evidence", true)
         offMainThread = boolExtra("test_audio_off_main", false)
         modeChangeWait = boolExtra("test_audio_mode_change_wait", false)
         usbHeadsetModeNormal = boolExtra("test_audio_usb_headset_mode_normal", false)

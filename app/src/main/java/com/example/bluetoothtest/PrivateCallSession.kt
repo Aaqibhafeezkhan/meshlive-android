@@ -137,6 +137,10 @@ data class PrivateCallState(
         }
     }
 
+    /** A delayed permission result (or duplicate tap) must not revive an ended attempt. */
+    internal fun acceptIfRinging(): PrivateCallState? =
+        if (phase == PrivateCallPhase.INCOMING_RINGING) transition(PrivateCallEvent.LOCAL_ACCEPT) else null
+
     fun transition(event: PrivateCallEvent): PrivateCallState {
         val next = when (phase) {
             PrivateCallPhase.OUTGOING_INVITE -> when (event) {

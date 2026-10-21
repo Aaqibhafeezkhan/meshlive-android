@@ -131,13 +131,14 @@ internal object GitHubReleases {
     fun selectApk(release: LatestRelease, abis: List<String>): ReleaseAsset? {
         for (abi in abis) {
             val wanted = "MeshLive-${release.versionName}-$abi.apk"
-            release.assets.firstOrNull { it.name == wanted && it.size <= MAX_APK_BYTES }?.let { return it }
+            val matches = release.assets.filter { it.name == wanted }
+            if (matches.isNotEmpty()) return matches.singleOrNull()?.takeIf { it.size <= MAX_APK_BYTES }
         }
         return null
     }
 
     fun sumsAsset(release: LatestRelease): ReleaseAsset? =
-        release.assets.firstOrNull { it.name == SUMS_NAME && it.size <= MAX_SUMS_BYTES }
+        release.assets.filter { it.name == SUMS_NAME }.singleOrNull()?.takeIf { it.size <= MAX_SUMS_BYTES }
 
     /** `sha256sum` output: `<64 hex>  <name>` (a `*` before the name marks binary mode). */
     fun parseSums(text: String): Map<String, String> {
@@ -145,7 +146,8 @@ internal object GitHubReleases {
         text.lineSequence().forEach { line ->
             val match = Regex("^([0-9A-Fa-f]{64}) [ *](.+)$").matchEntire(line.trimEnd('\r')) ?: return@forEach
             val (hex, name) = match.destructured
-            sums.putIfAbsent(name, hex.lowercase())
+            val previous = sums.putIfAbsent(name, hex.lowercase())
+            if (previous != null && previous != hex.lowercase()) throw ReleaseParseException("Conflicting hashes for $name")
         }
         return sums
     }

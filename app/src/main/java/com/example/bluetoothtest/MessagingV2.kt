@@ -15,7 +15,12 @@ import java.text.Normalizer
 
 /** The shipped default is one constant, flipped only after the promotion criteria in DECISIONS Design M. */
 object MessagingV2Defaults {
-    const val ENABLED = false
+    /**
+     * Design decision 2026-10-21: with Messages on, chat uses Messaging v2. v1 history stays readable as legacy rows and unsent v1
+     * messages are resealed once ([MessagingV2Migration]); a contact on an older app gets the "Their app is older" state
+     * ([ConversationLinkState.PEER_APP_OLDER]). Control arm: DEBUG `test_messaging_v2=false`, or Settings "Messages v2" off.
+     */
+    const val ENABLED = true
 }
 
 /**
@@ -28,12 +33,13 @@ object MessagingV2Feature {
 
     @Volatile var enabled = false
 
+    /** [extra] is null when the launch did not pass `test_messaging_v2`: a benchmark launch then follows the default too. */
     internal fun resolve(
         benchmarkLaunch: Boolean,
-        extra: (String) -> Boolean,
+        extra: (String) -> Boolean?,
         stored: (String) -> Boolean?,
         messages: Boolean,
-    ): Boolean = messages && if (benchmarkLaunch) extra(EXTRA) else stored(PREF) ?: MessagingV2Defaults.ENABLED
+    ): Boolean = messages && (if (benchmarkLaunch) extra(EXTRA) else stored(PREF)) ?: (messages && MessagingV2Defaults.ENABLED)
 }
 
 object MessagingV2Format {

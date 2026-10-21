@@ -818,7 +818,7 @@ internal object DevicePolicyRegistry {
                 ),
             ),
             evidence = listOf(
-                "docs/DECISIONS.md row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300)",
+                "docs/dev/decisions/README.md row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300)",
                 "benchmarks/runs/lane-b-burst-r1-529f36cc",
             ),
             confidence = LOW,

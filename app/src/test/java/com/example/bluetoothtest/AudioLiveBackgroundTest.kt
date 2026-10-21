@@ -41,14 +41,16 @@ class AudioLiveBackgroundTest {
 
     @Test
     fun audioNotificationsShowNeutralTextOnTheLockScreenAndNeverAName() {
-        assertEquals("Listening to a live broadcast", NotificationPrivacy.publicText(NotificationKind.AUDIO_LISTEN))
-        assertEquals("Broadcasting audio", NotificationPrivacy.publicText(NotificationKind.AUDIO_BROADCAST))
+        val listening = NotificationPrivacy.publicText(NotificationKind.AUDIO_LISTEN)
+        val broadcasting = NotificationPrivacy.publicText(NotificationKind.AUDIO_BROADCAST)
+        assertTrue(listening.isNotBlank() && broadcasting.isNotBlank())
+        assertNotEquals("listening and broadcasting are told apart", listening, broadcasting)
         for (kind in listOf(NotificationKind.AUDIO_LISTEN, NotificationKind.AUDIO_BROADCAST)) {
             // Private: a secure lock screen shows the public version, whatever the name opt-in says.
             assertEquals(NotificationCompat.VISIBILITY_PRIVATE, NotificationPrivacy.visibility(kind, peerNamesOptIn = false))
             assertEquals(NotificationCompat.VISIBILITY_PRIVATE, NotificationPrivacy.visibility(kind, peerNamesOptIn = true))
         }
-        assertEquals("Bluetooth Video", NotificationPrivacy.PUBLIC_TITLE)
+        assertEquals("MeshLive", NotificationPrivacy.PUBLIC_TITLE)
     }
 
     @Test

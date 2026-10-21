@@ -307,7 +307,7 @@ internal fun decodeEcPublicKey(encoded: ByteArray): PublicKey = KeyFactory
 
 private fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
 
-private fun hkdfSha256(
+internal fun hkdfSha256(
     inputKeyMaterial: ByteArray,
     salt: ByteArray,
     info: ByteArray,

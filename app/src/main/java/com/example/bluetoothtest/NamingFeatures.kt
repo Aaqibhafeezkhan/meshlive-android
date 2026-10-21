@@ -1,7 +1,7 @@
 package com.example.bluetoothtest
 
 /**
- * The switches of Naming v2 (Design G; docs/SWITCHES.md "Naming and identity display"). Each ships behind its own switch;
+ * The switches of Naming v2 (Design G; docs/dev/switches.md "Naming and identity display"). Each ships behind its own switch;
  * a user who touched a switch keeps the explicit choice, an untouched switch follows the constant below, and a DEBUG
  * benchmark launch (any `test_` extra) reads only its extras, default off, so measured case IDs stay valid
  * ([FeatureCatalog.resolve]). Shipping a feature ON is the one-line change of its constant, made only after the phone
@@ -17,8 +17,12 @@ internal object NamingFeatureDefaults {
     /** "Show my name before they answer" (design decision G-Q1). Applies only while names are on; phone check N2. */
     const val NAMES_BEFORE_ANSWER = true
 
-    /** G4: BVMID2 verification codes. Off until phone check N5 passes (no Android binding of the Meet flow yet). */
-    const val BVMID2 = false
+    /**
+     * G4: BVMID2 verification codes. On since 2026-10-19 (design decision Q-QL1): N5 and the Design QL lease test passed on two
+     * Android pairs, and only a BVMID2 scan moves presence leases, so a contact added with the static BVMID1 code could not be
+     * called from Contacts. An explicit stored choice still wins; `bvmid1_compat` stays the compat switch.
+     */
+    const val BVMID2 = true
 
     /** G4: "Accept older verification codes" (BVMID1 gives the shield again). Off: the 0.2.0-beta compat decision. */
     const val BVMID1_COMPAT = false
@@ -110,7 +114,7 @@ internal object NamingFeatures {
     /** Registered in this order: parents first ([FeatureCatalog.register]). `names_and_titles` is registered by [CallFeatureSpecs]. */
     val all: List<FeatureSpec> = listOf(GENERATED_NAMES, TITLE_PAGES, NAMES_BEFORE_ANSWER, BVMID2, BVMID1_COMPAT, VISIBLE_BY_NAME)
 
-    /** The switches that have a Settings row (Settings > Privacy). The three newest ship off. */
+    /** The switches that have a Settings row (Settings > Privacy). `bvmid1_compat` and `visible_by_name` ship off. */
     val settingsRows: List<FeatureSpec> =
         listOf(GENERATED_NAMES, NAMES_BEFORE_ANSWER, BVMID2, BVMID1_COMPAT, VISIBLE_BY_NAME)
 

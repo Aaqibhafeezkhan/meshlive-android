@@ -263,12 +263,16 @@ class MessagingV2ContentTest {
 
     @Test
     fun theFeatureResolverReadsOnlyItsExtraInABenchmarkLaunchAndNeedsMessages() {
-        val extraOn = { key: String -> key == MessagingV2Feature.EXTRA }
-        assertFalse(MessagingV2Defaults.ENABLED)
+        val extraOn = { key: String -> if (key == MessagingV2Feature.EXTRA) true else null }
+        val extraOff = { _: String -> false }
+        val noExtra = { _: String -> null as Boolean? }
+        assertTrue("design decision 2026-10-21: Messages on means v2", MessagingV2Defaults.ENABLED)
         assertTrue(MessagingV2Feature.resolve(true, extraOn, { true }, messages = true))
-        assertFalse("a stored choice never leaks into a benchmark launch", MessagingV2Feature.resolve(true, { false }, { true }, messages = true))
+        assertFalse("the DEBUG control arm test_messaging_v2=false is v1", MessagingV2Feature.resolve(true, extraOff, { true }, messages = true))
+        assertTrue("a benchmark launch without the extra follows the default", MessagingV2Feature.resolve(true, noExtra, { false }, messages = true))
         assertFalse("needs Messages", MessagingV2Feature.resolve(true, extraOn, { null }, messages = false))
-        assertFalse("shipped default", MessagingV2Feature.resolve(false, { true }, { null }, messages = true))
-        assertTrue(MessagingV2Feature.resolve(false, { false }, { true }, messages = true))
+        assertFalse("needs Messages, also by default", MessagingV2Feature.resolve(false, noExtra, { null }, messages = false))
+        assertTrue("shipped default", MessagingV2Feature.resolve(false, { true }, { null }, messages = true))
+        assertFalse("a user's own Messages v2 off is kept", MessagingV2Feature.resolve(false, { true }, { false }, messages = true))
     }
 }

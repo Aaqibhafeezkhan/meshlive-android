@@ -233,6 +233,54 @@ class LeLinkTeardownAndAdvertisingTest {
     }
 
     @Test
+    fun anUnconfirmedDisableKeepsTheSameSetAndLaterStepsAreSkipped() {
+        // win-userflow asus-winvideo: the ASUS's stack disabled the set but its callback died (DeadObjectException),
+        // the step timed out and the set was replaced: a new address 12 s after every low-latency start.
+        InPlaceStepHealth.reset()
+        try {
+            assertFalse(InPlaceStepHealth.skipBalanced(enabled = true))
+            assertEquals(
+                "a later step that timed out restarts as before",
+                InPlaceStepHealth.Recovery.RESTART,
+                InPlaceStepHealth.onTimeout(BalancedSwitchSteps.Step.UPDATING, enabled = true),
+            )
+            assertFalse(InPlaceStepHealth.skipBalanced(enabled = true))
+            assertEquals(
+                "control arm",
+                InPlaceStepHealth.Recovery.RESTART,
+                InPlaceStepHealth.onTimeout(BalancedSwitchSteps.Step.DISABLING, enabled = false),
+            )
+            assertFalse(InPlaceStepHealth.skipBalanced(enabled = true))
+            assertEquals(
+                InPlaceStepHealth.Recovery.REENABLE_SAME_SET,
+                InPlaceStepHealth.onTimeout(BalancedSwitchSteps.Step.DISABLING, enabled = true),
+            )
+            assertTrue("the next balanced step would fail the same way", InPlaceStepHealth.skipBalanced(enabled = true))
+            assertFalse("control arm", InPlaceStepHealth.skipBalanced(enabled = false))
+            // The step machine itself still reports a stalled disable as a restart; the recovery decides.
+            BalancedSwitchSteps().run {
+                begin()
+                assertEquals(BalancedSwitchSteps.Action.RESTART, onTimeout())
+            }
+            assertTrue(AdvertisingSwitches.inPlaceKeepSet)
+        } finally {
+            InPlaceStepHealth.reset()
+        }
+    }
+
+    @Test
+    fun onlyOurOwnStepIsLoggedAsBalancedInPlace() {
+        val steps = BalancedSwitchSteps()
+        steps.begin()
+        steps.onEnabled(enable = false, success = true)
+        steps.onParametersUpdated(success = true)
+        assertEquals("balanced_in_place", BalancedSwitchSteps.churnEvent(steps.onEnabled(enable = true, success = true)))
+        // The stack re-arms the legacy set after every inbound connection: not our churn.
+        assertEquals("stack_enable", BalancedSwitchSteps.churnEvent(steps.onEnabled(enable = true, success = true)))
+        assertEquals("stack_enable", BalancedSwitchSteps.churnEvent(BalancedSwitchSteps().onEnabled(enable = true, success = true)))
+    }
+
+    @Test
     fun anyFailedOrStalledStepFallsBackToTheOldRestart() {
         BalancedSwitchSteps().run {
             begin()

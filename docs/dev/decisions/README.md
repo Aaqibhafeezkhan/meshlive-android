@@ -1,0 +1,118 @@
+# Decisions and measured comparisons
+
+*Engineering log for contributors: the measured reasons behind the app's behaviour. You do not need it to use or build the app.*
+
+This file records why MeshLive behaves the way it does: which behaviour was kept, changed or left experimental, and the measurements behind each choice, so a later change can challenge them with evidence. The raw benchmark evidence (recordings, logs, traces) is not stored in this repository; only the conclusions and the numbers that support them are kept here. The numbers come from the project's own reference phones and are engineering measurements, not certification: they never approve another build, phone, input or topology. Case state and freshness are tracked by the test harness (see [testing.md](../testing.md)).
+
+Every phone uses the same acceptance standard. A regression seen on one device is evidence for the capability or stack behaviour it implicates, not a special pass standard. Reference phones: S24 (SM-S921B), S22 (SM-S901E), M31 (SM-M315F), A55 (SM-A556E), ASUS (ASUS_I01WD), Xiaomi (Redmi 23053RN02I) and A15s (OPPO CPH2179). A historical Redmi and the later Xiaomi are different devices. Build identifiers such as `2cbdafb1` are short hashes of frozen test builds.
+
+Short glossary for this file:
+
+- **Hop**: one Bluetooth link between two phones. A **relay chain** is source -> relay -> viewer, each link a hop.
+- **Classic / CoC / GATT**: the three transports. Classic is Bluetooth BR/EDR RFCOMM; CoC is an LE L2CAP connection-oriented channel; GATT is the LE attribute protocol used as a data pipe.
+- **Fan-out**: one source serving several direct viewers.
+- **Playout delay / adaptive playout**: the buffer a viewer holds before showing frames, which grows when frames arrive late.
+- **Bounded age**: an experimental policy that limits how old media may be before it is shed.
+
+
+## Records
+
+One page per decision or design record, numbered in order of first appearance.
+
+| No. | Record | Status | Summary |
+| --- | --- | --- | --- |
+| 0001 | [Product direction (2026-10-09)](0001-product-direction-2026-10-09.md) |  | Decisions are made from the point of view of the people who would use this app (no Wi-Fi or cell service: disasters, remote places and crowded events, off-grid sites), and... |
+| 0002 | [App identity and signing (2026-10-22)](0002-app-identity-and-signing-2026-10-22.md) |  | MeshLive GitHub organisation; iOS uses the same id). |
+| 0003 | [Retained policies](0003-retained-policies.md) |  | A 51-family limit audit separates measured starting policies, unproved caps, dormant code and security/queue invariants. |
+| 0004 | [2026-10-06/07 change ledger](0004-2026-10-0607-change-ledger.md) |  | Every app and host-tool change since build 7396b46e, taken from the per-build change-impact records (tip at the time of writing: 88001e31). |
+| 0005 | [Compatibility audit 2026-10-10 (offline, codec and YUV)](0005-compatibility-audit-2026-10-10-offline-codec-and-yuv.md) |  | The pipeline was compared with pinned upstream code: Media3 `8c6678b6`, WebRTC `42995c38`, libyuv `eeb06a64` (`convert.h`), and the Image/MediaCodec API docs. |
+| 0006 | [Platform behaviour audit 2026-10-21](0006-platform-behaviour-audit-2026-10-21.md) |  | A user on Android 16 (HyperOS 3) crashed on every start after "Check for updates > Yes": the daily-check job asked JobScheduler for a network constraint without... |
+| 0007 | [Known interactions (second-order effects)](0007-known-interactions-second-order-effects.md) |  |  |
+| 0008 | [Preserved fixes and causal evidence](0008-preserved-fixes-and-causal-evidence.md) |  | A three-phone workflow verification reproduced two instrumentation/input defects without changing normal family budgets. |
+| 0009 | [Historical profile](0009-historical-profile.md) |  | The historical S24 -> S22 comparator is Classic RFCOMM, c2.exynos.vp9.encoder, 720x480/30 FPS/1100 kbps CBR, Opus 32, Balanced 250 ms, thermal reduction OFF, production 32... |
+| 0010 | [Output holding and timing interpretation](0010-output-holding-and-timing-interpretation.md) |  | An isolated OFF/ON/ON/OFF comparison (S24 -> S22, 2026-10-03) changed only DEBUG holding, with the actual media intervals of each run recorded. |
+| 0011 | [Source scanning and GATT liveness comparisons](0011-source-scanning-and-gatt-liveness-comparisons.md) |  | An isolated scan ABBA (four runs, 2026-10-03) fixed ASUS native AV1 640x480/15/1000 CBR -> ordinary M31 leaf, pan + microphones, Opus 32, Balanced 250 ms, thermal OFF and... |
+| 0012 | [Complete-source role and lifecycle controls](0012-complete-source-role-and-lifecycle-controls.md) |  | These comparisons (build 17732675, 2026-10-03) preserve actual load, missing slots and authenticated parents, including failed requested chains. |
+| 0013 | [Allocation and bidirectional call-rate evidence](0013-allocation-and-bidirectional-call-rate-evidence.md) |  | M31 allocation proof: build 8EDC native AV1/ParkJoy 640x360/15/500 CoC retained CBR/VBR/CBR-FD/Automatic through start, Pause/Resume and rejoin; median rates... |
+| 0014 | [Input integrity and measurement interpretation](0014-input-integrity-and-measurement-interpretation.md) |  | Hard natural-motion inputs and matched SI/TI comparisons retain hashes, source maps, median/p95/peak at 720x480/30, 640x360/15 and 320x240/15. |
+| 0015 | [Bounded stress and independent observation](0015-bounded-stress-and-independent-observation.md) |  | The offline stress workflow uses 60-second focused/composite programmes and a 12-second framing chart; these are bounded engineering starting points, not proven sufficient... |
+| 0016 | [Historical direct presentation comparator](0016-historical-direct-presentation-comparator.md) |  | The 2026-08-25 S24 -> S22 Classic hardware VP9 720x480/30/1100 CBR + Opus source sustained 29.9-30.0 FPS, PTS p50/p95=33.3/33.4 ms, max 33.6, queues 0-1/drops 0. |
+| 0017 | [Native AV1 real-time tool tradeoff](0017-native-av1-real-time-tool-tradeoff.md) |  | These comparisons used libaom from the main branch at commit `0006e96cdb595ff88950a2c664115335ca5517bf` (later than the 3.14.1 release tag `03087864`) with per-frame CSV,... |
+| 0018 | [Native AV1 keyframe tradeoff](0018-native-av1-keyframe-tradeoff.md) |  | All cases: 720x480, 15 FPS, 400 kbps, cpu-used 7, 3 threads, 150 identical frames. |
+| 0019 | [Native AV1 bitrate-quality curve](0019-native-av1-bitrate-quality-curve.md) |  | All cases: cpu-used 7, 3 threads, 5-second GOP, 150 identical frames. |
+| 0020 | [Native AV1 policy](0020-native-av1-policy.md) |  | The retained automatic native policy is therefore: |
+| 0021 | [Native AV1 encrypted live motion](0021-native-av1-encrypted-live-motion.md) |  | All four runs used the actual camera, native AV1, 32 kbps Opus, application encryption, Classic RFCOMM, the asynchronous decoder, and the 500 ms receiver profile. |
+| 0022 | [MediaCodec AV1 and codec controls](0022-mediacodec-av1-and-codec-controls.md) |  | Codec curves and a decoder A/B separate compute from config/dependency defects. |
+| 0023 | [Primed CoC hardware motion comparison](0023-primed-coc-hardware-motion-comparison.md) |  | Historical CoC observations: S24 c2.exynos.vp9.encoder -> S22 c2.qti.vp9.decoder, CBR, Opus 32, High 500, thermal reduction OFF, 12 s cues, thermal state Light/Moderate. |
+| 0024 | [Bounded payload and CoC priming](0024-bounded-payload-and-coc-priming.md) |  | Unprimed S22 -> S24 reproduced 0.263 Mbps with 16 KiB/four-packet window and 0.266 with 65,535-byte SDU despite 2M/MPS 65,535. |
+| 0025 | [CoC windows and GATT completion discipline](0025-coc-windows-and-gatt-completion-discipline.md) |  | 16-packet and 65,535-byte x 2 cases took 8.5 s for a 6 s request, increasing drain without gain. |
+| 0026 | [Deterministic stream I/O](0026-deterministic-stream-io.md) |  | Same 150-frame 1280x720/15 VP9 replay at about 414 kbps secure-wire; accepted Classic runs about 15 FPS, empty queues, drops 0: |
+| 0027 | [Low-output functional transport controls](0027-low-output-functional-transport-controls.md) |  | Initial hardware VP9 640x360/15/300 request emitted 24-44 kbps; functional controls only: |
+| 0028 | [Viewer-middle rate and guard evidence](0028-viewer-middle-rate-and-guard-evidence.md) |  | S24 -> S22 (local view + forward) -> M31, hardware VP9 640x360/15, Opus 32, Balanced 250. |
+| 0029 | [Historical conservative lifecycle and recovery](0029-historical-conservative-lifecycle-and-recovery.md) |  | Hardware VP9 640x360/15/150 CBR, Opus 32, Balanced 250, thermal OFF isolates lifecycle, not capacity. |
+| 0030 | [Fan-out and opaque-relay comparisons](0030-fan-out-and-opaque-relay-comparisons.md) |  | Historical 2026-08-24 VP9 640x360/15 counts are latest samples, not synchronized stop totals. |
+| 0031 | [Legacy-family protections and measured scope](0031-legacy-family-protections-and-measured-scope.md) | measured | Qualcomm qcom/msmnile-sm8150-family/API<=32 Classic source continuous low-latency BLE scanning caused 300-700 ms delivery gaps despite 66.6 ms encoder PTS. |
+| 0032 | [Call role and teardown comparisons](0032-call-role-and-teardown-comparisons.md) |  | Three-phone call runs (2026-10-01) kept profiles, identities, failures and the native crash buffer; normal selections, family limits and security were preserved. |
+| 0033 | [Retired bitrate controller and fit-fill geometry](0033-retired-bitrate-controller-and-fit-fill-geometry.md) | retired | The old adaptive controller/feedback v2 was removed 2026-08-27; these downshift controls explain the persisted selection, not the current fixed-rate policy. |
+| 0034 | [Audio and asynchronous decoder controls](0034-audio-and-asynchronous-decoder-controls.md) |  | Live camera 48 kHz mono Opus 32, 20 ms units/about 50 packets/s, same elapsed clock, both encryption layers; replay has no mic. |
+| 0035 | [Authenticated failure and group-key controls](0035-authenticated-failure-and-group-key-controls.md) |  | BMH2 signed adjacent/endpoint identities, BMS1/BME1 ordered AES-GCM, authenticated parent/original source remain mandatory. |
+| 0036 | [Debug connectivity is separate from media](0036-debug-connectivity-is-separate-from-media.md) |  | A three-phone run (2026-10-01) recorded an Android BSSID-change shutdown of wireless debugging before the TLS errors: a network-change disable and `adb_wifi_enabled` 1 -> 0 set... |
+| 0037 | [Naming, uniform handle and relayed discovery (2026-10-10)](0037-naming-uniform-handle-and-relayed-discovery-2026-10-10.md) |  | Design: the naming and relayed-discovery design was reviewed independently (findings R1-R22) and these decisions were taken: |
+| 0038 | [Rotating discovery IDs on phones (2026-10-11, build 0725a213)](0038-rotating-discovery-ids-on-phones-2026-10-11-build-0725a213.md) |  | Phase 0 and phase 1 measurement sessions (manual adb/logcat with HCI snoop; each run has a hash manifest and results): |
+| 0039 | [Discovery privacy: what the reference apps do (research 2026-10-11)](0039-discovery-privacy-what-the-reference-apps-do-research-2026-1.md) |  |  |
+| 0040 | [Call head-of-line A/B (2026-10-11, build 958c8a53)](0040-call-head-of-line-ab-2026-10-11-build-958c8a53.md) |  | Question: does writing call video as authenticated fragments (and giving audio the gaps between them) cut the time call audio waits behind a video frame, and does it cost video? |
+| 0041 | [Relayed calls: first phone probe (2026-10-11)](0041-relayed-calls-first-phone-probe-2026-10-11.md) |  | Probe on build 958c8a53: S24 caller, ASUS helper (Android 11), M31 callee, GATT, `test_relayed_calls_require=1`, rotating IDs on and off. |
+| 0042 | [BMH3 identity-hiding handshake: protocol choice (2026-10-11)](0042-bmh3-identity-hiding-handshake-protocol-choice-2026-10-11.md) |  | Question: which handshake hides both identity keys from a sniffer while keeping the signing-only Keystore identity, the discovery-binding checks and hop-local relays? |
+| 0043 | [Pseudonymous strangers: design choice (2026-10-11)](0043-pseudonymous-strangers-design-choice-2026-10-11.md) |  | Question: what does a stranger who connects meet instead of the long-term identity, and when does the real identity follow? |
+| 0044 | [Release, licence and later direction (2026-10-10)](0044-release-licence-and-later-direction-2026-10-10.md) |  |  |
+| 0045 | [Device-family research 2026-10-14](0045-device-family-research-2026-10-14.md) |  | Twelve batches of device-family fixes were written in parallel from a research pass over AOSP (Bluetooth module, framework, media and camera), the vendor developer documents,... |
+| 0046 | [Measured Auto ladder (2026-10-12)](0046-measured-auto-ladder-2026-10-12.md) | measured | What was wrong. |
+| 0047 | [Default video settings (2026-10-10)](0047-default-video-settings-2026-10-10.md) |  | Calls and streams default to 426x240 at 15 FPS and 200 kbps (was 640x360 at 300 kbps). |
+| 0048 | [Scope for the first release (2026-10-10)](0048-scope-for-the-first-release-2026-10-10.md) |  |  |
+| 0049 | [Open-defect investigation notes (moved from the plan, 2026-10-12)](0049-open-defect-investigation-notes-moved-from-the-plan-2026-10.md) |  | These are the detailed findings that used to sit in the plan's open-defect and policy sections. |
+| 0050 | [Open defects in shipped behaviour](0050-open-defects-in-shipped-behaviour.md) |  | These are open across every phone combination that uses the affected behaviour. |
+| 0051 | [Design decisions 2026-10-20 (Windows MVP)](0051-design-decisions-2026-10-20-windows-mvp.md) |  |  |
+| 0052 | [Measured 2026-10-20: source media prewarm A/B (build 502b65f1)](0052-measured-2026-10-20-source-media-prewarm-ab-build-502b65f1.md) | measured | S22<->ASUS, 320x240/15/200 VP9, GATT and CoC, both directions, OFF/ON/OFF/ON, 2 runs per arm per case, `--parallel 1` (benchmarks/runs/prewarm-ab-20261020a-d; catalog... |
+| 0053 | [Design A: store-and-forward messages (delay tolerant)](0053-design-a-store-and-forward-messages-delay-tolerant.md) |  | Design review required. |
+| 0054 | [Design M: messaging v2 (chat threads, files of every format, receipts, forward secrecy, carriers)](0054-design-m-messaging-v2-chat-threads-files-of-every-format-rec.md) |  | Goal. |
+| 0055 | [Design B: group calls (3-6 people) and group push-to-talk](0055-design-b-group-calls-3-6-people-and-group-push-to-talk.md) |  | Design review required. |
+| 0056 | [Design C: relayed private calls and multi-hop discovery](0056-design-c-relayed-private-calls-and-multi-hop-discovery.md) |  | Design review required. |
+| 0057 | [Design D: dual listening, CoC and GATT at once](0057-design-d-dual-listening-coc-and-gatt-at-once.md) |  | Design review required. |
+| 0058 | [Design E: uniform adverts, capability fields behind the handshake](0058-design-e-uniform-adverts-capability-fields-behind-the-handsh.md) |  | Design review required. |
+| 0059 | [Design F: BMH3 identity-hiding handshake and stranger pseudonyms](0059-design-f-bmh3-identity-hiding-handshake-and-stranger-pseudon.md) |  | Coded 2026-10-11; on by default since 0.2.0-beta (Settings > Features "Hidden identities" and its child "Pseudonymous toward strangers"; DEBUG `test_bmh3`, `test_bmh3_pseudonyms`). |
+| 0060 | [Design G: naming and identity display v2 (names off the air, generated stranger names, one precedence function, mutual in-person verification, Visible by name)](0060-design-g-naming-and-identity-display-v2-names-off-the-air-ge.md) |  | Designed 2026-10-12; not coded; independent review done before coding (findings below). |
+| 0061 | [Design QL: recognition keys (presence leases) during contact verification (2026-10-19; revision 2 2026-10-21)](0061-design-ql-recognition-keys-presence-leases-during-contact-ve.md) |  | Problem. |
+| 0062 | [Design BZ: "in a call" for recognised contacts (busy marker, 2026-10-19; design only, not built)](0062-design-bz-in-a-call-for-recognised-contacts-busy-marker-2026.md) | design for review; no code until the coordinator and the user approve it | Problem. |
+| 0063 | [Design PA: the announcement in the primary advert (no scan-response dependency, 2026-10-20; design only)](0063-design-pa-the-announcement-in-the-primary-advert-no-scan-res.md) | design for review; no code until the coordinator and the user approve it | Problem (F11). |
+| 0064 | [Design SR: in-call link renewal after a one-way stall (F17 Stage B; draft 2026-10-20, review 1 and revision 2 2026-10-21, review 2 fixed; Experimental, default off)](0064-design-sr-in-call-link-renewal-after-a-one-way-stall-f17-sta.md) | revision 2 implemented on Android behind `test_call_link_renewal` (Experimental, | Problem. |
+| 0065 | [Design CD: LE CoC without a GATT client (the PSM in the advert; draft 2026-10-20, revised after review 1, not built)](0065-design-cd-le-coc-without-a-gatt-client-the-psm-in-the-advert.md) | design for review; no code until the coordinator and the user approve it | Problem. |
+| 0066 | [Design GD: one stable app GATT database (draft 2026-10-20, revised after review 1, not built)](0066-design-gd-one-stable-app-gatt-database-draft-2026-10-20-revi.md) | design for review; no code until the coordinator and the user approve it | Why. |
+| 0067 | [Design CI: one sender for a legacy and extended twin of a compact call offer (draft 2026-10-20, not reviewed, not built)](0067-design-ci-one-sender-for-a-legacy-and-extended-twin-of-a-com.md) | built 2026-10-21 after the user chose Q-PC-COPIED-ID option A: default on, DEBUG | Problem. |
+| 0068 | [Design GR: a GATT chunk lost in the receiving host (2026-10-20; option C revised after review 1 and built on Android behind a default-off switch)](0068-design-gr-a-gatt-chunk-lost-in-the-receiving-host-2026-10-20.md) |  | Problem. |
+| 0069 | [Desktop adapters without the peripheral role (2026-10-19)](0069-desktop-adapters-without-the-peripheral-role-2026-10-19.md) |  | On a desktop (Windows, later macOS) the callee and the viewer are the advertising GATT server, and callers and sources connect to them as central (PROTOCOL "Experimental iPhone... |
+| 0070 | [Design QW: a Windows PC visible to phones by a compact service-data announcement (Q-WIN1 option A; draft 2026-10-19, not reviewed, not built)](0070-design-qw-a-windows-pc-visible-to-phones-by-a-compact-servic.md) | draft, not reviewed, not built | Design review required. |
+| 0071 | [Design QV: a Windows PC watches Android live streams and audio-only radio (draft 2026-10-20, revision 2 after review 1, no wire code)](0071-design-qv-a-windows-pc-watches-android-live-streams-and-audi.md) | Draft for review (DECISIONS) | Android citations are `file:line` under `app/src/main/java/com/example/bluetoothtest/`, from the Android working tree of 2026-10-20 (accurate to about ±3 lines). |
+| 0072 | [Design AL: audio-only live stream (radio)](0072-design-al-audio-only-live-stream-radio.md) |  | Design review required. |
+| 0073 | [Design RT: relay child thinning (per-child frame-rate selection at a relay)](0073-design-rt-relay-child-thinning-per-child-frame-rate-selectio.md) |  | Default off (`test_relay_child_thinning`, DEBUG launch extra; Experimental). |
+| 0074 | [Time-based relay queues and viewer buffers](0074-time-based-relay-queues-and-viewer-buffers.md) |  | Decision 2026-10-14: relay queues and viewer buffers are sized in milliseconds of media from the measured drain rate and jitter, as an A/B arm; a relay link slower than the... |
+| 0075 | [Design CX: Classic address exchange and Classic media upgrade (verified contacts only, opt-in)](0075-design-cx-classic-address-exchange-and-classic-media-upgrade.md) |  | Problem. |
+| 0076 | [Design COC-01 (proposed, not built): fixed-PSM LE CoC without link encryption (Android 16)](0076-design-coc-01-proposed-not-built-fixed-psm-le-coc-without-li.md) | A draft from the device-family research; needs a design review and a discovery/wire | code. |
+| 0077 | [Design SG (Option A coded 2026-10-15 behind `coc_auto_gatt` + `test_coc_auto_gatt_streams`, off; phone tests not run): automatic GATT fallback for streams when a receiver cannot open an LE CoC listener](0077-design-sg-option-a-coded-2026-10-15-behind-coc_auto_gatt--te.md) | coded | Design review required (security and wire sections below). |
+| 0078 | [Policy work: fewer fixed limits](0078-policy-work-fewer-fixed-limits.md) |  | Fixed numbers (1100/800/700/500/400 kbps ceilings, 20% margins, 5 s keyframes) were wrong for some phone or link every time, and fixes kept circling the same freezes. |
+| 0079 | [Intercom core and product direction](0079-intercom-core-and-product-direction.md) |  | Intercom (voice, push-to-talk) and live video are equal parts of the product; the reasoning is in DECISIONS.md under "Product direction". |
+| 0080 | [Discovery privacy](0080-discovery-privacy.md) | rotating discovery IDs, the BMH3 handshake and pseudonyms toward strangers are on by | Design review required. |
+| 0081 | [Bluetooth headsets](0081-bluetooth-headsets.md) |  | Wired and USB headsets are honoured: a plugged one replaces the earpiece, and the loudspeaker unless the person explicitly chose it. |
+| 0082 | [Distribution and field reports](0082-distribution-and-field-reports.md) |  | IzzyOnDroid serves developer-signed APKs from the GitHub release unchanged; F-Droid builds from source. |
+| 0083 | [iPhone interoperability](0083-iphone-interoperability.md) |  | Design review required for anything on the wire. |
+| 0084 | [Wi-Fi Direct / Aware bearer (later)](0084-wi-fi-direct--aware-bearer-later.md) |  | Design review required. |
+| 0085 | [Measurement adapters still missing](0085-measurement-adapters-still-missing.md) |  | The harness has host regressions for native input binding, marker decoding, recording import, content-ROI diagnostics, raster calibration, sound-cue analysis, AudioTrack clock... |
+| 0086 | [Platform and product work](0086-platform-and-product-work.md) |  | These rows keep future obligations without turning them into approved implementations. |
+| 0087 | [Design decisions 2026-10-21](0087-design-decisions-2026-10-21.md) |  | Transition, the least risky of the options: nothing is converted in place. |
+
+## Design records
+
+The full texts of the larger designs that used to sit in the plan, kept here as the record of what was proposed, reviewed and decided. [roadmap.md](../roadmap.md) carries only each design's status and what is left; wire rules are in [protocol reference](../protocol/README.md). Related status and rationale sections are "Design C status" and "Design F rationale, reviews and measurements" above.
+
+## Plan detail moved from the plan (2026-10-12)
+
+The longer descriptions of the policy workstreams, intercom work, discovery-privacy phone-test plan, headsets, distribution, iPhone interoperability, Wi-Fi bearer, missing measurement adapters and platform work. The plan keeps one short item for each.

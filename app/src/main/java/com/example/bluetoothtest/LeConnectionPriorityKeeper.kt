@@ -66,7 +66,11 @@ internal class LeConnectionPriorityKeeper(
     private val requestLogEnabled: () -> Boolean = {
         PhyLinkPolicy.prioritySupervisionLogActive(DeviceFamilyPolicy.switchedOff)
     },
+    /** Experimental (`test_skip_redundant_priority`, default off): see [isRedundant]. */
+    private val skipRedundant: () -> Boolean = { DebugTunables.skipRedundantPriority },
 ) {
+    /** The interval of the last successful connection update (1.25 ms units; -1 before one). */
+    private var lastIntervalUnits = -1
     private var priority: BleConnectionPriority? = null
     private var retries = 0
     private var generation = 0
@@ -87,6 +91,19 @@ internal class LeConnectionPriorityKeeper(
 
     /** Requests [priority] now and remembers it for retries. */
     fun request(priority: BleConnectionPriority): Boolean {
+        val redundant = synchronized(this) { isRedundant(priority, this.priority, lastIntervalUnits, sdkInt) }
+        if (redundant && skipRedundant()) {
+            val window = lePriorityParameters(priority, sdkInt)
+            log(
+                String.format(
+                    java.util.Locale.ROOT,
+                    "BENCHMARK prio_request: skipped | link=%s | priority=%s | intervalMs=%.2f | window=%.2f-%.2f",
+                    link, priority.label, lastIntervalUnits * 1.25, window.minIntervalMs, window.maxIntervalMs,
+                ),
+            )
+            requested(priority)
+            return true
+        }
         requested(priority)
         if (requestLogEnabled()) log(lePriorityParameters(priority, sdkInt).line(link, priority, sdkInt))
         return dispatch(priority)
@@ -111,6 +128,7 @@ internal class LeConnectionPriorityKeeper(
 
     @Synchronized
     private fun handleUpdate(status: Int, intervalUnits: Int) {
+        if (status == 0 && intervalUnits > 0) lastIntervalUnits = intervalUnits
         val target = priority ?: return
         if (status == 0) {
             checkDrift(target, intervalUnits)
@@ -181,6 +199,24 @@ internal class LeConnectionPriorityKeeper(
     }
 
     companion object {
+        /**
+         * Experimental: a request for the priority already requested, on a link whose last successful update already
+         * put the interval inside that priority's window, would only start another connection-update procedure.
+         * 2026-10-20 (a15s-asus radio join): the A15s source re-requested HIGH right after the stream handshake on a
+         * link already at 15 ms; no update followed on either phone and the link dropped with a supervision timeout
+         * 5.07 s later (5 s timeout). One instance only, so this is an A/B, off by default.
+         */
+        fun isRedundant(
+            priority: BleConnectionPriority,
+            currentTarget: BleConnectionPriority?,
+            lastIntervalUnits: Int,
+            sdkInt: Int,
+        ): Boolean {
+            if (currentTarget != priority || lastIntervalUnits <= 0) return false
+            val window = lePriorityParameters(priority, sdkInt)
+            return lastIntervalUnits in window.minIntervalUnits..window.maxIntervalUnits
+        }
+
         /** Long enough for a colliding PHY update or the peer's GATT discovery to finish. */
         val RETRY_DELAYS_MS = longArrayOf(500L, 1_500L, 4_000L)
 

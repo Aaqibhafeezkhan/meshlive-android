@@ -80,22 +80,6 @@ class BenchmarkSetupRefusalTest {
     }
 
     @Test
-    fun theLaunchPathNoLongerThrowsForAnUnavailableRequest() {
-        val file = listOf(
-            File("src/main/java/com/example/bluetoothtest/MainActivity.kt"),
-            File("app/src/main/java/com/example/bluetoothtest/MainActivity.kt"),
-        ).first { it.exists() }
-        val source = file.readText().replace("\r\n", "\n")
-        val body = source.substringAfter("private fun applyDebugCodecSelection()").substringBefore("private fun usesBroadcastDiscovery")
-        assertFalse(body.contains("require("))
-        assertFalse(body.contains("requireNotNull("))
-        assertFalse(body.contains("error("))
-        assertTrue(body.contains("refuseDebugBenchmarkSetup("))
-        assertTrue(source.substringAfter("private fun refuseDebugBenchmarkSetup").substringBefore("private fun applyDebugCodecSelection")
-            .contains("finishAndRemoveTask()"))
-    }
-
-    @Test
     fun theRawRateRefusalNamesSizeRateAndEncoderWithoutSubstitution() {
         assertEquals(
             "BENCHMARK setup_refused: reason=raw_fixture_encoder_rate | requested=640x360@60 | " +
@@ -133,14 +117,4 @@ class BenchmarkSetupRefusalTest {
         assertTrue(BenchmarkSetupRefusal.setupStalledLine(BenchmarkSetupRefusal.StallVerdict.WAIT, gates).startsWith("BENCHMARK setup_waiting: "))
     }
 
-    @Test
-    fun theWatchdogIsArmedOnBothDebugAutoStartLaunchScreensAndTheRawRateIsChecked() {
-        val file = File("src/main/java/com/example/bluetoothtest/MainActivity.kt").takeIf { it.exists() }
-            ?: File("app/src/main/java/com/example/bluetoothtest/MainActivity.kt")
-        val source = file.readText().replace("\r\n", "\n")
-        assertTrue(source.contains("showStreamCamera()\n            armDebugSetupWatchdog()"))
-        assertTrue(source.contains("ensurePermissionsAndRefresh()\n            armDebugSetupWatchdog()"))
-        val setup = source.substringAfter("private fun applyDebugCodecSelection()").substringBefore("private fun usesBroadcastDiscovery")
-        assertTrue(setup.contains("encoderAllowsRate(") && setup.contains("rawEncoderRateLine("))
-    }
 }

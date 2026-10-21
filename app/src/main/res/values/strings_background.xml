@@ -2,11 +2,11 @@
 <resources>
     <!-- Onboarding step "keep helping in the background" and the same offer from Settings / an always-on role. -->
     <string name="onboarding_bg_title">Keep helping in the background</string>
-    <string name="onboarding_bg_intro">A phone in a mesh only helps while it keeps running. To pass a call or live video along with the screen off, Android has to let this app keep working in the background.</string>
+    <string name="onboarding_bg_intro">A phone in a mesh only helps while it keeps running. To pass a call or a livestream along with the screen off, Android has to let this app keep working in the background.</string>
     <string name="onboarding_bg_cost_title">What it costs</string>
-    <string name="onboarding_bg_cost_text">The app uses more battery while a call, a live video or a relay is on. When none of them is on, it does nothing in the background.</string>
-    <string name="onboarding_bg_warning_title">Warning</string>
-    <string name="onboarding_bg_warning_text">A phone that relays for others can lose battery noticeably faster and may get warm in a pocket or bag. You can undo this at any time in Android\'s battery settings.</string>
+    <string name="onboarding_bg_cost_text">The app uses more battery while a call, a livestream or a relay is on. When none of them is on, it does nothing in the background.</string>
+    <string name="onboarding_bg_warning_title">Battery and temperature</string>
+    <string name="onboarding_bg_warning_text">Passing calls and livestreams along uses extra battery and may warm your phone. You can change background access in Android\'s battery settings.</string>
     <string name="onboarding_bg_allow">Allow background running</string>
     <string name="onboarding_bg_skip">Not now</string>
     <string name="onboarding_bg_done">Continue</string>

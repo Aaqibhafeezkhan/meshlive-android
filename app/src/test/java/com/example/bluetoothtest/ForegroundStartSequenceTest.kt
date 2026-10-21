@@ -160,6 +160,73 @@ class ForegroundStartSequenceTest {
         assertEquals("location type dropped, Refusal: no; Refusal: no", outcome.refused)
     }
 
+    /** AOSP ForegroundServiceTypePolicy's message for a type whose permission is missing (Android 14+). */
+    private val missingCamera = SecurityException(
+        "Starting FGS with type camera callerApp=ProcessRecord{1 2:io.github.meshlive.app/u0a1} targetSDK=36 requires " +
+            "permissions: all of the permissions allOf=true [android.permission.FOREGROUND_SERVICE_CAMERA] any of the " +
+            "permissions allOf=false [android.permission.CAMERA, android.permission.SYSTEM_CAMERA]",
+    )
+
+    @Test
+    fun aMissingCameraPermissionNeverClosesTheAppEvenWithTheFallbackPolicyOff() {
+        val attempts = mutableListOf<Int>()
+        val refused = mutableListOf<Int>()
+        val outcome = ForegroundStartSequence(
+            start = { types ->
+                attempts += types
+                if (types and camera != 0) throw missingCamera
+            },
+            fallbackEnabled = { false },
+            isRefusal = { false },
+            onTypeRefused = { refused += it },
+        ).run(connected or camera or microphone)
+        assertEquals(listOf(connected or camera or microphone, connected), attempts)
+        assertEquals(connected, outcome.effectiveTypes)
+        assertEquals(listOf(connected or camera or microphone), refused)
+        assertTrue(outcome.refused!!.startsWith("SecurityException: Starting FGS with type camera"))
+    }
+
+    @Test
+    fun theMissingPermissionMessageIsRecognisedAndOtherSecurityExceptionsAreNot() {
+        assertTrue(isForegroundTypePermissionMissing(missingCamera))
+        assertFalse(isForegroundTypePermissionMissing(SecurityException("Permission Denial: not allowed")))
+        assertFalse(isForegroundTypePermissionMissing(IllegalStateException(missingCamera.message)))
+    }
+
+    @Test
+    fun android14AndLaterDoNotAskForATypeWhosePermissionIsOff() {
+        val all = connected or camera or microphone
+        assertEquals((connected or microphone) to camera, ServiceTypePolicy.withoutUngrantedTypes(36, all, false, true))
+        assertEquals(connected to (camera or microphone), ServiceTypePolicy.withoutUngrantedTypes(34, all, false, false))
+        assertEquals(all to 0, ServiceTypePolicy.withoutUngrantedTypes(36, all, true, true))
+        assertEquals("Android 13 and older have no such prerequisite", all to 0, ServiceTypePolicy.withoutUngrantedTypes(33, all, false, false))
+        assertEquals(connected to 0, ServiceTypePolicy.withoutUngrantedTypes(36, connected, false, false))
+        assertEquals(
+            "fgs_type_refused: types=camera | reason=permission_off | stage=precheck",
+            ServiceTypePolicy.refusedLine(camera, "permission_off", "precheck"),
+        )
+    }
+
+    @Test
+    fun theUserIsToldWhichPermissionIsOff() {
+        fun notice(off: Int) = ForegroundServiceOutcome(connected or camera or microphone, connected, "permission off", off).userNotice()
+        assertTrue(notice(camera).startsWith("Camera permission is off."))
+        assertTrue(notice(microphone).startsWith("Microphone permission is off."))
+        assertTrue(notice(camera or microphone).startsWith("Camera and microphone permissions are off."))
+        assertEquals(
+            "Camera and microphone are unavailable while the app is in the background. Open the app to use them.",
+            notice(0),
+        )
+    }
+
+    @Test
+    fun aNativeLibraryThatCannotLoadOnlyRemovesTheSoftwareEncoder() {
+        // On the JVM the Android library is normally absent: touching the bridge must not throw.
+        val version = NativeAomBridge.versionOrNull()
+        assertEquals(NativeAomBridge.loadError == null, NativeAomBridge.available)
+        if (!NativeAomBridge.available) assertNull(version)
+    }
+
     @Test
     fun locationDropThenAnUnrelatedExceptionPropagates() {
         try {

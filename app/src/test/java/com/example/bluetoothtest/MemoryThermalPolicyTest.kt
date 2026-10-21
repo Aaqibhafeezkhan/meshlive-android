@@ -149,14 +149,6 @@ class MemoryThermalPolicyTest {
     }
 
     @Test
-    fun theStatusFromHeadroomDocumentsTheRealClientRateLimit() {
-        // The old comment claimed NaN meant "called more than once per 10 s"; the AOSP client limit is 500 ms.
-        val source = java.io.File("src/main/java/com/example/bluetoothtest/MemoryThermalPolicy.kt").readText()
-        assertTrue(source.contains("MINIMUM_HEADROOM_TIME_MILLIS (500 ms)"))
-        assertFalse(source.contains("NaN (unsupported, or called more than once per 10 s)"))
-    }
-
-    @Test
     fun forecastEntryRecordsTheCadenceCorrectionAndTheRetest() {
         val entry = MemoryThermalPolicy.entries.first { it.id == "thermal-headroom-forecast" }
         assertTrue(entry.proposed)

@@ -2,12 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
-        The github flavour only (docs/SWITCHES.md "Check for updates"). Installing an update through PackageInstaller needs this
+        The github flavour only (docs/dev/switches.md "Check for updates"). Installing an update through PackageInstaller needs this
         permission and the user's per-app "Install unknown apps" choice (Settings, opened by the update
         screen). The F-Droid flavour declares none of it. Nothing installs without Android's own
         confirmation screen (USER_ACTION_REQUIRED).
     -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
+        The daily check's job requires a network (JobInfo.setRequiredNetworkType). Apps targeting Android 14+ must hold
+        this normal (install-time, no prompt) permission for that, or JobScheduler.schedule throws SecurityException,
+        which crashed "Check for updates" on Android 14+ phones (user report 2026-10-21, Android 16 HyperOS 3).
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application>
         <activity

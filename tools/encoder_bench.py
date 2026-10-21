@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host helper for the DEBUG radio-free encoder bench (`test_encoder_bench`, docs/SWITCHES.md).
+"""Host helper for the DEBUG radio-free encoder bench (`test_encoder_bench`, docs/dev/switches.md).
 
 For one phone it runs a grid of encoder settings, one launch per cell, and collects the app's
 `BENCHMARK encoder_bench:` lines into an explicit, fresh output directory:

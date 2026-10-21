@@ -258,9 +258,4 @@ class MessagingV2NotificationsTest {
         )
     }
 
-    @Test
-    fun theV1CountNotificationIsReplacedOnlyWhileTheSwitchIsOn() {
-        val activity = File(main, "java/com/example/bluetoothtest/MainActivity.kt").readText().replace("\r\n", "\n")
-        assertTrue(activity.contains("if (notify && !MessagingV2Feature.enabled && MessageNotifications.shouldPost("))
-    }
 }

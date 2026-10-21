@@ -7,7 +7,7 @@ import android.content.Intent
  * extra from another app must not change a release build) and default off, except
  * [forecastLegacy10sCadence], which only selects the old arm of an already-experimental path. The forecast
  * itself stays `MemoryThermalPolicy.headroomForecast` (`test_thermal_forecast=true`). Register rows:
- * docs/SWITCHES.md "Experimental, alternative and optional behaviour" (added by the root).
+ * docs/dev/switches.md "Experimental, alternative and optional behaviour" (added by the root).
  */
 internal object ThermalSwitches {
     /**

@@ -1,6 +1,6 @@
 # fdroiddata metadata draft (metadata/<applicationId>.yml) for MeshLive.
 # The file name is the final applicationId, io.github.meshlive.app (`appId` in app/build.gradle.kts;
-# docs/ARCHITECTURE.md "Distribution and releases"). Companion file: distribution/fdroid/srclibs/libaom.yml (goes to fdroiddata srclibs/).
+# docs/dev/architecture.md "Distribution and releases"). Companion file: distribution/fdroid/srclibs/libaom.yml (goes to fdroiddata srclibs/).
 # Checked 2026-10-11 with fdroidserver 2.4.5 (`fdroid readmeta` and `fdroid lint`: clean). NOT yet run:
 # `fdroid build` (needs the buildserver image). See the notes at the end for what remains untested.
 Categories:
@@ -32,7 +32,7 @@ Repo: https://github.com/MeshLive/meshlive-android.git
 # (arm64-v8a); the universal APK (digit 0) is for GitHub only (universalApk=false). Gradle builds both split
 # APKs in each entry; `output` (relative to `subdir`) selects the one the entry publishes. Replace
 # `commit` with the tag of the first release built with AGP 8.13.2 or newer: v0.1.0-beta was built with
-# 8.13.0-rc01 and has a path-dependent native library (docs/ARCHITECTURE.md "Distribution and releases", reproducible builds).
+# 8.13.0-rc01 and has a path-dependent native library (docs/dev/architecture.md "Distribution and releases", reproducible builds).
 Builds:
   - versionName: '0.3.0-beta'
     versionCode: 31

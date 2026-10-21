@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """BMH3 identity-hiding handshake: executable reference and test-vector generator.
 
-Normative companion of docs/PROTOCOL.md "Experimental BMH3 identity-hiding link handshake". It is host
+Normative companion of docs/dev/protocol/README.md "Experimental BMH3 identity-hiding link handshake". It is host
 tooling, not app code. It implements the wire format, the key schedule, both reveal orders, the contact
 tag and the local checks exactly as the document specifies, and it generates the byte-exact vectors the
 Android JVM tests (`Bmh3Vectors.kt`) replay.

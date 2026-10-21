@@ -30,8 +30,14 @@ class BootResumeTest {
 
     @Test
     fun theManifestActionsAndTheCodeActionsAgree() {
-        assertEquals(4, BootResume.ACTIONS.size)
-        assertTrue("android.intent.action.BOOT_COMPLETED" in BootResume.ACTIONS)
+        val manifest = listOf("src/main/AndroidManifest.xml", "app/src/main/AndroidManifest.xml")
+            .map { java.io.File(it) }
+            .first { it.isFile }.readText()
+        val receiver = Regex("<receiver[^>]*BootResumeReceiver.*?</receiver>", RegexOption.DOT_MATCHES_ALL).find(manifest)
+        assertTrue("the boot receiver is declared", receiver != null)
+        val declared = Regex("<action\\s+android:name=\"([^\"]+)\"").findAll(receiver!!.value).map { it.groupValues[1] }.toSet()
+        // A restart broadcast the manifest delivers but the code ignores (or the other way round) would silently do nothing.
+        assertEquals(BootResume.ACTIONS, declared)
     }
 
     @Test

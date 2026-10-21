@@ -41,12 +41,19 @@ object OfflineAppShareFeature {
 
     @Volatile var enabled = false
 
-    /** The shared feature rule ([FeatureCatalog.resolve]). */
+    /**
+     * Whether this build offers outbound sharing. All distributions offer it; AppShare separately refuses split
+     * installs because the base APK alone would not install. Sharing never updates this phone (docs/PLAY_RELEASE.md).
+     */
+    val availableInThisBuild: Boolean get() = BuildConfig.APP_SHARE_AVAILABLE
+
+    /** The shared feature rule ([FeatureCatalog.resolve]); always off where [available] is false. */
     fun resolve(
         benchmarkLaunch: Boolean,
         extra: (String) -> Boolean,
         stored: (String) -> Boolean?,
-    ): Boolean = FeatureCatalog.resolve(ConnectivityFeatures.shareAppNearby, benchmarkLaunch, extra, stored)
+        available: Boolean = availableInThisBuild,
+    ): Boolean = available && FeatureCatalog.resolve(ConnectivityFeatures.shareAppNearby, benchmarkLaunch, extra, stored)
 }
 
 /**
@@ -56,7 +63,7 @@ object OfflineAppShareFeature {
 object OfflineAppShareGate {
     @Volatile var liveSessionCheck: (() -> Boolean)? = null
 
-    fun liveSessionActive(): Boolean = runCatching { liveSessionCheck?.invoke() == true }.getOrDefault(false)
+    fun liveSessionActive(): Boolean = runCatching { liveSessionCheck?.invoke() == true }.getOrDefault(true)
 }
 
 /** One Wi-Fi Direct group creation attempt, in the order [OfflineAppSharePolicy.bandAttempts] gives. */
@@ -73,6 +80,18 @@ internal enum class GroupBandAttempt {
 
 /** Pure rules, unit-tested without Android. */
 internal object OfflineAppSharePolicy {
+    /**
+     * Runtime permissions Wi-Fi Direct needs: Nearby devices on Android 13+; fine location before that. From Android 12 a
+     * fine-location request must carry coarse location in the same request: on its own it is ignored and logs
+     * "ACCESS_FINE_LOCATION must be requested with ACCESS_COARSE_LOCATION" (developer.android.com, runtime location
+     * permissions). If the user picks "approximate" only, fine stays denied and sharing stops with the permission message.
+     */
+    fun permissionsFor(sdkInt: Int): List<String> = when {
+        sdkInt >= 33 -> listOf("android.permission.NEARBY_WIFI_DEVICES")
+        sdkInt >= 31 -> listOf("android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION")
+        else -> listOf("android.permission.ACCESS_FINE_LOCATION")
+    }
+
     const val SHARE_TIMEOUT_MS = 10 * 60 * 1000L
     const val BUSY_CHECK_INTERVAL_MS = 2_000L
     const val MAX_BUSY_RETRIES = 4
@@ -240,6 +259,7 @@ code{word-break:break-all;font-size:.9em}
 li{margin-bottom:8px}
 </style></head><body>
 <h1>${e(info.appName)}</h1>
+<p><b>Android only. This APK cannot be installed on an iPhone or iPad.</b></p>
 <p>Version ${e(info.versionName)} (${info.versionCode}), $sizeMb MB.</p>
 <a class="button" href="${e(info.apkFileName)}" download="${e(info.apkFileName)}">Download the app</a>
 <h2>Install</h2>
@@ -253,7 +273,7 @@ li{margin-bottom:8px}
 <p>Signing certificate SHA-256:<br>$certs</p>
 <p>${e(keyNote)} After installing, About in the app shows the signing certificate; it must match the one above.</p>
 <p>This page is written by the phone that shares it, so it can say anything. Compare the certificate above with the one on the project page (github.com/MeshLive/meshlive-android) before you install.</p>
-<p><b>Already have MeshLive?</b> Do not open the file from here. In MeshLive open Settings &gt; Features &gt; Updates and tap Choose the file: MeshLive checks it first. If Android offers to Install a new app instead of Update, cancel.</p>
+<p><b>Already have MeshLive?</b> Do not open the file from here. In MeshLive open Settings &gt; About and updates &gt; Check now and tap Choose the file (if you installed it from an app store, update it there instead): MeshLive checks it first. If Android offers to Install a new app instead of Update, cancel.</p>
 </body></html>
 """
     }
@@ -424,11 +444,17 @@ internal class OfflineAppShareServer(
         require(apkFileName.isNotEmpty() && apkFileName.none { it == '/' || it == '\\' || it == '%' || it == '?' })
     }
 
+    @Synchronized
     fun start(): Int {
-        check(!closed.get()) { "closed" }
+        check(!closed.get() && serverSocket == null) { "closed or already started" }
         val socket = ServerSocket()
         socket.reuseAddress = true
-        socket.bind(InetSocketAddress(bindAddress, requestedPort), 8)
+        try {
+            socket.bind(InetSocketAddress(bindAddress, requestedPort), 8)
+        } catch (e: IOException) {
+            socket.close()
+            throw e
+        }
         serverSocket = socket
         port = socket.localPort
         val pool = Executors.newFixedThreadPool(maxConnections) { r ->
@@ -462,7 +488,12 @@ internal class OfflineAppShareServer(
                 }
                 continue
             }
-            open.add(client)
+            val accepted = synchronized(open) { if (closed.get()) false else open.add(client) }
+            if (!accepted) {
+                runCatching { client.close() }
+                permits.release()
+                continue
+            }
             try {
                 pool.execute {
                     try {
@@ -582,6 +613,7 @@ internal class OfflineAppShareServer(
         out.write(head.toByteArray(Charsets.US_ASCII))
     }
 
+    @Synchronized
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         runCatching { serverSocket?.close() }

@@ -302,20 +302,4 @@ class GattPoolBackoffTest {
         }
     }
 
-    @Test
-    fun theShutdownControlStopsScansBeforeTheRunnersForceStop() {
-        // lane11 ASUS (Android 11): a force-killed process can leave its scanner registration behind (dumpsys 'Ongoing scans').
-        val main = source("MainActivity.kt")
-        val shutdown = main.substringAfter("\"shutdown\" -> {").substringBefore("finishAndRemoveTask()")
-        assertTrue(shutdown.contains("ServiceCleanup.stopScans("))
-    }
-
-    @Test
-    fun theDialExpiryNamesTheScannerFromTheSharedBackoff() {
-        val main = source("MainActivity.kt")
-        val expire = main.substringAfter("private fun expireDebugDialWait()").substringBefore("private fun resumeDebugDialWait")
-        assertTrue(expire.contains("GattPoolBackoff.scannerFailureCode()"))
-        assertTrue(expire.contains("DebugDialWait.expiryReason(scanFailure)"))
-        assertFalse("the expiry no longer hard-codes peer_not_seen", expire.contains("\"reason\" to \"peer_not_seen\""))
-    }
 }

@@ -41,6 +41,9 @@ class UpdateActivity : AppCompatActivity() {
     private var preparedNearby: PreparedUpdate? = null
     private var nearbyRelease = 0
     private var cancellable = false
+    private var awaitingInstaller = false
+    private var resumed = false
+    private val installerPoll = Runnable { waitForInstaller() }
 
     private lateinit var status: TextView
     private lateinit var detail: TextView
@@ -60,6 +63,11 @@ class UpdateActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (OfflineAppShareGate.liveSessionActive()) {
+            android.widget.Toast.makeText(this, R.string.update_busy_media, android.widget.Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_update)
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.updateRoot)) { view, insets ->
@@ -73,6 +81,7 @@ class UpdateActivity : AppCompatActivity() {
             return
         }
         build = installed
+        UpdateEngine.recoverInterruptedInstall(this)
         nearbyRelease = intent.getIntExtra(EXTRA_NEARBY_RELEASE, 0)
         status = findViewById(R.id.updateStatus)
         detail = findViewById(R.id.updateDetail)
@@ -118,13 +127,28 @@ class UpdateActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        resumed = true
         if (::build.isInitialized) {
-            render()
-            showLastInstallFailure()
-            UpdateInstallReceiver.pendingConfirm?.let { confirm ->
-                UpdateInstallReceiver.pendingConfirm = null
-                runCatching { startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            if (awaitingInstaller || UpdateEngine.installPending(this)) waitForInstaller()
+            else {
+                render()
+                showLastInstallFailure()
             }
+        }
+    }
+
+    override fun onPause() {
+        resumed = false
+        window.decorView.removeCallbacks(installerPoll)
+        super.onPause()
+    }
+
+    private fun openConfirmation() {
+        if (!resumed || OfflineAppShareGate.liveSessionActive()) return
+        UpdateInstallReceiver.pendingConfirm?.let { confirm ->
+            UpdateInstallReceiver.pendingConfirm = null
+            runCatching { startActivity(confirm) }
+                .onFailure { UpdateInstallReceiver.pendingConfirm = confirm }
         }
     }
 
@@ -159,31 +183,31 @@ class UpdateActivity : AppCompatActivity() {
         check.isEnabled = !busy
         detail.visibility = View.GONE
         primary.visibility = View.GONE
-        when {
-            busy && cancellable -> {
+        when (UpdateScreenModel.stateOf(busy, cancellable, offered, on, ready != null, newer, state.latestTag != null)) {
+            UpdateScreenState.CANCELLABLE_BUSY -> {
                 primary.setText(R.string.update_cancel)
                 primary.visibility = View.VISIBLE
                 primary.setOnClickListener { cancelled.set(true) }
             }
-            !offered -> status.setText(R.string.update_not_offered)
-            !on -> status.setText(R.string.update_online_off_status)
-            busy -> Unit
-            ready != null -> {
-                status.text = getString(R.string.update_ready, ready.versionName.ifEmpty { "" })
+            UpdateScreenState.NOT_OFFERED -> status.setText(R.string.update_not_offered)
+            UpdateScreenState.ONLINE_OFF -> status.setText(R.string.update_online_off_status)
+            UpdateScreenState.BUSY -> Unit
+            UpdateScreenState.READY -> {
+                status.text = getString(R.string.update_ready, ready!!.versionName.ifEmpty { "" })
                 detail.setText(R.string.update_ready_detail)
                 detail.visibility = View.VISIBLE
                 primary.setText(R.string.update_install)
                 primary.visibility = View.VISIBLE
-                primary.setOnClickListener { startInstall(ready) }
+                primary.setOnClickListener { startInstall(ready!!) }
             }
-            newer -> {
+            UpdateScreenState.NEWER -> {
                 status.text = getString(R.string.update_available, latest?.toString().orEmpty())
                 primary.setText(R.string.update_download_plain)
                 primary.visibility = View.VISIBLE
                 primary.setOnClickListener { startDownload() }
             }
-            state.latestTag != null -> status.text = getString(R.string.update_up_to_date, build.versionName)
-            else -> status.setText(R.string.update_not_checked_yet)
+            UpdateScreenState.UP_TO_DATE -> status.text = getString(R.string.update_up_to_date, build.versionName)
+            UpdateScreenState.NOT_CHECKED -> status.setText(R.string.update_not_checked_yet)
         }
         // The nearby card.
         findViewById<TextView>(R.id.updateNearbyFingerprint).apply {
@@ -282,7 +306,8 @@ class UpdateActivity : AppCompatActivity() {
 
     // ---- results ----
 
-    private fun handle(result: PrepareResult, nearby: Boolean = false, onReady: (PreparedUpdate) -> Unit) {
+    private fun handle(received: PrepareResult, nearby: Boolean = false, onReady: (PreparedUpdate) -> Unit) {
+        val result = UpdateScreenModel.finishPreparation(received, cancelled.get())
         if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK update_prepare: nearby=$nearby | result=${result::class.java.simpleName} ${(result as? PrepareResult.Failed)?.let { "kind=${it.kind} refusal=${it.refusal} log=${it.log}" }.orEmpty()}")
         val target = if (nearby) nearbyResult else status
         target.visibility = View.VISIBLE
@@ -301,33 +326,16 @@ class UpdateActivity : AppCompatActivity() {
         }
     }
 
-    private fun failureText(failed: PrepareResult.Failed): Int = when (failed.kind) {
-        PrepareResult.Kind.OFFLINE -> R.string.update_fail_offline
-        PrepareResult.Kind.SERVER -> R.string.update_fail_server
-        PrepareResult.Kind.RATE_LIMITED -> R.string.update_fail_rate
-        PrepareResult.Kind.NO_FILE -> R.string.update_fail_no_file
-        PrepareResult.Kind.NO_HASH -> R.string.update_fail_no_hash
-        PrepareResult.Kind.HASH_MISMATCH -> R.string.update_fail_hash
-        PrepareResult.Kind.STORAGE -> R.string.update_fail_storage
-        PrepareResult.Kind.CANCELLED -> R.string.update_fail_cancelled
-        PrepareResult.Kind.UNREADABLE -> R.string.update_fail_unreadable
-        PrepareResult.Kind.CHECKS_OFF -> R.string.update_online_off
-        PrepareResult.Kind.REFUSED -> when (failed.refusal) {
-            UpdateRefusal.WRONG_PACKAGE -> R.string.update_refused_package
-            UpdateRefusal.NOT_NEWER -> R.string.update_refused_not_newer
-            UpdateRefusal.WRONG_ABI -> R.string.update_refused_abi
-            UpdateRefusal.SIGNER_COUNT -> R.string.update_refused_signers
-            UpdateRefusal.SIGNER_NOT_INSTALLED -> R.string.update_refused_signer_installed
-            UpdateRefusal.SIGNER_NOT_PINNED -> R.string.update_refused_signer_pinned
-            UpdateRefusal.ONLINE_UPDATE_NOT_OFFERED -> R.string.update_refused_online_off
-            else -> R.string.update_refused_unreadable
-        }
-    }
+    private fun failureText(failed: PrepareResult.Failed): Int = UpdateScreenModel.failureTextRes(failed)
 
     // ---- install ----
 
     private fun startInstall(update: PreparedUpdate) {
         if (busy) return
+        if (!UpdateInstallPolicy.allowed(OfflineAppShareGate.liveSessionActive(), UpdateEngine.installPending(this))) {
+            status.setText(R.string.update_busy_media)
+            return
+        }
         if (!UpdateEngine.canInstall(this)) {
             MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.update_install_blocked_title)
@@ -346,6 +354,8 @@ class UpdateActivity : AppCompatActivity() {
             val error = try {
                 UpdateEngine.install(applicationContext, update)
                 null
+            } catch (e: UpdateBusyException) {
+                R.string.update_busy_media
             } catch (e: HashMismatchException) {
                 update.file.delete()
                 R.string.update_fail_hash
@@ -354,17 +364,32 @@ class UpdateActivity : AppCompatActivity() {
                 R.string.update_fail_storage
             }
             post {
-                setBusy(false)
                 if (error != null) {
+                    setBusy(false)
                     prepared = null
                     preparedNearby = null
                     render()
                     status.setText(error)
                 } else {
-                    status.setText(R.string.update_installing)
+                    awaitingInstaller = true
+                    waitForInstaller()
                 }
             }
         }
+    }
+
+    private fun waitForInstaller() {
+        if (isFinishing || isDestroyed || !resumed) return
+        openConfirmation()
+        if (!UpdateEngine.installPending(this)) {
+            awaitingInstaller = false
+            setBusy(false)
+            showLastInstallFailure()
+            return
+        }
+        setBusy(true, R.string.update_installing)
+        window.decorView.removeCallbacks(installerPoll)
+        window.decorView.postDelayed(installerPoll, 500L)
     }
 
     private fun showLastInstallFailure() {
@@ -373,8 +398,8 @@ class UpdateActivity : AppCompatActivity() {
         val message = prefs.getString(UpdateInstallReceiver.PREF_LAST_MESSAGE, "").orEmpty()
         prefs.edit().remove(UpdateInstallReceiver.PREF_LAST_STATUS).remove(UpdateInstallReceiver.PREF_LAST_MESSAGE).apply()
         // STATUS_FAILURE_ABORTED (the user said no) needs no explanation.
-        if (code == android.content.pm.PackageInstaller.STATUS_FAILURE_ABORTED) return
-        detail.text = getString(R.string.update_install_failed, message.ifEmpty { code.toString() })
+        val shown = UpdateScreenModel.installFailureDetail(code, message) ?: return
+        detail.text = getString(R.string.update_install_failed, shown)
         detail.visibility = View.VISIBLE
     }
 

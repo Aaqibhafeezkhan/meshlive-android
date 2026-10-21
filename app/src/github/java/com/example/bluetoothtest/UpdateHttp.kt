@@ -29,12 +29,14 @@ internal object UpdateHttp {
     class TransportException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
     /** GET [url] (an API or small text file) and return the status and at most [maxBytes] of the body. */
-    fun get(url: String, source: UpdateSource, maxBytes: Int, nowMs: Long = System.currentTimeMillis()): Answer {
-        val connection = open(url, source, accept = "application/vnd.github+json, text/plain, */*")
+    fun get(url: String, source: UpdateSource, maxBytes: Int, nowMs: Long = System.currentTimeMillis(),
+        connect: (String) -> HttpURLConnection = { URL(it).openConnection() as HttpURLConnection },
+    ): Answer {
+        val connection = open(url, source, accept = "application/vnd.github+json, text/plain, */*", connect)
         try {
             val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.use { readLimited(it, maxBytes) } ?: ByteArray(0)
+            val stream = network { if (status in 200..299) connection.inputStream else connection.errorStream }
+            val body = stream?.use { readLimited(guarded(it, { false }, 60_000L), maxBytes) } ?: ByteArray(0)
             val reset = UpdateSchedule.rateLimitReset(
                 status,
                 connection.getHeaderField("Retry-After")?.toLongOrNull(),
@@ -43,6 +45,8 @@ internal object UpdateHttp {
                 nowMs,
             )
             return Answer(status, body, reset)
+        } catch (e: IOException) {
+            throw TransportException(e.message ?: "Cannot read the response", e)
         } finally {
             connection.disconnect()
         }
@@ -59,26 +63,53 @@ internal object UpdateHttp {
         maxBytes: Long,
         expectedSize: Long,
         isCancelled: () -> Boolean,
+        connect: (String) -> HttpURLConnection = { URL(it).openConnection() as HttpURLConnection },
         onProgress: (Long) -> Unit,
     ): HashedResult {
-        val connection = open(url, source, accept = "application/octet-stream")
+        val connection = open(url, source, accept = "application/octet-stream", connect)
         try {
             val status = connection.responseCode
             if (status != 200) throw TransportException("The download answered HTTP $status")
             val announced = connection.contentLengthLong
             if (announced >= 0 && announced != expectedSize) throw TransportException("The download size differs from the release listing")
-            val guarded = object : java.io.FilterInputStream(connection.inputStream) {
-                override fun read(b: ByteArray, off: Int, len: Int): Int {
-                    if (isCancelled()) throw TransportException("Cancelled")
-                    return super.read(b, off, len)
-                }
-            }
+            val guarded = guarded(network { connection.inputStream }, isCancelled, 10 * 60_000L)
             val result = HashedCopy.copy(guarded, out, minOf(maxBytes, expectedSize), onProgress)
             if (result.bytes != expectedSize) throw TransportException("The download ended early")
             return result
         } finally {
             connection.disconnect()
         }
+    }
+
+    /** Bound trickle responses as well as idle reads. Output I/O stays outside this wrapper (disk full). */
+    internal fun guarded(
+        input: java.io.InputStream,
+        isCancelled: () -> Boolean,
+        budgetMs: Long,
+        nanoTime: () -> Long = System::nanoTime,
+    ): java.io.InputStream {
+        val start = nanoTime()
+        return object : java.io.FilterInputStream(input) {
+            private fun check() {
+                if (isCancelled()) throw TransportException("Cancelled")
+                if ((nanoTime() - start) / 1_000_000 >= budgetMs) throw TransportException("The download took too long")
+            }
+            override fun close() = network { input.close() }
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                check()
+                val count = network { input.read(b, off, len) }
+                check()
+                return count
+            }
+        }
+    }
+
+    private inline fun <T> network(block: () -> T): T = try {
+        block()
+    } catch (e: TransportException) {
+        throw e
+    } catch (e: IOException) {
+        throw TransportException(e.javaClass.simpleName + ": " + (e.message ?: "network error"), e)
     }
 
     private fun readLimited(input: java.io.InputStream, maxBytes: Int): ByteArray {
@@ -94,14 +125,14 @@ internal object UpdateHttp {
     }
 
     /** Opens [url] and follows allowed redirects; the returned connection has its status line read. */
-    private fun open(url: String, source: UpdateSource, accept: String): HttpURLConnection {
+    private fun open(url: String, source: UpdateSource, accept: String, connect: (String) -> HttpURLConnection): HttpURLConnection {
         var current = url
         repeat(MAX_REDIRECTS + 1) {
             if (current != url && !source.isAllowedRedirect(current)) {
                 throw TransportException("Redirect to a host the updater does not use")
             }
             val connection = try {
-                URL(current).openConnection() as HttpURLConnection
+                connect(current)
             } catch (e: IOException) {
                 throw TransportException("Cannot open the connection", e)
             } catch (e: ClassCastException) {

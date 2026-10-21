@@ -161,6 +161,53 @@ class AudioCapturePolicyTest {
     }
 
     @Test
+    fun quietRoomNoiseSuppressionZerosNeverConfirmABlankCapture() {
+        // F18 (S24/M31 VOICE_COMMUNICATION in a quiet room): 2-6 s zero runs between short bursts of signal, for minutes.
+        val evidence = BlankCaptureEvidence(frameMs = 20)
+        repeat(60) {
+            repeat(5) { assertEquals(BlankCaptureEvidence.Verdict.NONE, evidence.onFrame(40)) }
+            repeat(300) { assertEquals(BlankCaptureEvidence.Verdict.NONE, evidence.onFrame(0)) } // 6 s of zeros
+        }
+        // The 2 s episode still happens (diagnostic line), but its notice waits for evidence.
+        assertNull(SilenceClassifier.episodeNotice(SilenceCause.BLANK_CAPTURE, micToggleSupported = true, evidence = true))
+        assertEquals(
+            "control arm: the old 2 s warning",
+            AudioCaptureNotice.CAPTURE_SILENT,
+            SilenceClassifier.episodeNotice(SilenceCause.BLANK_CAPTURE, micToggleSupported = true, evidence = false),
+        )
+        assertEquals(
+            "the platform's own silencing is told at once",
+            AudioCaptureNotice.MIC_PRIVACY_SWITCH,
+            SilenceClassifier.episodeNotice(SilenceCause.SYSTEM_SILENCED, micToggleSupported = true, evidence = true),
+        )
+    }
+
+    @Test
+    fun aDeadCapturePathIsConfirmedOnceByNoSignalOrALongZeroRun() {
+        // No signal since the recorder started: 8 s.
+        val fresh = BlankCaptureEvidence(frameMs = 20)
+        repeat(399) { assertEquals(BlankCaptureEvidence.Verdict.NONE, fresh.onFrame(0)) }
+        assertEquals(BlankCaptureEvidence.Verdict.NEVER_SIGNAL, fresh.onFrame(0))
+        assertEquals(8_000L, fresh.zeroMs)
+        repeat(2_000) { assertEquals("once per run", BlankCaptureEvidence.Verdict.NONE, fresh.onFrame(0)) }
+
+        // A path that dies mid-call: one 30 s zero run.
+        val midCall = BlankCaptureEvidence(frameMs = 20)
+        assertEquals(BlankCaptureEvidence.Verdict.NONE, midCall.onFrame(500))
+        repeat(1_499) { assertEquals(BlankCaptureEvidence.Verdict.NONE, midCall.onFrame(0)) }
+        assertEquals(BlankCaptureEvidence.Verdict.PERSISTENT, midCall.onFrame(0))
+
+        // A relaxed source is a new stream and must show signal again.
+        midCall.reset()
+        repeat(399) { midCall.onFrame(0) }
+        assertEquals(BlankCaptureEvidence.Verdict.NEVER_SIGNAL, midCall.onFrame(0))
+
+        AudioSwitches.captureSilenceEvidence = false
+        assertFalse("DEBUG control arm", AudioSwitches.captureSilenceEvidence)
+        AudioSwitches.captureSilenceEvidence = true
+    }
+
+    @Test
     fun aQuietButNotZeroMicrophoneNeverCountsAsSilence() {
         val detector = CaptureSilenceDetector(frameMs = 20)
         repeat(1_000) { assertFalse(detector.onFrame(1)) }

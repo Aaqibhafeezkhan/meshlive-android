@@ -1370,3 +1370,70 @@ class GracefulStopLateRelaunchTest(unittest.TestCase):
         last_stop = max(i for i, c in enumerate(calls) if c[:3] == ("shell", "am", "force-stop"))
         later_pidofs = [c for c in calls[last_stop:] if c[:2] == ("shell", "pidof")]
         self.assertGreaterEqual(len(later_pidofs), 2)
+
+
+class CleanShutdownTest(unittest.TestCase):
+    """ASUS uncleanExits=99: drivers force-stopped the app while it scanned. The clean shutdown comes first."""
+
+    def test_broadcast_arguments_and_done_line_match_only_their_nonce(self):
+        self.assertEqual(
+            ("shell", "am", "broadcast", "-a", "com.example.bluetoothtest.debug.CLEAN_SHUTDOWN", "-p", runner.PACKAGE,
+             "--es", "nonce", "r7"),
+            runner.clean_shutdown_broadcast_args("r7"),
+        )
+        line = "I BluetoothVideo: BENCHMARK clean_shutdown: done | nonce=r12 | settled=true | scanners=0 | advertisers=0"
+        self.assertTrue(runner.clean_shutdown_done(line, "r12"))
+        self.assertFalse(runner.clean_shutdown_done(line, "r1"))
+        self.assertFalse(runner.clean_shutdown_done(None, "r12"))
+
+    def _stub(self, done_logged):
+        calls = []
+        state = {"nonce": None}
+
+        def adb(phone, *args, timeout=None):
+            calls.append(args)
+            if args[:2] == ("shell", "pidof"):
+                return "4242" if len([c for c in calls if c[:2] == ("shell", "pidof")]) == 1 else ""
+            if args[:3] == ("shell", "am", "broadcast"):
+                state["nonce"] = args[-1]
+            if args[:2] == ("shell", "logcat") and done_logged and state["nonce"]:
+                return f"BENCHMARK clean_shutdown: done | nonce={state['nonce']} | settled=true | scanners=0"
+            return ""
+
+        stub = Mock(adb=adb, events=[])
+        stub.clean_shutdown = lambda phone, wait_s=3.0: runner.Runner.clean_shutdown(stub, phone, wait_s)
+        return stub, calls
+
+    def test_a_build_with_the_control_is_shut_down_cleanly_before_the_force_stop(self):
+        stub, calls = self._stub(done_logged=True)
+        with patch.object(runner.time, "sleep"):
+            runner.Runner.graceful_stop(stub, "asus", wait_s=1.0)
+        kinds = [c[:3] for c in calls]
+        self.assertIn(("shell", "am", "broadcast"), kinds)
+        self.assertNotIn(("shell", "am", "start"), kinds)
+        self.assertLess(kinds.index(("shell", "am", "broadcast")), kinds.index(("shell", "am", "force-stop")))
+        self.assertEqual([True], [e["done"] for e in stub.events if e["action"] == "clean_shutdown"])
+
+    def test_an_older_build_without_the_control_gets_the_former_shutdown_intent(self):
+        stub, calls = self._stub(done_logged=False)
+        with patch.object(runner.time, "sleep"):
+            runner.Runner.graceful_stop(stub, "asus", wait_s=0.5)
+        kinds = [c[:3] for c in calls]
+        self.assertIn(("shell", "am", "broadcast"), kinds)
+        self.assertIn(("shell", "am", "start"), kinds)
+        self.assertIn(("shell", "am", "force-stop"), kinds)
+        self.assertEqual([False], [e["done"] for e in stub.events if e["action"] == "clean_shutdown"])
+
+    def test_an_app_that_is_not_running_is_never_relaunched(self):
+        calls = []
+
+        def adb(phone, *args, timeout=None):
+            calls.append(args)
+            return ""
+
+        stub = Mock(adb=adb, events=[])
+        with patch.object(runner.time, "sleep"):
+            runner.Runner.graceful_stop(stub, "asus", wait_s=0.5)
+        kinds = [c[:3] for c in calls]
+        self.assertNotIn(("shell", "am", "broadcast"), kinds)
+        self.assertNotIn(("shell", "am", "start"), kinds)

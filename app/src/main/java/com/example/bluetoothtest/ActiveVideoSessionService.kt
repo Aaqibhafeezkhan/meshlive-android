@@ -26,7 +26,7 @@ class ActiveVideoSessionService : Service() {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ID,
-                    "Active Bluetooth video",
+                    getString(R.string.session_channel_name),
                     NotificationManager.IMPORTANCE_LOW,
                 ),
             )
@@ -56,7 +56,7 @@ class ActiveVideoSessionService : Service() {
         )
         val notification = if (audioMode == AudioLiveServiceMode.LISTEN) buildListenNotification(pendingIntent) else NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_meshlive)
-            .setContentTitle("Bluetooth video is active")
+            .setContentTitle(getString(R.string.session_notification_title))
             .setContentText(
                 NotificationPrivacy.sessionContentText(
                     statusText ?: if (usesCamera) {
@@ -93,7 +93,7 @@ class ActiveVideoSessionService : Service() {
                 }
             }
             .let { builder ->
-                // Lock screen: "Bluetooth Video / Active" only (NotificationPrivacy) unless the user opted in to names there.
+                // Lock screen: "MeshLive / Active" only (NotificationPrivacy) unless the user opted in to names there.
                 NotificationPrivacy.apply(
                     builder,
                     this,
@@ -152,14 +152,37 @@ class ActiveVideoSessionService : Service() {
      * and a visible notice for the user. Any other exception (manifest bugs) propagates.
      */
     private fun startForegroundWithFallback(notification: android.app.Notification, serviceType: Int): ForegroundServiceOutcome {
-        val outcome = ForegroundStartSequence(
+        // Android 14+: a camera/microphone type without its runtime permission is not asked for (it would throw and close
+        // the app); the session keeps its other types and the user is told which permission is off.
+        val (askFor, permissionOff) = ServiceTypePolicy.withoutUngrantedTypes(
+            Build.VERSION.SDK_INT,
+            serviceType,
+            cameraGranted = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
+            microphoneGranted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
+        )
+        if (permissionOff != 0) logRefusedTypes(ServiceTypePolicy.refusedLine(permissionOff, "permission_off", "precheck"))
+        val started = ForegroundStartSequence(
             start = { types -> ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, types) },
             fallbackEnabled = { foregroundFallbackEnabled() },
             isRefusal = { error -> isForegroundRefusal(error) },
-        ).run(serviceType)
+            onTypeRefused = { types -> logRefusedTypes(ServiceTypePolicy.refusedLine(types, "security_exception", "start")) },
+        ).run(askFor)
+        val outcome = if (permissionOff == 0) {
+            started
+        } else {
+            started.copy(
+                requestedTypes = serviceType,
+                refused = listOfNotNull("permission off: ${foregroundTypeLabels(permissionOff)}", started.refused).joinToString("; "),
+                permissionOffTypes = permissionOff,
+            )
+        }
         publish(outcome)
         if (outcome.effectiveTypes == 0) stopSelf()
         return outcome
+    }
+
+    private fun logRefusedTypes(line: String) {
+        try { android.util.Log.i("BluetoothVideo", "BENCHMARK $line") } catch (_: RuntimeException) {}
     }
 
     /** `BENCHMARK fgs_start`: types actually held, startForegroundService-to-startForeground latency, qualifying permissions. */

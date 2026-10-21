@@ -12,6 +12,16 @@ class StatusIndicatorTest {
     ) = statusKind(readiness, hidden, paused, hot)
 
     @Test
+    fun streamsExplainWhyCallsArePausedAndControlKeepsOldStatus() {
+        for ((screen, expected) in listOf(ReachabilityScreen.WATCH to StatusKind.WATCHING, ReachabilityScreen.LIVE to StatusKind.LIVE)) {
+            assertEquals(expected, statusKind(HomeReadiness.READY, false, false, false, screen))
+            assertEquals(StatusKind.READY, statusKind(HomeReadiness.READY, false, false, false, screen, honest = false))
+            assertEquals(StatusKind.PERMISSIONS, statusKind(HomeReadiness.PERMISSIONS_NEEDED, false, false, false, screen))
+        }
+        assertEquals(StatusKind.READY, statusKind(HomeReadiness.READY, false, false, false, ReachabilityScreen.LIVE_BROWSING))
+    }
+
+    @Test
     fun readyWhenNothingIsWrong() {
         assertEquals(StatusKind.READY, kind())
     }

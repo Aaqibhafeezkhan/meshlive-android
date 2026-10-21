@@ -21,6 +21,9 @@ import kotlin.concurrent.thread
 class UpdateInstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+        val prefs = context.getSharedPreferences(UpdateSettings.PREFERENCES_FILE, Context.MODE_PRIVATE)
+        val sessionId = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1)
+        if (sessionId != prefs.getInt(PREF_SESSION, -1) || sessionId < 0) return
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty()
         if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK update_install: status=$status | message=$message")
         when (status) {
@@ -31,18 +34,16 @@ class UpdateInstallReceiver : BroadcastReceiver() {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra(Intent.EXTRA_INTENT)
                 }
-                // Kept only when Android's background-start rules blocked it: the update screen reopens it (review F12).
-                val launched = confirm != null &&
-                    runCatching { context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                        .onFailure { Log.w("BluetoothVideo", "Update confirmation could not open: ${it.message}") }
-                        .isSuccess
-                pendingConfirm = if (launched) null else confirm
+                // Only the resumed update activity opens this. A receiver's startActivity can be silently
+                // suppressed by background-start restrictions even when it throws no exception.
+                pendingConfirm = confirm
             }
             else -> {
                 pendingConfirm = null
                 // Success replaces this process before the broadcast is seen; a failure is shown the next time
                 // the update screen opens.
                 context.getSharedPreferences(UpdateSettings.PREFERENCES_FILE, Context.MODE_PRIVATE).edit()
+                    .remove(PREF_SESSION)
                     .putInt(PREF_LAST_STATUS, status)
                     .putString(PREF_LAST_MESSAGE, message.take(200))
                     .apply()
@@ -51,6 +52,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
     }
 
     companion object {
+        const val PREF_SESSION = "update_install_session"
         const val PREF_LAST_STATUS = "update_last_install_status"
         const val PREF_LAST_MESSAGE = "update_last_install_message"
 
@@ -65,6 +67,17 @@ class UpdateInstallReceiver : BroadcastReceiver() {
  * installed copy carries the release key; it asks the schedule in [UpdateEngine.check] first, so the
  * app, this job and a manual tap together make at most one request a day.
  */
+/** What the daily check needs from the system scheduler. */
+internal interface DailyJobPort {
+    fun isPending(): Boolean
+    fun cancel()
+
+    /** Throws when the system refuses the job (Android 14+: a network-constrained job without ACCESS_NETWORK_STATE). */
+    fun schedule()
+}
+
+internal enum class DailyJobResult { CANCELLED, ALREADY_ARMED, SCHEDULED, REFUSED }
+
 class UpdateJobService : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         thread(name = "update-check") {
@@ -84,18 +97,45 @@ class UpdateJobService : JobService() {
 
         fun schedule(context: Context, enabled: Boolean) {
             val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
+            arm(
+                object : DailyJobPort {
+                    override fun isPending(): Boolean = scheduler.getPendingJob(JOB_ID) != null
+
+                    override fun cancel() = scheduler.cancel(JOB_ID)
+
+                    override fun schedule() {
+                        val job = JobInfo.Builder(JOB_ID, ComponentName(context, UpdateJobService::class.java))
+                            .setPeriodic(UpdateSchedule.DAY_MS)
+                            // Needs ACCESS_NETWORK_STATE (github manifest): Android 14+ throws SecurityException without it.
+                            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                            .setRequiresBatteryNotLow(true)
+                            .setPersisted(false)
+                            .build()
+                        check(scheduler.schedule(job) == JobScheduler.RESULT_SUCCESS) { "JobScheduler refused the update job" }
+                    }
+                },
+                enabled,
+            ) { android.util.Log.w("BluetoothVideo", "BENCHMARK update_job: event=refused | error=${it.javaClass.simpleName}") }
+        }
+
+        /**
+         * The arming decision without the JobScheduler (tested with a port that refuses). A refused daily check must
+         * never take the app down (it runs at every start while the switch is on); the manual "Check now" and the
+         * start-up check still work without the job.
+         */
+        internal fun arm(port: DailyJobPort, enabled: Boolean, onRefused: (Throwable) -> Unit): DailyJobResult {
             if (!enabled) {
-                scheduler.cancel(JOB_ID)
-                return
+                port.cancel()
+                return DailyJobResult.CANCELLED
             }
-            if (scheduler.getPendingJob(JOB_ID) != null) return
-            val job = JobInfo.Builder(JOB_ID, ComponentName(context, UpdateJobService::class.java))
-                .setPeriodic(UpdateSchedule.DAY_MS)
-                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                .setRequiresBatteryNotLow(true)
-                .setPersisted(false)
-                .build()
-            scheduler.schedule(job)
+            if (port.isPending()) return DailyJobResult.ALREADY_ARMED
+            return runCatching { port.schedule() }.fold(
+                onSuccess = { DailyJobResult.SCHEDULED },
+                onFailure = {
+                    onRefused(it)
+                    DailyJobResult.REFUSED
+                },
+            )
         }
     }
 }

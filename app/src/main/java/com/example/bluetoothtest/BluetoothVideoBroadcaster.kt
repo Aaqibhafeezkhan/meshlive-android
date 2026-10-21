@@ -66,7 +66,10 @@ class BluetoothVideoBroadcaster(
      */
     private val gattPoolKeys = ConcurrentHashMap.newKeySet<String>()
     private val gattCharges = ConcurrentHashMap<String, Double>()
-    private val gattRefusals = ConcurrentHashMap<String, Pair<Long, StreamGattFallback.GattChildVerdict>>()
+    /** Bounded and swept (Design QV review 1, R3); every access holds its monitor. */
+    private val gattRefusals = BoundedExpiringMap<StreamGattFallback.GattChildVerdict>(SourceCapacityRejectionPolicy.MAX_ENTRIES)
+    /** R3: new pre-authentication attempts per window and their order ([PreAuthAdmissionGate]). */
+    private val preAuthGate = PreAuthAdmissionGate()
     @Volatile private var gattPoolCapacity = 0
 
     private fun gattChargedKbps(): Double = gattCharges.values.sum()
@@ -174,6 +177,22 @@ class BluetoothVideoBroadcaster(
                 )
             }
             .sortedByDescending { recoveryPreviousSenderKey(it) != null }
+            .let { candidates ->
+                // R3: at most a few new pre-authentication attempts per window, oldest request key first; the rest wait
+                // for the next scan without a capacity cooldown. Recovery requests keep their place and are not counted.
+                val selection = preAuthGate.select(
+                    candidates, ::peerIdentityKey, { recoveryPreviousSenderKey(it) != null }, maximumChildren, System.nanoTime(),
+                )
+                if (selection.deferred.isNotEmpty()) {
+                    android.util.Log.i(
+                        "BluetoothVideo",
+                        (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                            "viewer_admission: deferred=${selection.deferred.size} | chosen=${selection.chosen.size} | " +
+                            "tracked=${preAuthGate.trackedKeys}",
+                    )
+                }
+                selection.chosen
+            }
         var availableSlots = (maximumChildren - primarySenderCount()).coerceAtLeast(0)
         var recoveryProbeAdmitted = false
         val admittedPeers = mutableListOf<BleL2capPeer>()
@@ -231,7 +250,8 @@ class BluetoothVideoBroadcaster(
                 onStatus = { message -> onStatus("${peer.label.substringBefore(" (")}: $message") },
                 onDisconnected = {
                     if (senders.remove(peerKey, sender)) {
-                        connectedPeers.remove(peerKey)
+                        // R3: an attempt that never authenticated moves this key behind untried ones for a while.
+                        if (!connectedPeers.remove(peerKey)) preAuthGate.onPreAuthFailure(peerKey, System.nanoTime())
                         gattPoolKeys.remove(peerKey)
                         gattCharges.remove(peerKey)
                         onConnectionsChanged(connectedPeers.size)
@@ -266,6 +286,7 @@ class BluetoothVideoBroadcaster(
                 return@forEach
             }
             timeoutHandler.removeCallbacks(allDisconnectedRunnable)
+            if (recoveryPreviousSenderKey(peer) == null) preAuthGate.noteAttempt(peerKey, System.nanoTime())
             connectingAttempts[peerKey] = sender
             sender.connect(
                 context,
@@ -480,8 +501,9 @@ class BluetoothVideoBroadcaster(
                 connectedPeers.clear()
                 gattPoolKeys.clear()
                 gattCharges.clear()
-                gattRefusals.clear()
+                synchronized(gattRefusals) { gattRefusals.clear() }
                 capacityRejections.clear()
+                preAuthGate.clear()
             }
         }
         active.forEach(BluetoothVideoSender::endStream)
@@ -522,8 +544,9 @@ class BluetoothVideoBroadcaster(
         connectedPeers.clear()
         gattPoolKeys.clear()
         gattCharges.clear()
-        gattRefusals.clear()
+        synchronized(gattRefusals) { gattRefusals.clear() }
         capacityRejections.clear()
+        preAuthGate.clear()
         active.forEach(BluetoothVideoSender::close)
         onConnectionsChanged(0)
     }
@@ -603,12 +626,15 @@ class BluetoothVideoBroadcaster(
 
     /** True while a refusal of this GATT request still holds (30 s, or until the pool has room again after "pool full"). */
     private fun gattRefusalHolds(key: String, nowNs: Long, capacity: Int): Boolean {
-        val (untilNs, verdict) = gattRefusals[key] ?: return false
-        if (nowNs >= untilNs || (verdict == StreamGattFallback.GattChildVerdict.REFUSE_POOL_FULL && gattPoolKeys.size < capacity)) {
-            gattRefusals.remove(key)
-            return false
+        synchronized(gattRefusals) {
+            val untilNs = gattRefusals.deadline(key) ?: return false
+            val verdict = gattRefusals.peek(key) ?: return false
+            if (nowNs >= untilNs || (verdict == StreamGattFallback.GattChildVerdict.REFUSE_POOL_FULL && gattPoolKeys.size < capacity)) {
+                gattRefusals.remove(key)
+                return false
+            }
+            return true
         }
-        return true
     }
 
     /**
@@ -644,11 +670,14 @@ class BluetoothVideoBroadcaster(
             if (admission.verdict.admit) {
                 gattPoolKeys += key
                 gattCharges[key] = admission.chargeKbps
-                gattRefusals.remove(key)
+                synchronized(gattRefusals) { gattRefusals.remove(key) }
                 admittedPeers += peer
                 lastAdmissionRefreshNs = 0L // re-plan the L2CAP fan-out with the new charge at the next frame
             } else {
-                gattRefusals[key] = System.nanoTime() + GATT_REFUSAL_COOLDOWN_NS to admission.verdict
+                val nowNs = System.nanoTime()
+                synchronized(gattRefusals) {
+                    gattRefusals.put(key, admission.verdict, nowNs + GATT_REFUSAL_COOLDOWN_NS, nowNs)
+                }
                 onStatus(StreamGattFallback.refusalStatus(admission.verdict))
             }
         }

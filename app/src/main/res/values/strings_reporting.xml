@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="report_action">Report</string>
+    <string name="hide_livestream">Hide this livestream</string>
+    <string name="report_done">Blocked and hidden on this phone.</string>
+    <string name="report_tell_meshlive">Tell MeshLive</string>
+    <string name="contact_us">Contact us</string>
+    <string name="contact_us_subtitle">Questions, problems or safety concerns</string>
+    <string name="contact_email" translatable="false">meshlive.dev@gmail.com</string>
+</resources>

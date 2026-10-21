@@ -4,7 +4,7 @@ import android.content.Intent
 
 /**
  * Switches of the reliability-banner and OEM-guidance batch (device-family backlog B2). The register of
- * experimental and optional behaviour is docs/SWITCHES.md; this object is where the defaults live.
+ * experimental and optional behaviour is docs/dev/switches.md; this object is where the defaults live.
  *
  * Everything that is plain guidance text or a read-only diagnostic ships ON and has its own registry off-switch
  * (`test_device_policy_off=<entry id>`). Only an arm that touches a private API is a launch extra, DEBUG only (a

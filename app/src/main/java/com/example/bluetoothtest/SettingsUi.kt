@@ -36,5 +36,5 @@ internal enum class SettingsPage(val viewId: Int, val titleRes: Int, val parent:
     HELP(R.id.settingsPageHelp, R.string.help_title, MAIN),
 }
 
-/** The four tabs of the bottom navigation. */
-internal enum class MainTab { LIVE, CALLS, CONTACTS, SETTINGS }
+/** The tabs of the bottom navigation (Chats only with the Experimental messages switch on, [ChatTab]). */
+internal enum class MainTab { LIVE, CALLS, CHATS, CONTACTS, SETTINGS }

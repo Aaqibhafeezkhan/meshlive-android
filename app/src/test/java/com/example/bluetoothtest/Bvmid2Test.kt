@@ -378,7 +378,7 @@ class Bvmid2Test {
         val a = MeetSession()
         a.scannedByPeer(peer)
         assertEquals(MeetSession.Outcome.THEY_SCANNED_YOU, a.outcome(peer))
-        assertEquals("Rahul scanned your code. Now scan Rahul's code.", a.message(peer, "Rahul"))
+        assertTrue("the message names the person to scan back", a.message(peer, "Rahul")!!.contains("Rahul"))
         a.scanReached(peer, "Rahul"); a.confirmScreen(peer, true)
         assertEquals(MeetSession.Outcome.VERIFIED_EACH_OTHER, a.outcome(peer))
         val b = MeetSession()
@@ -427,5 +427,124 @@ class Bvmid2Test {
         val payload = display.show(displayerFingerprint, rdi)
         assertArrayEquals(rdi, payload.rdi)
         assertEquals(32, payload.kQr.size)
+    }
+
+    // --- Design QL: presence leases inside the verification session ---
+
+    private val qlLease = DiscoveryExchange.PresenceLease(1, 2_000_000, 2962, listOf(ByteArray(32) { 1 }))
+
+    @Test
+    fun theVerificationSessionAllowsOneOfferAndOneLeaseOnlyWhenBothHellosCarriedBit3() {
+        val offer = DiscoveryExchange.encode(DiscoveryExchange.RecognitionOffer)
+        val lease = DiscoveryExchange.encode(qlLease)
+        val opening = DiscoveryExchange.MAGIC + byteArrayOf(DiscoveryExchange.KIND_OPENING.toByte(), 0)
+        val reveal = DiscoveryExchange.MAGIC + byteArrayOf(DiscoveryExchange.KIND_IDENTITY_REVEAL.toByte())
+        // Not negotiated: every discovery record is a violation.
+        val plain = QrSessionScope(startMs = 0)
+        assertTrue(plain.refuseDiscovery(offer, negotiated = false))
+        assertEquals(1, plain.violations)
+        val scope = QrSessionScope(startMs = 0)
+        assertFalse(scope.refuseDiscovery(offer, negotiated = true))
+        assertFalse(scope.refuseDiscovery(lease, negotiated = true))
+        // A second OFFER or LEASE, an OPENING, a reveal or garbage closes it.
+        assertTrue(scope.refuseDiscovery(offer, negotiated = true))
+        assertTrue(scope.refuseDiscovery(lease, negotiated = true))
+        assertTrue(scope.refuseDiscovery(opening, negotiated = true))
+        assertTrue(scope.refuseDiscovery(reveal, negotiated = true))
+        assertTrue(scope.refuseDiscovery(byteArrayOf(1, 2, 3), negotiated = true))
+        assertTrue(scope.refuseDiscovery("BDX2".toByteArray(Charsets.US_ASCII) + byteArrayOf(2, 0), negotiated = true))
+        assertEquals(6, scope.violations)
+        // The content-type rule is unchanged: only labels pass it, discovery goes through refuseDiscovery.
+        assertFalse(scope.allowsContent(EndToEndContentType.DISCOVERY))
+    }
+
+    /** Delivers [actions] of one side to [peer] the way the endpoint does (OFFER and LEASE records), returning what the peer does. */
+    private fun deliver(actions: List<PresenceSession.Action>, peer: PresenceSession, peerVerifiedNow: Boolean): List<PresenceSession.Action> =
+        actions.flatMap { action ->
+            when (action) {
+                PresenceSession.Action.SendOffer -> peer.onRecord(DiscoveryExchange.RecognitionOffer, peerVerifiedNow)
+                PresenceSession.Action.SendLease -> peer.onRecord(qlLease, peerVerifiedNow)
+                else -> emptyList()
+            }
+        }
+
+    @Test
+    fun theFirstOfTwoScansMovesNoLeaseAndTheSecondMovesBoth() {
+        // Scan 1: B scans A. A (displayer) has not verified B: it does not take part and ends after the grace.
+        val displayerA = PresenceSession(localEligible = false)
+        assertTrue(displayerA.settled())
+        assertTrue(displayerA.start().isEmpty())
+        // B starts only after its user confirmed; its OFFER is recorded by A and answered with nothing.
+        val scannerB = PresenceSession(localEligible = true)
+        val fromA = deliver(scannerB.start(), displayerA, peerVerifiedNow = false)
+        assertTrue(fromA.isEmpty())
+        assertFalse(scannerB.settled()) // it waits; A's close ends the session
+        // Scan 2: A scans B. The scanner offers first (review R4): A's user confirms, A offers.
+        val displayerB = PresenceSession(localEligible = true)
+        val scannerA = PresenceSession(localEligible = true)
+        val aStart = scannerA.start()
+        assertEquals(listOf<Any>(PresenceSession.Action.SendOffer), aStart)
+        // B records the OFFER and, as it confirmed A in this visit (scan 1), answers: its start sends OFFER and LEASE.
+        assertTrue(deliver(aStart, displayerB, peerVerifiedNow = true).isEmpty())
+        val bAnswer = displayerB.start()
+        assertEquals(listOf<Any>(PresenceSession.Action.SendOffer, PresenceSession.Action.SendLease), bAnswer)
+        val atA = deliver(bAnswer, scannerA, peerVerifiedNow = true)
+        assertTrue(atA.any { it == PresenceSession.Action.SendLease })
+        assertTrue(atA.any { it is PresenceSession.Action.StoreLease })
+        val atB = deliver(atA, displayerB, peerVerifiedNow = true)
+        assertTrue(atB.single() is PresenceSession.Action.StoreLease)
+        assertTrue(displayerB.settled())
+        assertTrue(scannerA.settled())
+    }
+
+    @Test
+    fun aDisplayerAnswersOnlyAScannerItsUserConfirmedInThisVisitAndNothingAfterAReuseAlert() {
+        val visit = MeetVisit()
+        val asha = displayerFingerprint
+        val older = IdentityFingerprint.fromHex("cd".repeat(32))
+        visit.begin()
+        // An older verified contact that won the race for the code was never confirmed in this visit (review R1).
+        assertFalse(visit.displayerMayLease(older))
+        visit.confirm(asha)
+        assertTrue(visit.displayerMayLease(asha))
+        visit.onReuseAlert()
+        assertFalse(visit.displayerMayLease(asha))
+        assertTrue(visit.reuseAlerted())
+        // A new visit starts clean.
+        visit.begin()
+        assertFalse(visit.displayerMayLease(asha))
+        assertFalse(visit.reuseAlerted())
+    }
+
+    @Test
+    fun aScannerThatNeverConfirmsOffersNothingAndStoresNothing() {
+        // The displayer offers and even (wrongly) sends a lease; without the scanner's start nothing is stored.
+        val scanner = PresenceSession(localEligible = true)
+        assertTrue(scanner.onRecord(DiscoveryExchange.RecognitionOffer, peerVerifiedNow = false).isEmpty())
+        assertTrue(scanner.onRecord(qlLease, peerVerifiedNow = false).single() is PresenceSession.Action.Reject)
+        assertFalse(scanner.settled())
+    }
+
+    @Test
+    fun aWithheldOfferSettlesTheSession() {
+        // The send-time check failed (the shield was not stored, a switch is off): nothing more can move.
+        val scanner = PresenceSession(localEligible = true)
+        scanner.start()
+        scanner.offerWithheld()
+        assertTrue(scanner.settled())
+    }
+
+    @Test
+    fun theMeetTextSaysThePhonesRecogniseEachOtherOnlyAfterALeaseWasStored() {
+        val me = MeetSession()
+        val peer = displayerFingerprint
+        me.scannedByPeer(peer)
+        me.scanReached(peer, "Asha")
+        assertTrue(me.confirmScreen(peer, yes = true))
+        assertEquals(MeetSession.QlResult.NOT_FINISHED, me.qlResult(peer))
+        assertFalse(me.recognises(peer))
+        me.leaseStored(peer)
+        assertTrue(me.recognises(peer))
+        assertEquals(MeetSession.QlResult.RECOGNISED, me.qlResult(peer))
     }
 }

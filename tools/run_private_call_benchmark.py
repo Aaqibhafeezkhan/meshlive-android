@@ -67,6 +67,11 @@ def broadcast_shape(case, phone):
         # Debug launch extras apply to both endpoints; dropping them here ran every call A/B arm
         # (for example test_call_ladder_from_request or test_bounded_media_age) at the app default.
         result["tunables"] = dict(case["tunables"])
+    per_phone = case.get("phone_tunables")
+    if isinstance(per_phone, dict) and isinstance(per_phone.get(phone), dict):
+        # One endpoint only (for example the link-renewal A/B's stall hook): merged over the shared tunables.
+        # A malformed value is left to validate_intercom_case, which refuses it.
+        result["tunables"] = {**result.get("tunables", {}), **per_phone[phone]}
     return result
 
 

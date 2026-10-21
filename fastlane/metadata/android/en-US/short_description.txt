@@ -1,1 +1,1 @@
-Voice and video calls, live video and radio between nearby phones. No internet.
+Calls, chats and livestreams over a Bluetooth mesh. No internet, no account.

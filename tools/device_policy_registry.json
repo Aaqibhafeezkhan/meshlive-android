@@ -1206,7 +1206,7 @@
       "area": "CODEC",
       "validation": "EXPERIMENTAL",
       "fallback": "",
-      "evidence": ["docs/DECISIONS.md row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300)", "benchmarks/runs/lane-b-burst-r1-529f36cc"],
+      "evidence": ["docs/dev/decisions/README.md row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300)", "benchmarks/runs/lane-b-burst-r1-529f36cc"],
       "confidence": "LOW",
       "confidence_note": "",
       "reviewed": "2026-10-09",
@@ -1342,7 +1342,7 @@
       "area": "CODEC",
       "validation": "EXPERIMENTAL",
       "fallback": "Off (default): EncoderBitrateAdjuster (DynamicBitrateAdjuster port) as today.",
-      "evidence": ["docs/DECISIONS.md row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300: overshoot)", "benchmarks/runs/xpair-s24m31-431d40dc (M31 OMX.Exynos.VP9 720 kbps for a 401-515 kbps target)"],
+      "evidence": ["docs/dev/decisions/README.md row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300: overshoot)", "benchmarks/runs/xpair-s24m31-431d40dc (M31 OMX.Exynos.VP9 720 kbps for a 401-515 kbps target)"],
       "confidence": "LOW",
       "confidence_note": "WebRTC scope is exact; it targets undershoot after FPS drops, while our measured M31 problem is overshoot at a fixed FPS (KEY_MAX_FPS_TO_ENCODER already caps the cadence), so the measured DynamicBitrateAdjuster port stays the default",
       "reviewed": "2026-10-10",
@@ -2972,6 +2972,62 @@
       "off_switch": "test_device_policy_off=gatt-refresh-before-discovery",
       "legacy_switches": [],
       "origin": "Backlog G-15."
+    },
+    {
+      "id": "android11-gatt-server-connection-untracked",
+      "title": "Android 10-11: a GATT server's connection can be missing from the stack's server map (no answers to that client)",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": ["LEGACY_29_30"],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "stack [LEGACY_29_30]",
+      "component": null,
+      "effects": ["after a client connects, a PHY read unanswered for 400 ms means the stack lost the server's connection record: cancel the connection and register the server again", "after a client subscribed, no data write for 1200 ms means the stack drops this connection's writes before the app: cancel the connection and register the server again (never after any data arrived)", "a re-registration replaces only the GATT server and keeps the running advertising set (same address); after a subscribe the set stays on until the first data write; a rotating-ID epoch change always stops it"],
+      "behaviour": "After a client connects to the advertising call listener, the server reads the link's PHY; a healthy stack answers in 5-10 ms. When no PHY answer comes within 400 ms the stack has no record of this connection for the server, so every response would go to connection 0 and the client's subscribe would hang to its timeout: the server logs gatt_server_connection_untracked, cancels the connection and registers itself again (close, open, add the service, advertise). The client's retry then reaches a freshly registered server. Only the advertising listener is watched (the dual-listening second server also hears links it does not own). Newer stacks may never call back a PHY read (AdaptivePhy's Android 13 backstop), so the watch is limited to the legacy stack. Second stage: after the client's subscribe is accepted, its first data write must reach the app within 1.2 s (healthy first writes arrive 70-140 ms later); otherwise the server logs gatt_server_first_write_missing, ends that connection and registers again. A connection that has delivered any data is never cut. A re-registration replaces only the GATT server: the advertising set is a separate stack object, so a running set keeps advertising with the same address and the client's retry finds it at once; to keep it for stage 2 the set stays on after the subscribe until the first data write (at most the 1.2 s watch) instead of stopping at the subscribe. A rotating-ID epoch change always stops the set, so an address never carries into a new epoch.",
+      "sources": [
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/refs/heads/android11-release/src/com/android/bluetooth/gatt/GattService.java#2763",
+          "note": "onClientConnected: the connection is added to mServerMap only when getById(serverIf) finds the server"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/refs/heads/android11-release/src/com/android/bluetooth/gatt/GattService.java#3027",
+          "note": "serverReadPhy: connIdByAddress(serverIf, address) null -> 'no connection to <address>', nothing is read"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/refs/heads/android11-release/src/com/android/bluetooth/gatt/GattService.java#3105",
+          "note": "sendResponse: a missing connection is sent as connId 0 (the stack then rejects it: gatt_if out of range)"
+        },
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/refs/heads/android11-release/src/com/android/bluetooth/gatt/GattService.java#2830",
+          "note": "onServerWriteCharacteristic: a write that reached the stack is dropped silently when mHandleMap.getByHandle or mServerMap.getById finds no entry (stage 2: the first handshake write never reaches the app)"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "The client's subscribe waits for its 12 s timeout and retries; the retry reaches a fresh server only when the listener was rebuilt for another reason.",
+      "evidence": ["benchmarks/runs/edgecases-20261020 (asus-s22-fb0e, s22-asus-r3..r6, asus-s22-r3..r6) and benchmarks/runs/longcall-035b5235-20261020 (lc-s22-asus-r3..r5), ASUS (Android 11, legacy stack) called by the S22: 16 of 16 failed first connects reached a server idle for more than 10 s: 'serverReadPhy() - no connection to <addr>' 8 ms after onClientConnected, then 'address not found for given connId' and a failed CCCD sendResponse (gatt_if out of range = 0); the client's subscribe hung to its 12 s timeout. 16 of 16 retries on freshly registered servers worked. No failure before about 02:17; the onset followed a rising count of other apps' GATT registrations without callbacks (5 to 9).", "benchmarks/runs/edgecases-20261020/asus-a15s-m31-055022 step 2 (A15s calling the ASUS back, server registered 16 s earlier): the PHY read was answered and the subscribe acknowledged; the A15s's first 133-byte handshake write reached the ASUS stack (gatt_data_process op_code=82) but never the app (bmh3 responder EOFException after 4692 ms); the A15s's setup-stall guard closed at 3.0 s, and the retry after rediscovery worked in 211 ms."],
+      "confidence": "MEDIUM",
+      "confidence_note": "Symptom and recovery measured 16/16 on one Android 11 phone; why the stack loses the record is not proven (the server map lookup is the documented path). Other legacy-stack phones: not measured.",
+      "reviewed": "2026-10-21",
+      "off_switch": "test_device_policy_off=android11-gatt-server-connection-untracked",
+      "legacy_switches": [],
+      "origin": "Offline analysis of the S22-ASUS edge-case and long-call runs, 2026-10-21."
     },
     {
       "id": "bg-battery-optimization",
@@ -5625,7 +5681,7 @@
       "area": "BLUETOOTH_TRANSPORT",
       "validation": "UPSTREAM_DOCUMENTED",
       "fallback": "No marker, no classification; scans are still stopped by their owners' close().",
-      "evidence": ["lane11 ASUS (Android 11, SDK 30, patch 2021-06-01): `dumpsys bluetooth_manager` GATT Scanner Map lists 25 'Ongoing scans' for io.github.meshlive.app (1583 started / 1558 stopped) back to 10-12 and the 32-slot pool full (`MAX client reached: 32`); the three ongoing starts inside the saved logs match, to the second, the first scan of a process the lane driver force-killed (benchmarks/runs/lane11-stats-20261015/m-asus-btmgr). Intermittent: 3 of about 77 force-killed processes in the saved lane11 ASUS logs leaked."],
+      "evidence": ["lane11 ASUS (Android 11, SDK 30, patch 2021-06-01): `dumpsys bluetooth_manager` GATT Scanner Map lists 25 'Ongoing scans' for io.github.meshlive.app (1583 started / 1558 stopped) back to 10-12 and the 32-slot pool full (`MAX client reached: 32`); the three ongoing starts inside the saved logs match, to the second, the first scan of a process the lane driver force-killed (benchmarks/runs/lane11-stats-20261015/m-asus-btmgr). Intermittent: 3 of about 77 force-killed processes in the saved lane11 ASUS logs leaked.", "Redmi Note 9S (Android 11, SDK 30, MIUI, patch 2022-03-01), 2026-10-20 win-userflow qw-packaged redmi-failfast-3: after 61 counted unclean exits the pool had one free slot; the first scanner got `allocated gatt_if=32`, the call-listener GATT server then failed (`MAX client reached: 32`, status 128) and took slot 32 when the scanner stopped, and the Nearby scanner failed with code 2 (stack status 133) on every retry. Logged as `android11_scanner_leak_suspected`; the Nearby list now says Bluetooth needs a restart (ScanRestartHint)."],
       "confidence": "HIGH",
       "confidence_note": "AOSP code read for stock Android 10 (fixed in the Android 11 source); measured on an Android 11 ASUS build whose stack still leaked scanner registrations of force-killed processes, so the scope covers SDK 29 and 30. OEM backports unknown. Intermittent, not every kill leaks.",
       "reviewed": "2026-10-14",
@@ -6148,8 +6204,8 @@
       },
       "matcher_text": "every phone",
       "component": null,
-      "effects": ["retry AudioRecord start up to 3 times; notice after 2000 ms of digital silence; rebuild on ERROR_DEAD_OBJECT"],
-      "behaviour": "A failed AudioRecord start is retried twice (250 ms apart) on the capture thread before the call ends. Two seconds of digital silence produce one notice: a different one when the platform reports the client silenced (another app, or the microphone privacy switch) than for a blank capture. ERROR_DEAD_OBJECT rebuilds the recorder and effects up to three times. Changing the capture source is a separate Experimental arm (test_capture_source_fallback, default off).",
+      "effects": ["retry AudioRecord start up to 3 times; silence episode after 2000 ms of digital silence (blank-capture notice only after 8000 ms with no signal since start or a 30000 ms zero run); rebuild on ERROR_DEAD_OBJECT"],
+      "behaviour": "A failed AudioRecord start is retried twice (250 ms apart) on the capture thread before the call ends. Two seconds of digital silence are an episode: when the platform reports the client silenced (another app, or the microphone privacy switch) it is told at once; a blank capture is told only when the stream carried no signal since the recorder started (8 s) or one zero run lasts 30 s, because noise suppression outputs exact zeros in a quiet room (test_capture_silence_evidence=false: the old 2 s notice). ERROR_DEAD_OBJECT rebuilds the recorder and effects up to three times. Changing the capture source is a separate Experimental arm (test_capture_source_fallback, default off).",
       "sources": [
         {
           "kind": "PLATFORM_DOC",
@@ -6178,7 +6234,7 @@
       "fallback": "The former behaviour: an immediate error ends the call; no silence detection",
       "evidence": ["none: no benchmark run has exercised this condition; unit tests cover the decision"],
       "confidence": "MEDIUM",
-      "confidence_note": "The platform behaviour is official; which owned phones show a blocked start or blank capture is unknown (Redmi with an assistant, Galaxy A15 VOICE_COMMUNICATION are third-party reports). The 2 s threshold is ours; it can misfire on a fully gated quiet room, which only shows a notice.",
+      "confidence_note": "The platform behaviour is official; which owned phones show a blocked start or blank capture is unknown (Redmi with an assistant, Galaxy A15 VOICE_COMMUNICATION are third-party reports). The thresholds are ours. The 2 s one alone misfired: Samsung S24 and M31 VOICE_COMMUNICATION in a quiet room gave 16-34 zero episodes per 4-minute call, each ending by itself, and 6-8 false notices (2026-10-20).",
       "reviewed": "2026-10-14",
       "off_switch": "test_device_policy_off=audio-capture-silence-watchdog",
       "legacy_switches": [],
@@ -6343,7 +6399,7 @@
       "matcher_text": "every phone",
       "component": null,
       "effects": [],
-      "behaviour": "Switch test_capture_source_fallback (default off). After 2 s of digital silence that the platform does not attribute to silencing, the recorder is rebuilt on the next source; the platform AEC is lost (requested != effective is logged). Never used in benchmarks.",
+      "behaviour": "Switch test_capture_source_fallback (default off). After a confirmed blank capture (no signal since start for 8 s or a 30 s zero run; 2 s of zeros with test_capture_silence_evidence=false) that the platform does not attribute to silencing, the recorder is rebuilt on the next source; the platform AEC is lost (requested != effective is logged). Never used in benchmarks.",
       "sources": [
         {
           "kind": "PLATFORM_DOC",
@@ -7729,7 +7785,7 @@
       "area": "CODEC",
       "validation": "EXPERIMENTAL",
       "fallback": "No vendor keys; the bitrate adjuster path alone, as before.",
-      "evidence": ["benchmarks/runs/lane-b-burst-r1-529f36cc", "docs/DECISIONS.md row 73f517c5 -> b5ebe110"],
+      "evidence": ["benchmarks/runs/lane-b-burst-r1-529f36cc", "docs/dev/decisions/README.md row 73f517c5 -> b5ebe110"],
       "confidence": "LOW",
       "confidence_note": "HIGH that the keys exist in the Lineage-published vendor source; MEDIUM that retail firmware behaves alike; the effect on the M31 is unmeasured",
       "reviewed": "2026-10-14",
@@ -8620,7 +8676,7 @@
         "stack_lineage": "PLATFORM_SYSTEM_BT",
         "codec_components": []
       },
-      "active": ["gatt-context-map-race", "le-coc-server-leak", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-close-before-registration-leak", "android13-14-gatt-client-wedged-after-busy", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-power-save-mode", "bg-oem-oppo", "bg-system-bluetooth-app", "bg-phone-updated", "bg-incoming-call-popup", "bg-killer-package-scan", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "android10-11-location-switch-scan-gate", "scan-silence-watchdog", "android10-scanner-leak-on-process-death", "android10-11-background-scan-needs-location-fgs", "fgs-session-wake-lock", "boot-resume-after-restart", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-android10-address-type-precondition", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-credit-stall-classification", "coc-echo-verification", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
+      "active": ["gatt-context-map-race", "le-coc-server-leak", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-close-before-registration-leak", "android13-14-gatt-client-wedged-after-busy", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "android11-gatt-server-connection-untracked", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-power-save-mode", "bg-oem-oppo", "bg-system-bluetooth-app", "bg-phone-updated", "bg-incoming-call-popup", "bg-killer-package-scan", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "android10-11-location-switch-scan-gate", "scan-silence-watchdog", "android10-scanner-leak-on-process-death", "android10-11-background-scan-needs-location-fgs", "fgs-session-wake-lock", "boot-resume-after-restart", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-android10-address-type-precondition", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-credit-stall-classification", "coc-echo-verification", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
       "component_rules": {},
       "matching_proposals": ["android-10-11-le-coc-security-id-budget", "android-11-coc-small-sdu-coalescing", "pre-android-13-coc-congested-write-loss", "ble-scan-start-quota", "background-restriction-visible", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "userspace32-tier", "native-armeabi-v7a-optional-build", "bluetooth-process-restart-recovery", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "scan-pause-during-connect", "oem-screenoff-scan-pause-vivo-poco-oppo", "audio-capture-source-fallback-chain", "opus-complexity-governor", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
     },
@@ -8667,7 +8723,7 @@
         "stack_lineage": "PLATFORM_SYSTEM_BT",
         "codec_components": ["c2.android.vp9.encoder"]
       },
-      "active": ["qcom-legacy-gatt-call", "qcom-legacy-coc-call", "qcom-legacy-classic-call", "qcom-msmnile-call", "qcom-legacy-call-vp9-software-decoder", "qcom-legacy-call-relay-gatt-acknowledged-writes", "qcom-msmnile-classic-source-balanced-scan", "gatt-context-map-race", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-close-before-registration-leak", "android13-14-gatt-client-wedged-after-busy", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-oem-asus", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "android10-11-location-switch-scan-gate", "scan-silence-watchdog", "android10-scanner-leak-on-process-death", "android10-11-background-scan-needs-location-fgs", "fgs-session-wake-lock", "boot-resume-after-restart", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-credit-stall-classification", "coc-echo-verification", "camera-session-wait-closed", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
+      "active": ["qcom-legacy-gatt-call", "qcom-legacy-coc-call", "qcom-legacy-classic-call", "qcom-msmnile-call", "qcom-legacy-call-vp9-software-decoder", "qcom-legacy-call-relay-gatt-acknowledged-writes", "qcom-msmnile-classic-source-balanced-scan", "gatt-context-map-race", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-close-before-registration-leak", "android13-14-gatt-client-wedged-after-busy", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "android11-gatt-server-connection-untracked", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-oem-asus", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "android10-11-location-switch-scan-gate", "scan-silence-watchdog", "android10-scanner-leak-on-process-death", "android10-11-background-scan-needs-location-fgs", "fgs-session-wake-lock", "boot-resume-after-restart", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-credit-stall-classification", "coc-echo-verification", "camera-session-wait-closed", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
       "component_rules": {
         "codec2-encoder-tie-break": ["c2.android.vp9.encoder"],
         "aosp-codec2-opus-decoder-first": ["c2.android.vp9.encoder"]

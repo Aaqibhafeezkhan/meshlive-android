@@ -8,6 +8,14 @@ import org.junit.Test
 
 /** The promoted features' one-default-one-switch contract (CallFeatureSettings.kt). */
 class CallFeatureSettingsTest {
+    @Test
+    fun fullScreenGuidanceFollowsTheSystemGrantAndControlArm() {
+        assertTrue(FullScreenIntentAccess.showGuidance(34, true, false))
+        assertFalse(FullScreenIntentAccess.showGuidance(33, true, false))
+        assertFalse(FullScreenIntentAccess.showGuidance(35, true, true))
+        assertFalse(FullScreenIntentAccess.showGuidance(35, false, false))
+    }
+
     private val untouched = { _: String -> null as Boolean? }
 
     private fun resolve(
@@ -95,6 +103,37 @@ class CallFeatureSettingsTest {
         assertFalse(FullScreenIntentAccess.needsPrompt(sdk14, featureOn = true, canUse = true))
         assertFalse(FullScreenIntentAccess.needsPrompt(sdk14, featureOn = false, canUse = false))
         assertFalse("before Android 14 the permission is a plain install-time grant", FullScreenIntentAccess.needsPrompt(33, true, false))
+    }
+
+    /** Redmi 12 (HyperOS, API 35): access denied, so the calls area offers it once; Settings keeps its link; no nagging. */
+    @Test
+    fun theCallsAreaOffersFullScreenAccessOnceOnlyWhenAndroidRefusesIt() {
+        assertTrue(FullScreenIntentAccess.offerOnce(35, featureOn = true, canUse = false, alreadyPrompted = false))
+        assertFalse("never a second time", FullScreenIntentAccess.offerOnce(35, featureOn = true, canUse = false, alreadyPrompted = true))
+        assertFalse("allowed: nothing to offer", FullScreenIntentAccess.offerOnce(36, featureOn = true, canUse = true, alreadyPrompted = false))
+        assertFalse("lock-screen calls off", FullScreenIntentAccess.offerOnce(35, featureOn = false, canUse = false, alreadyPrompted = false))
+        assertFalse("Android 13 grants it at install", FullScreenIntentAccess.offerOnce(33, featureOn = true, canUse = false, alreadyPrompted = false))
+        assertTrue("Settings still shows its link after the one prompt", FullScreenIntentAccess.needsPrompt(35, featureOn = true, canUse = false))
+        assertEquals("call_fsi: allowed=false | prompted=true", FullScreenIntentAccess.logLine(allowed = false, prompted = true))
+    }
+
+    /**
+     * Phone run userflow2-ef96bbf0 xiaomi-fsi-prompt: the Calls tab opens on its Nearby segment (showCallsNearby, the call
+     * browser), but the offer was wired only to the Recent segment (showCallsScreen) and to a resume with Recent visible,
+     * so it never showed. Every way into the calls area offers it (once).
+     */
+    @Test
+    fun everyWayIntoTheCallsAreaOffersFullScreenAccess() {
+        val source = listOf(
+            java.io.File("src/main/java/com/example/bluetoothtest/MainActivity.kt"),
+            java.io.File("app/src/main/java/com/example/bluetoothtest/MainActivity.kt"),
+        ).first { it.exists() }.readText().replace("\r\n", "\n")
+        listOf("private fun showCallsNearby()", "private fun showContactsTab()", "private fun showCallsScreen(").forEach { entry ->
+            val body = source.substringAfter(entry).substringBefore("\n    }\n")
+            assertTrue(entry, body.contains("checkFullScreenCallAccess(offerPrompt = true)"))
+        }
+        val resume = source.substringAfter("override fun onResume()").substringBefore("\n    }\n")
+        assertTrue(resume.contains("it == MainTab.CALLS || it == MainTab.CONTACTS"))
     }
 
     @Test

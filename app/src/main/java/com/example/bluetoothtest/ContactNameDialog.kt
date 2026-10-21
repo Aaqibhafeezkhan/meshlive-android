@@ -56,18 +56,21 @@ internal object ContactNameDialog {
             .setOnDismissListener { if (!saved) onDismissWithoutSave() }
             .create()
         val save = {
-            when (val check = ContactNames.check(input.text?.toString().orEmpty())) {
-                is ContactNameCheck.Valid -> {
+            val check = ContactNames.check(input.text?.toString().orEmpty())
+            when (ContactNameRules.onSave(check, allowBlank)) {
+                ContactNameRules.SaveAction.SAVE -> {
                     saved = true
                     dialog.dismiss()
-                    onSave(check.name)
+                    onSave((check as ContactNameCheck.Valid).name)
                 }
-                ContactNameCheck.Blank -> if (allowBlank) {
+                ContactNameRules.SaveAction.SAVE_BLANK -> {
                     saved = true
                     dialog.dismiss()
                     onSave("")
                 }
-                is ContactNameCheck.Invalid -> Unit
+                // UX fix 2026-10-21: an empty name explains itself under the field; typing clears it.
+                ContactNameRules.SaveAction.SHOW_EMPTY_ERROR -> field.error = context.getString(R.string.contact_name_empty)
+                ContactNameRules.SaveAction.NONE -> Unit
             }
         }
         dialog.setOnShowListener {
@@ -80,7 +83,7 @@ internal object ContactNameDialog {
                     }
                     ContactNameCheck.Blank -> {
                         field.error = null
-                        button.isEnabled = allowBlank
+                        button.isEnabled = ContactNameRules.buttonEnabled(ContactNameCheck.Blank, allowBlank)
                     }
                     is ContactNameCheck.Invalid -> {
                         field.error = context.getString(R.string.contact_name_invalid)

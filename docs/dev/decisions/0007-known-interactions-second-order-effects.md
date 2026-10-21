@@ -1,0 +1,21 @@
+# Known interactions (second-order effects)
+
+- **Queue grace <-> overflow paths:** large-frame grace lets sender/relay queues exceed their normal limit; code that assumes one removal makes room breaks (7b8c28c7). Test overflow while oversized.
+- **Queue grace <-> rate control:** grace intentionally hides big-frame backlog from the rate controller, so single huge frames freeze without a downshift; sustained overload still downshifts.
+- **Keyframe interval <-> recovery:** with a 60 s safety keyframe, recovery depends on requests (decoder errors, drops, joins). The 1-8 s backoff applies to unforced requests, which include relay-forwarded child joins: a child joining shortly after a recovery may wait.
+- **Scanning <-> media:** any BLE scan on a phone carrying media (source when full, middle, legacy msmnile Classic) costs airtime and caused 0.3-1 s stalls.
+- **Learned capacity <-> radio state and peers:** stores persist; Wi-Fi band, weak peers and relay vs fan-out produce different numbers. A relay ceiling (M31 GATT 774 kbps) now refuses that relay for 7 days.
+- **CoC chunk size <-> throughput:** safety on ASUS-class stacks costs ~15% CoC throughput on clean pairs.
+- **Probes <-> phones:** `link_capacity.py` restarts the app per direction and writes probe maxima into each phone's learned store.
+- **Playout anchor <-> adaptive delay:** re-anchoring and adaptive growth both move the shared audio/video anchor; keep `MediaPlayoutClockTest` covering both.
+- **Decoder timing <-> calls:** release-at-playout/low-latency now apply to private calls too.
+- **Keyframe waits <-> service metrics:** after an overflow the sender drops video until a keyframe, so offered >> sent is self-inflicted; samples flag it, and fairness/rate decisions must use overflow drops only.
+- **Temporal layers (experimental) <-> encoder rate control:** asking a vendor encoder for layers changed its bitrate accuracy (S24/M31 Exynos VP9 +40-60%), and libaom's SVC layer rate control mis-sized frames after keyframes. Keep this in mind before reviving any layered scheme.
+- **No loss <-> latency <-> rate control:** with nothing dropped, a link slower than the stream shows up only as backlog and late arrivals; rate control must react within seconds or viewers drift toward the maximum delay. Audio drift is corrected by speed, never by skipping.
+- **Temporal layers <-> hidden stack queues:** the lower visible FPS with layered M31 VP9 was not the decoder (hardware, software, low-latency off and release-at-playout off all gave 9.5-10.5 FPS); bursts sat in the Bluetooth stack where thinning cannot see them. Pacing fixes that only when frames are droppable.
+- **Reference structure <-> quality:** how frames reference each other is itself a quality setting (~2.5 VMAF between libaom's own one-layer structure and a minimal one). Any change to references needs a same-build VMAF comparison where nothing is dropped, not only congestion cases.
+- **Rate decisions <-> measurement noise:** predictive triggers built on the train estimate fired falsely (startup trains, CoC median 10-25% low); delivery evidence at the receiver (late arrivals) is the trustworthy signal for its own link.
+- **Thinning <-> rate control <-> trim:** three adaptive loops on one stream. Thinning answers bursts within 125 ms, the rate controller only chronic shortfall, and the trim only steady encoder bias after a settling period; a faster outer loop collapsed VMAF to 40.5.
+- **Hop-local rule <-> relays:** a relay cannot slow the source, so a child it cannot serve is withdrawn to reroute; only the link's own child reports lateness to its parent.
+- **Encoder requests <-> actual bitstream:** an encoder flag or schema is a request (libaom ignored per-frame no-update flags; the S24 encoder layered while reporting no schema). Anything that drops frames must check the bitstream, and every A/B for it must include a case where frames are actually dropped.
+- **Wi-Fi <-> every measurement:** 2.4 GHz Wi-Fi halves affected phones' Bluetooth; results without `radio_conditions` are not comparable.

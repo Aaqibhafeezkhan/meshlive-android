@@ -302,11 +302,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var contactsTabScreen: View
     /** The call browser serves two tabs: Calls > Nearby (false) and Contacts (true). */
     private var callBrowserContacts = false
+    /** The contacts list shows chats (the Chats tab, [ChatTab]); only with Messaging v2. */
+    private var callBrowserChats = false
     private var settingsPage = SettingsPage.MAIN
     private lateinit var experimentsHiddenHint: View
     private lateinit var callChromeAutoHide: CallChromeAutoHide
     private val panicTapDetector = MultiTapDetector()
     private var homePermissionsAsked = false
+    /** The camera screen's own permission request ran in this process ([LiveStartGate.action]). */
+    private var startPermissionsAsked = false
     private var bluetoothStateReceiverRegistered = false
     private var lastConnectedCount = 0
     /** Route cost of the advertisement this phone dialled (relays on the way), for the call chip. */
@@ -330,6 +334,8 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: android.content.Context, intent: Intent) {
             updateHomeReadiness()
             refreshCallReachability()
+            // The camera screen's "Bluetooth is off" notice follows the adapter too.
+            if (::streamToggleButton.isInitialized && !startupAborted) updateStartEnabled()
             // A rename that could not be written while Bluetooth was off is applied once it is on (never per session).
             if (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1) == BluetoothAdapter.STATE_ON) applyNeutralName()
         }
@@ -471,16 +477,32 @@ class MainActivity : AppCompatActivity() {
     private var receiver: AndroidVideoReceiver? = null
     private var relay: BluetoothVideoRelay? = null
     private var privateCallRelay: BluetoothPrivateCallRelay? = null
-    private var wifiAdviceAnsweredAtMs = 0L
+    /** First run (audit 2026-10-21): after onboarding the app opens on Calls, not Live. */
+    private var landOnCallsAfterOnboarding = false
+    /**
+     * Calls page (user feedback 2026-10-21): the status line shows only an actionable state (a scanner or endpoint
+     * failure, a hint about where to look); searching is a small indicator, outcomes and errors are snackbars.
+     */
+    private var callsActionableNotice: String? = null
+    /** When the Calls search started showing nothing found yet; the empty-state explanation waits a little. */
+    private var callsSearchStartedMs = 0L
+    /** The call or stream that waited while the user was in Wi-Fi settings; it continues on return. */
+    private var pendingAfterWifiSettings: (() -> Unit)? = null
+    /** The type of the incoming call that is ringing (a missed-call Call back uses it). */
+    private var incomingCallType: CallType? = null
     @Volatile private var linkRateLimitBps: Int? = null
     /** Automatic rate control for this phone's outgoing call video (hop-local, like streams). */
     @Volatile private var privateCallRateController: LinkRateController? = null
+    /** F16 fix 1 (Experimental, `test_call_link_share`): the cap that leaves airtime for the received direction. */
+    @Volatile private var privateCallLinkShare: CallLinkShare? = null
     @Volatile private var privateCallLinkRateLimitBps: Int? = null
     @Volatile private var privateCallLinkFps: Int? = null
     private var debugBenchmarkCoordinator: DebugBenchmarkCoordinator? = null
     private val bluetoothRestartProbe: () -> String? = { activeBluetoothSession() }
     private var debugSessionTelemetry: DebugSessionTelemetry? = null
     private var cameraEncoder: CameraVideoEncoder? = null
+    /** Experimental [SourceMediaPrewarm]: the media runs for a broadcaster whose first viewer has not authenticated yet. */
+    private var streamMediaPrewarmed = false
     private var microphoneEncoder: MicrophoneOpusEncoder? = null
     private var privateCall: AndroidPrivateVideoCall? = null
     private var privateCallPhase: PrivateCallPhase? = null
@@ -497,7 +519,9 @@ class MainActivity : AppCompatActivity() {
     private var privateCallDiscovery: BleL2capDiscovery? = null
     private var privateCallPeers = emptyList<BleL2capPeer>()
     private val privateCallPeersLastSeen = mutableMapOf<String, Pair<BleL2capPeer, Long>>()
-    private var pendingPrivateCallPeerKey: String? = null
+    /** How long each Nearby call row stays unheard, from how often this scanner hears it ([CallPeerCadence]). */
+    private val callPeerCadence = CallPeerCadence()
+    @Volatile private var pendingPrivateCallPeerKey: String? = null
     /** Experimental automatic store-and-forward sync (StoreForwardAutoSyncFeature, default off). */
     private var autoSyncScheduler: StoreForwardAutoSyncScheduler? = null
     private val autoSyncEvaluating = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -512,6 +536,9 @@ class MainActivity : AppCompatActivity() {
     private val chatTickHandler = Handler(Looper.getMainLooper())
     /** Version of the selected offer: a refresh must match it (rotating IDs, RV15). */
     private var pendingPrivateCallPeerVersion = DiscoveryAnnouncement.FIXED_PREFIX_VERSION
+
+    /** The row the pending dial was started from: its key, recognised contact and address ([DialPersonMatch]). */
+    private var pendingPrivateCallTarget: DialPersonMatch.Target? = null
     private var pendingPrivateCallSelectedAtMs = 0L
     @Volatile private var privateCallCameraEncoder: CameraVideoEncoder? = null
     private val privateCallCameraExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -567,7 +594,9 @@ class MainActivity : AppCompatActivity() {
     private var privateCallContinuityLastReportNs = 0L
     private var pendingDebugPrivateCallInvite: Pair<String, String?>? = null
     /** A dial (user tap or DEBUG) whose target is not in the list yet: waits for its next sighting, bounded (DebugDialWait). */
-    private var debugDialWait: DebugDialWait.Pending? = null
+    @Volatile private var debugDialWait: DebugDialWait.Pending? = null
+    /** F14: the user's own dial (a tapped row or a contact call), for [DialCollision]; read through [currentOwnDial]. */
+    @Volatile private var ownDial: OwnDial? = null
     /** Start (elapsedRealtime) of a dial that is waiting in the normal address-refresh selection, else 0 (not for automatic exchanges). */
     private var dialSelectionStartedAtMs = 0L
     /** Shown name of the user dial waiting in the address-refresh selection (status line "Looking for ..."). */
@@ -612,6 +641,9 @@ class MainActivity : AppCompatActivity() {
     private var streamPaused = false
     private var receiverStreamEnded = false
     private var receiverWasActive = false
+    /** A live join that failed before it became active: Try again and one automatic retry ([StreamJoinRetry]). */
+    private val streamJoinRetry = StreamJoinRetry<LogicalStreamTarget>()
+    private var streamJoinSnackbar: com.google.android.material.snackbar.Snackbar? = null
     private var receiverRouteWithdrawal: StreamRouteWithdrawal? = null
     private var receiverBrowserStartedAtNs = 0L
     private var receiverFirstOfferLogged = false
@@ -629,6 +661,7 @@ class MainActivity : AppCompatActivity() {
     private var receiverContinuityLastReportNs = 0L
     private var activeStreamTarget: LogicalStreamTarget? = null
     @Volatile private var activeStreamSourceNodeId: NodeId? = null
+    @Volatile private var activeStreamSourceAuthenticated = false
     private var reconnectTarget: LogicalStreamTarget? = null
     private var reconnectPreferredTransport: BluetoothTransportOption? = null
     private var reconnectFromNodeIdPrefix: ByteArray? = null
@@ -733,6 +766,13 @@ class MainActivity : AppCompatActivity() {
     }
     private val debugCallPipelineTiming: Boolean by lazy {
         BuildConfig.DEBUG && intent.getBooleanExtra("test_call_pipeline_timing", false)
+    }
+    /** DEBUG `test_raw_observer=<hex>` (+ `test_raw_observer_seconds`): extra unfiltered raw advert observer, see DebugRawObserver. */
+    private val debugRawObserver: DebugRawObserver? by lazy {
+        DebugRawObserver.create(
+            BuildConfig.DEBUG, bluetoothAdapter, intent.getStringExtra("test_raw_observer"),
+            intent.extras?.get("test_raw_observer_seconds").let { (it as? Number)?.toLong() ?: it?.toString()?.toLongOrNull() },
+        )
     }
     private val debugMediaTraceSession: String? by lazy {
         intent.getStringExtra("test_media_trace")?.takeIf { BuildConfig.DEBUG && it.isNotBlank() }
@@ -1072,14 +1112,42 @@ class MainActivity : AppCompatActivity() {
 
     /** Audio live -> Switch to video: the new video live starts as soon as the camera screen is ready to go live. */
     private var pendingVideoSwitch = false
+    private var afterCameraPermission: (() -> Unit)? = null
+    private val videoCameraPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        val action = afterCameraPermission
+        afterCameraPermission = null
+        if (granted.values.all { it }) action?.invoke()
+    }
+
+    private fun requestCallMedia(video: Boolean, action: () -> Unit): Boolean {
+        if (!DebugTunables.callReadinessPermissions) return false
+        val missing = RuntimePermissionPlan.required(Build.VERSION.SDK_INT, true, video, true).filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isEmpty()) return false
+        afterCameraPermission = action
+        videoCameraPermission.launch(missing.toTypedArray())
+        return true
+    }
+
+    private fun acceptPrivateCall() {
+        val endpoint = privateCall ?: return
+        if (requestCallMedia(endpoint.localCallType == CallType.VIDEO) {
+                if (privateCall === endpoint && privateCallPhase == PrivateCallPhase.INCOMING_RINGING) {
+                    runCatching { acceptPrivateCall() }.onFailure { setCallStatus(it.message ?: "Could not accept") }
+                }
+            }) return
+        endpoint.accept()
+    }
 
     private val permissionRequest = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) {
+        startPermissionsAsked = true
         if (hasRequiredPermissions()) {
             ensureBluetoothEnabledAndRefresh()
         } else {
-            setStatus("Camera, microphone, and Nearby devices permissions are required.")
+            setStatus(missingPermissionsText())
             updateStartEnabled()
         }
     }
@@ -1089,13 +1157,17 @@ class MainActivity : AppCompatActivity() {
         if (bluetoothAdapter?.isEnabled == true) {
             onPermissionsReady()
         } else {
-            setStatus("Bluetooth is off.")
+            setStatus(getString(R.string.status_line_bluetooth_off))
             updateStartEnabled()
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val startupTimer = StartupTimer(SystemClock::elapsedRealtime)
+        // Another app's unknown Parcelable extra must not crash the exported launcher activity (SafeLaunchExtras).
+        intent?.let { setIntent(SafeLaunchExtras.sanitize(it)) }
         super.onCreate(savedInstanceState)
+        startupTimer.mark("super")
         if (isColdStartShutdown(BuildConfig.DEBUG, savedInstanceState != null, intent.getStringExtra("test_control"))) {
             // A runner's shutdown control reached an app that had already exited, so Android started
             // a fresh process for it (graceful_stop's am start; a new ASUS process after cleanup
@@ -1124,6 +1196,18 @@ class MainActivity : AppCompatActivity() {
             EmergencyWipe.wipe(this, WipeReason.DEBUG_CONTROL)
             return
         }
+        if (BuildConfig.DEBUG && intent.hasExtra("test_crash_reports")) {
+            CrashReports.debugDisabled = !intent.getBooleanExtra("test_crash_reports", true)
+        }
+        val extraKeys = runCatching { intent.extras?.keySet()?.toSet() }.getOrNull().orEmpty()
+        if (CrashReports.shouldPrompt(CrashReports.enabled(this), CrashReports.pending(CrashReports.dir(this)) != null, extraKeys)) {
+            // The previous process crashed: ask before opening any radio, camera or service, so a crash in this start
+            // cannot hide the prompt. CrashReportActivity continues to this screen whatever the answer.
+            startupAborted = true
+            startActivity(CrashReportActivity.intent(this))
+            finish()
+            return
+        }
         if (EncoderBenchLaunch.requested(intent)) {
             // DEBUG radio-free encoder bench (test_encoder_bench, default off): hand the launch to
             // EncoderBenchActivity before any view, service or Bluetooth object exists, and end this one
@@ -1136,7 +1220,24 @@ class MainActivity : AppCompatActivity() {
         }
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_main)
+        startupTimer.mark("layout")
+        if (BuildConfig.DEBUG) {
+            // Exported for the shell (test drivers); DEBUG builds only.
+            debugCleanShutdownRegistered = runCatching {
+                ContextCompat.registerReceiver(
+                    this, debugCleanShutdownReceiver, IntentFilter(CleanShutdown.ACTION), ContextCompat.RECEIVER_EXPORTED,
+                )
+            }.isSuccess
+        }
         LinkCapacity.attach(this, bluetoothAdapter)
+        if (BuildConfig.DEBUG) {
+            // Design QV gate W2: dial one exact address through the production GATT client, then close (DebugGattDial).
+            DebugGattDial.request(
+                intent.getStringExtra(DebugGattDial.EXTRA_ADDRESS),
+                intent.getStringExtra(DebugGattDial.EXTRA_SERVICE),
+                intent.getStringExtra(DebugGattDial.EXTRA_ADDRESS_TYPE),
+            )?.let { DebugGattDial.start(this, bluetoothAdapter, it) }
+        }
         DeviceTraits.attachBluetoothAdapter(bluetoothAdapter)
         // Read-only runtime traits (ROM version properties, ABIs, memory, Bluetooth package versions); idempotent.
         DeviceTraitsProbe.attach(applicationContext)
@@ -1158,10 +1259,43 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.encoderRateTrim = intent.getBooleanExtra("test_encoder_rate_trim", true)
         DebugTunables.encoderBitrateAdjuster = intent.getBooleanExtra("test_encoder_bitrate_adjuster", true)
         DebugTunables.encoderFramerateAdjuster = intent.getBooleanExtra("test_encoder_framerate_adjuster", false)
-        DebugTunables.benchmarkLaunch = intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+        DebugTunables.benchmarkLaunch = benchmarkExtrasPresent()
+        // Every run states which test_ extras reached the app, so an A/B can tell an arm that never arrived.
+        if (BuildConfig.DEBUG) Log.i("BluetoothVideo", LaunchExtrasEcho.line(intent.extras))
         UpdateRuntime.readDebugExtras(intent)
         DebugTunables.linkPacing = intent.getBooleanExtra("test_link_pacing", true)
+        DebugTunables.playBatteryGuidance = intent.getBooleanExtra("test_play_battery_guidance", true)
+        DebugTunables.localReporting = intent.getBooleanExtra("test_local_reporting", true)
+        DebugTunables.nearbyListUx = intent.getBooleanExtra("test_nearby_list_ux", true)
+        DebugTunables.strangerCallFollowup = intent.getBooleanExtra("test_stranger_call_followup", true)
+        DebugTunables.completeRecentCalls = intent.getBooleanExtra("test_complete_recent_calls", true)
+        DebugTunables.fullScreenCallGuidance = intent.getBooleanExtra("test_full_screen_call_guidance", true)
+        DebugTunables.callReadinessPermissions = intent.getBooleanExtra("test_call_readiness_permissions", true)
+        DebugTunables.honestCallStatus = intent.getBooleanExtra("test_honest_call_status", true)
         DebugTunables.scanRecovery = intent.getBooleanExtra("test_scan_recovery", true)
+        DebugTunables.scanLe1mOnly = intent.getBooleanExtra("test_scan_le_1m_only", true)
+        DebugTunables.meetSoftwareFilter = intent.getBooleanExtra("test_meet_software_filter", true)
+        DebugTunables.callListSoftwareFilter = intent.getBooleanExtra("test_call_list_software_filter", false)
+        DebugTunables.callStallTolerance = intent.getBooleanExtra("test_call_stall_tolerance", false)
+        DebugTunables.callLivenessHangUp = intent.getBooleanExtra("test_call_liveness_hang_up", true)
+        DebugTunables.callRingTimeout = intent.getBooleanExtra("test_call_ring_timeout", true)
+        DebugTunables.skipRedundantPriority = intent.getBooleanExtra("test_skip_redundant_priority", false)
+        DebugTunables.streamJoinRetry = intent.getBooleanExtra("test_stream_join_retry", true)
+        DebugTunables.viewerAdmissionBounds = intent.getBooleanExtra("test_viewer_admission_bounds", true)
+        DebugTunables.sourceMediaPrewarm = intent.getBooleanExtra("test_source_media_prewarm", true)
+        DebugTunables.dropLeadingBlankFrames = intent.getBooleanExtra("test_drop_leading_blank_frames", false)
+        DebugTunables.injectBlankFrames = intent.getIntExtra("test_inject_blank_frames", 0)
+        DebugTunables.gattGapFastFail = intent.getBooleanExtra("test_gatt_gap_fast_fail", true)
+        DebugTunables.gattChunkRecovery = intent.getBooleanExtra("test_gatt_chunk_recovery", true)
+        DebugTunables.gattDropReceivedEvery = intent.getIntExtra("test_gatt_drop_received_every", 0)
+        DialPersonMatch.enabled = intent.getBooleanExtra("test_dial_follows_rotation", true)
+        ScanRestartHint.enabled = intent.getBooleanExtra("test_scan_restart_hint", true)
+        CopiedIdOverlapRule.enabled = intent.getBooleanExtra("test_copied_id_overlap", true)
+        CopiedIdPcPair.enabled = intent.getBooleanExtra("test_copied_id_pc_pair", true)
+        DebugTunables.weakPairReach = intent.getBooleanExtra("test_weak_pair_reach", true)
+        DebugTunables.callLinkShare = intent.getBooleanExtra("test_call_link_share", false)
+        DebugTunables.callFpsFollow = intent.getBooleanExtra("test_call_fps_follow", false)
+        DebugTunables.reachableScanYield = intent.getBooleanExtra("test_reachable_scan_yield", false)
         DebugTunables.bluetoothOnRecovery = intent.getBooleanExtra("test_bluetooth_on_recovery", true)
         DebugTunables.callHandshakeDeadlineAll = intent.getBooleanExtra("test_call_handshake_deadline_all", true)
         DebugTunables.linkPacerSeed = intent.getBooleanExtra("test_link_pacer_seed", true)
@@ -1173,7 +1307,7 @@ class MainActivity : AppCompatActivity() {
         MemoryThermalPolicy.headroomForecast = intent.getBooleanExtra("test_thermal_forecast", false)
         MemoryThermalPolicy.speedFloor = intent.getBooleanExtra("test_thermal_speed_floor", false)
         // Device-family batches (integration 2026-10-14): each batch's launch switches. Every non-default arm is
-        // DEBUG-only (the setters ignore it in release) and listed in docs/SWITCHES.md; each launch starts from the defaults.
+        // DEBUG-only (the setters ignore it in release) and listed in docs/dev/switches.md; each launch starts from the defaults.
         ThermalSwitches.applyLaunchExtras(intent)
         Log.i("BluetoothVideo", ThermalSwitches.benchmarkLine())
         AudioSwitches.applyLaunchExtras(intent)
@@ -1186,7 +1320,11 @@ class MainActivity : AppCompatActivity() {
         BackgroundSwitches.applyLaunchExtras(intent)
         AdvertisingSwitches.applyLaunchExtras(intent)
         PhySwitches.applyLaunchExtras(intent)
-        BootResume.syncComponent(this) // the boot receiver follows the stored opt-in (default off = disabled)
+        // The boot receiver follows the stored opt-in (default off = disabled). A PackageManager write (a binder call that
+        // can take hundreds of ms): off the main thread, same result (UX fix 2026-10-21, startup jank).
+        val appContextForBoot = applicationContext
+        thread(name = "BootResumeSync", isDaemon = true) { BootResume.syncComponent(appContextForBoot) }
+        startupTimer.mark("extras")
         Log.i(
             "BluetoothVideo",
             "BENCHMARK family_switches: gatt=${GattSwitches.describeNonDefaults()} | coc=${CocSwitches.label()} | " +
@@ -1312,6 +1450,9 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.relayRefusalEscalation = intent.getBooleanExtra("test_relay_refusal_escalation", true)
         DebugTunables.relayHoldInPlace = intent.getBooleanExtra("test_relay_hold_in_place", false)
         DebugTunables.gattInputFailureEndsLink = intent.getBooleanExtra("test_gatt_input_failure_ends_link", true)
+        DebugTunables.callLinkRenewal = intent.getBooleanExtra("test_call_link_renewal", true)
+        DebugTunables.callTxStallAfterS = intent.getIntExtra("test_call_tx_stall_after_s", 0)
+        DebugTunables.gattReregisterKeepAddress = intent.getBooleanExtra("test_gatt_reregister_keep_address", true)
         DebugTunables.phyMoveFloodGuard = intent.getBooleanExtra("test_phy_move_flood_guard", true)
         DebugTunables.decoderSizeChangeRebuild = intent.getBooleanExtra("test_decoder_size_rebuild", true)
         DebugTunables.relayUpstreamDck = intent.getBooleanExtra("test_relay_upstream_dck", false)
@@ -1418,6 +1559,7 @@ class MainActivity : AppCompatActivity() {
             ?.let(BleConnectionPriority::fromDebugValue)
         DebugTunables.adaptivePhy = intent.getBooleanExtra("test_adaptive_phy", true)
         DebugTunables.relayPhyGuard = intent.getBooleanExtra("test_relay_phy_guard", true)
+        QlConsent.enabled = intent.getBooleanExtra("test_ql_consent_ui", true)
         DebugTunables.relayOnePduMove = intent.getBooleanExtra("test_relay_one_pdu_move", false)
         DebugTunables.relayColdStart = intent.getBooleanExtra("test_relay_cold_start", true)
         DebugTunables.relayEstablishFallback = intent.getBooleanExtra("test_relay_establish_fallback", true)
@@ -1430,6 +1572,9 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.streamAdaptivePhy = intent.getBooleanExtra("test_stream_adaptive_phy", true)
         DebugTunables.stallRemembersTwoM = intent.getBooleanExtra("test_stall_remembers_2m", true)
         DebugTunables.stallRediscoverMs = intent.getIntExtra("test_stall_rediscover_ms", StallRediscover.DEFAULT_MS.toInt()).toLong()
+        DebugTunables.setupRetryAclWait = intent.getBooleanExtra("test_setup_retry_acl_wait", true)
+        DebugTunables.stallRetryDials = intent.getBooleanExtra("test_stall_retry_dials", true)
+        DebugTunables.phyMemoryContactKey = intent.getBooleanExtra("test_phy_memory_contact_key", true)
         DebugTunables.experimentalPhySplit = GattPhySplit.fromDebugValue(intent.getStringExtra("test_gatt_phy_split"))
         DebugTunables.adaptivePhySplit = if (intent.getBooleanExtra("test_adaptive_phy_split", false)) {
             GattPhySplit.fromDebugValue(intent.getStringExtra("test_adaptive_phy_split_dir")) ?: GattPhySplit.TX_2M_RX_1M
@@ -1470,6 +1615,9 @@ class MainActivity : AppCompatActivity() {
                     "streamAdaptivePhy=${DebugTunables.streamAdaptivePhy} | " +
                     "stallRemembers2m=${DebugTunables.stallRemembersTwoM} | " +
                     "stallRediscoverMs=${DebugTunables.stallRediscoverMs} | " +
+                    "setupRetryAclWait=${DebugTunables.setupRetryAclWait} | " +
+                    "stallRetryDials=${DebugTunables.stallRetryDials} | " +
+                    "phyMemoryContactKey=${DebugTunables.phyMemoryContactKey} | " +
                     "gattPhySplit=${DebugTunables.experimentalPhySplit?.debugValue ?: "off"} | " +
                     "adaptivePhySplit=${DebugTunables.adaptivePhySplit?.debugValue ?: "off"} | " +
                     "phyAfterAuth=${DebugTunables.phyAfterAuth} | " +
@@ -1484,6 +1632,8 @@ class MainActivity : AppCompatActivity() {
                     "relayRefusalEscalation=${DebugTunables.relayRefusalEscalation} | " +
                     "relayHoldInPlace=${DebugTunables.relayHoldInPlace} | " +
                     "gattInputFailureEndsLink=${DebugTunables.gattInputFailureEndsLink} | " +
+                    "callLinkRenewal=${DebugTunables.callLinkRenewal} | callTxStallAfterS=${DebugTunables.callTxStallAfterS} | " +
+                    "gattReregisterKeepAddress=${DebugTunables.gattReregisterKeepAddress} | " +
                     "phyMoveFloodGuard=${DebugTunables.phyMoveFloodGuard} | " +
                     "relayEstablishBudget=${DebugTunables.relayEstablishBudget} | " +
                     "relayUpstreamDck=${DebugTunables.relayUpstreamDck} | " +
@@ -1536,7 +1686,7 @@ class MainActivity : AppCompatActivity() {
         BluetoothEpoch.register(streamEpochName, onOff = ::streamPresenceBluetoothOff, onOn = ::streamPresenceBluetoothOn)
         ScanStartGate.deferralListener = { waitMs ->
             runOnUiThread {
-                if (!isDestroyed) setStatus("Android limits Bluetooth searches; searching again in ${(waitMs + 999) / 1_000} s.")
+                if (!isDestroyed) setStatus(getString(R.string.status_search_wait, ((waitMs + 999) / 1_000).toInt()))
             }
         }
         // Workstream C experiments (all off by default; see DebugTunables).
@@ -1687,7 +1837,7 @@ class MainActivity : AppCompatActivity() {
         showDeviceHealthOverlay = appPreferences.getBoolean(PREF_SHOW_DEVICE_HEALTH, false)
         forwardReceivedStreams = appPreferences.getBoolean(
             PREF_FORWARD_RECEIVED_STREAMS,
-            relayDefaultOn(intent.extras?.keySet()?.any { it.startsWith("test_") } == true),
+            relayDefaultOn(benchmarkExtrasPresent()),
         )
         encoderRateControl = runCatching {
             EncoderRateControl.valueOf(
@@ -1720,6 +1870,7 @@ class MainActivity : AppCompatActivity() {
         ClassicAddressBook.attach(this)
         applyClassicFeatures()
         applyCompactDiscovery()
+        applyFindPcs()
         applyRotatingIds()
         applyNeutralName()
         applyRelayedCalls()
@@ -1790,9 +1941,6 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, threadBackCallback)
         findViewById<View>(R.id.streamModeButton).setOnClickListener { audioLive.onGoLive() } // AUDIO-LIVE hook
         bindStatusIndicators()
-        findViewById<View>(R.id.homeMessagesButton).setOnClickListener {
-            if (StoreForwardFeature.enabled) startActivity(Intent(this, MessagesActivity::class.java))
-        }
         findViewById<View>(R.id.homeChangeSettingsButton).setOnClickListener { showSettings(true) }
         videoBackButton.setOnClickListener {
             showReceiverBrowser()
@@ -1807,6 +1955,14 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        findViewById<android.widget.EditText>(R.id.nearbyPeopleSearch).addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: android.text.Editable?) {
+                nearbySearchQuery = s?.toString().orEmpty()
+                updatePrivateCallPeerList()
+            }
+        })
         callPeerList.setOnItemClickListener { _, _, position, _ ->
             peerForListPosition(position)?.let { peer -> withWifiCheck { choosePrivateCallType(peer) } }
         }
@@ -1817,23 +1973,31 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<View>(R.id.acceptCallButton).setOnClickListener {
             if (!ensureThermalReady()) {
-                setCallStatus("Cannot accept: heat status is Critical or higher.")
+                setCallStatus(getString(R.string.call_cannot_accept_hot))
                 return@setOnClickListener
             }
             stopPrivateCallRinging()
             // A dialog here could let the ringing call time out; advise without blocking.
             WifiCoexistence.advice()?.let { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
-            runCatching { privateCall?.accept() }.onFailure { setCallStatus(it.message ?: "Could not accept") }
+            runCatching { acceptPrivateCall() }.onFailure { setCallStatus(it.message ?: "Could not accept") }
         }
         findViewById<View>(R.id.declineCallButton).setOnClickListener {
             stopPrivateCallRinging()
+            val oneTimeCaller = privateCall?.incomingCaller()?.pseudonymous == true // read before the decline closes the session
             runCatching { privateCall?.decline() }.onFailure { setCallStatus(it.message ?: "Could not decline") }
+            if (oneTimeCaller) CallBlockingUi.offerBlockUnknownAfterDecline(this)
         }
         findViewById<View>(R.id.declineAndBlockButton).setOnClickListener {
             stopPrivateCallRinging()
             val caller = privateCall?.incomingCaller() // read before the decline closes the session
             runCatching { privateCall?.decline() }.onFailure { setCallStatus(it.message ?: "Could not decline") }
             CallBlockingUi.afterDeclineAndBlock(this, caller)
+        }
+        findViewById<View>(R.id.declineAndReportButton).setOnClickListener {
+            val caller = privateCall?.incomingCaller()
+            stopPrivateCallRinging()
+            runCatching { privateCall?.decline() }
+            CallBlockingUi.report(this, caller?.takeUnless { it.pseudonymous }?.fingerprint, onDone = ::updateRecentCalls)
         }
         cancelCallButton.setOnClickListener {
             stopPrivateCallRinging()
@@ -1989,11 +2153,28 @@ class MainActivity : AppCompatActivity() {
         streamToggleButton.setOnClickListener {
             if (usesBroadcastDiscovery()) {
                 if (streamArmed) {
-                    stopStreaming("Stopped.")
+                    confirmEndLive { stopStreaming("Stopped.") }
                 } else {
                     withWifiCheck {
-                        // Experimental peer labels: optional public title, fixed for this stream.
-                        promptLabelText(LabelKind.STREAM_TITLE, R.string.stream_title_prompt, R.string.stream_title_hint, PeerLabelFeature.localStreamTitle) { title ->
+                        // Experimental peer labels: optional public title, fixed for this stream. Save goes live with the
+                        // title, Skip without one; Back or a tap outside does not go live and keeps what was typed.
+                        promptLabelText(
+                            LabelKind.STREAM_TITLE,
+                            R.string.stream_title_prompt,
+                            R.string.stream_title_hint,
+                            streamTitleDraft ?: PeerLabelFeature.localStreamTitle,
+                            positiveRes = R.string.go_live_with_title,
+                            negativeRes = R.string.go_live_without_title,
+                            onCancel = { typed ->
+                                streamTitleDraft = StreamTitleChoice.draftAfter(StreamTitleChoice.Action.CANCEL, typed, null)
+                            },
+                            onSkip = { typed ->
+                                streamTitleDraft = StreamTitleChoice.draftAfter(StreamTitleChoice.Action.SKIP, typed, null)
+                                if (PeerLabelFeature.enabled || PeerLabelFeature.titlePagesEnabled) PeerLabelFeature.localStreamTitle = null
+                                armDiscoverableStream()
+                            },
+                        ) { title ->
+                            streamTitleDraft = StreamTitleChoice.draftAfter(StreamTitleChoice.Action.SAVE, title.orEmpty(), title)
                             if (PeerLabelFeature.enabled || PeerLabelFeature.titlePagesEnabled) PeerLabelFeature.localStreamTitle = title
                             armDiscoverableStream()
                         }
@@ -2035,20 +2216,28 @@ class MainActivity : AppCompatActivity() {
             // (they always carry extras), never on recreation.
             val onboarding = shouldShowOnboarding(
                 OnboardingActivity.isDone(this),
-                launchHasExtras = intent.extras?.isEmpty == false,
+                // Only our own test/automation extras skip onboarding: launchers (e.g. Samsung One UI) add their own.
+                launchHasExtras = benchmarkExtrasPresent() || intent.hasExtra("offline_benchmark"),
                 recreated = savedInstanceState != null,
             )
             // The Live tab (the stream browser) is the landing screen; its scan and the permission
             // prompts wait for the first-run explanation.
             showReceiverBrowser(askPermissions = !onboarding)
-            if (onboarding) startActivity(Intent(this, OnboardingActivity::class.java))
+            if (onboarding) {
+                landOnCallsAfterOnboarding = true
+                startActivity(Intent(this, OnboardingActivity::class.java))
+            }
         }
         // A launch with benchmark/control extras is automation: do not show onboarding later.
-        if (intent.extras?.keySet()?.any { it.startsWith("test_") || it == "offline_benchmark" } == true) {
+        if (benchmarkExtrasPresent() || intent.hasExtra("offline_benchmark")) {
             OnboardingActivity.markDone(this)
         }
         window.decorView.post { debugAudioLiveAutoStart(intent) } // AUDIO-LIVE hook (DEBUG)
+        window.decorView.post { DebugMeetControl.handleIntent(this, intent) } // BVMID2 Meet harness (DEBUG)
         registerThermalGuard()
+        startupTimer.mark("rest")
+        Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + startupTimer.line("onCreate"))
+        handleMissedCallBack(intent)
     }
 
     /** AUDIO-LIVE hook (DEBUG): `test_audio_live_autostart=true` starts a radio without taps; see AudioLiveAutoStart. */
@@ -2119,6 +2308,7 @@ class MainActivity : AppCompatActivity() {
             startActivity(VerifyContactActivity.intent(this))
         }
         CallBlockingUi.bindSettings(this)
+        findViewById<View>(R.id.contactUsRow).setOnClickListener { ContactEmailUi.open(this) }
         findViewById<View>(R.id.aboutRow).setOnClickListener { startActivity(Intent(this, AboutActivity::class.java)) }
         findViewById<View>(R.id.emergencyWipeButton).setOnClickListener { confirmEmergencyWipe() }
         // A title page can complete after its stream row was drawn: redraw the Live list then.
@@ -2148,10 +2338,11 @@ class MainActivity : AppCompatActivity() {
             appPreferences.edit().putBoolean(PREF_PANIC_GESTURE, enabled).apply()
         }
         findViewById<View>(R.id.homeTitle).setOnClickListener {
-            if (appPreferences.getBoolean(PREF_PANIC_GESTURE, false) &&
-                panicTapDetector.onTap(SystemClock.elapsedRealtime())
-            ) {
-                startPanicWipeCountdown()
+            if (appPreferences.getBoolean(PREF_PANIC_GESTURE, false)) {
+                // The title is the quick-wipe gesture while that is on: no sheet in its way.
+                if (panicTapDetector.onTap(SystemClock.elapsedRealtime())) startPanicWipeCountdown()
+            } else {
+                showStatusSheet()
             }
         }
         bindSettingsPages()
@@ -2171,9 +2362,8 @@ class MainActivity : AppCompatActivity() {
             findViewById<TextView>(R.id.emptyStateText).setText(R.string.watch_empty_text)
             findViewById<View>(R.id.emptyStateAction).visibility = View.GONE
         }
-        bindEmptyState(R.id.callEmptyView, R.drawable.ic_group, R.string.people_empty_title, R.string.people_empty_text, R.string.people_empty_action) {
-            restartPrivateCallDiscovery()
-        }
+        bindCallEmptyState()
+        GattPoolBackoff.onScannerChanged = { runOnUiThread { if (!isFinishing && !isDestroyed) bindCallEmptyState() } }
         bindBrowserStatus(
             receiverBrowserStatus,
             streamList,
@@ -2196,8 +2386,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateHomeReadiness() {
         if (!::homeReadinessTitle.isInitialized) return
         val adapter = bluetoothAdapter
-        val permissionsGranted = OnboardingActivity.permissions(this)
-            .filter { it != Manifest.permission.POST_NOTIFICATIONS }
+        val permissionsGranted = RuntimePermissionPlan.readiness(Build.VERSION.SDK_INT, DebugTunables.callReadinessPermissions)
             .all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
         val bluetoothOn = runCatching { adapter?.isEnabled == true }.getOrDefault(false)
         val state = homeReadiness(adapter != null, permissionsGranted, bluetoothOn)
@@ -2260,7 +2449,7 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
             } else {
-                homePermissionRequest.launch(OnboardingActivity.permissions(this).toTypedArray())
+                homePermissionRequest.launch(RuntimePermissionPlan.readiness(Build.VERSION.SDK_INT, DebugTunables.callReadinessPermissions).toTypedArray())
             }
             else -> Unit
         }
@@ -2287,7 +2476,7 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.ptt_enable_title)
             .setMessage(R.string.ptt_enable_message)
             .setPositiveButton(R.string.ptt_enable_confirm, null)
-            .show()
+            .showTracked()
     }
 
     private fun loadIdentityIntoSettings() {
@@ -2340,7 +2529,7 @@ class MainActivity : AppCompatActivity() {
         val context = applicationContext
         Thread {
             val report = runCatching { DiagnosticsUiBackend.current.build(context) }
-                .getOrElse { "Diagnostics failed: ${it.javaClass.simpleName}" }
+                .getOrElse { CrashReports.diagnosticsFallback(it, CrashReports.dir(context)) }
             runOnUiThread {
                 getSystemService(android.content.ClipboardManager::class.java)?.setPrimaryClip(
                     android.content.ClipData.newPlainText(getString(R.string.help_export_subject), report),
@@ -2376,7 +2565,7 @@ class MainActivity : AppCompatActivity() {
                 performEmergencyWipe(panic = false, confirmation = input.text?.toString()?.trim())
             }
             .setNegativeButton(R.string.action_cancel, null)
-            .show()
+            .showTracked()
         val erase = dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
         erase.isEnabled = false
         input.addTextChangedListener(object : android.text.TextWatcher {
@@ -2492,7 +2681,7 @@ class MainActivity : AppCompatActivity() {
                         .setTitle(R.string.call_mismatch_title)
                         .setMessage(R.string.call_mismatch_message)
                         .setPositiveButton(R.string.action_close, null)
-                        .show()
+                        .showTracked()
                 }
             }
         }.start()
@@ -2615,6 +2804,10 @@ class MainActivity : AppCompatActivity() {
                 showCallSubject(null)
             } else {
                 callPartyState.text = incomingStateText(incoming, video = true)
+                findViewById<View>(R.id.declineAndBlockButton)?.visibility =
+                    if (privateCall?.incomingCaller()?.pseudonymous == true) View.GONE else View.VISIBLE
+                findViewById<View>(R.id.declineAndReportButton)?.visibility =
+                    if (DebugTunables.localReporting && privateCall?.incomingCaller()?.pseudonymous != true) View.VISIBLE else View.GONE
                 showCallSubject(
                     PeerLabels.forPeer(incoming.lowercase().take(12), null).callSubject
                         ?.let { getString(R.string.call_subject_line, it) },
@@ -2740,7 +2933,7 @@ class MainActivity : AppCompatActivity() {
         updateLiveTopBar(state)
         // Watching: whose stream this is (authenticated source) and whether it is verified.
         val source = activeStreamSourceNodeId?.toString()
-        if (state == LiveChipState.WATCHING && source != null) {
+        if (state == LiveChipState.WATCHING && source != null && activeStreamSourceAuthenticated) {
             val cached = streamSourceVerification?.takeIf { it.first == source }?.second
             if (cached == null) {
                 if (streamSourceLookup != source) {
@@ -2781,11 +2974,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        @Suppress("NAME_SHADOWING") val intent = SafeLaunchExtras.sanitize(intent)
         // A tap on a Messaging v2 notification opens that conversation (validated against the accepted contacts).
         if (intent.hasExtra(ConversationRoute.EXTRA_CONVERSATION)) {
             openConversationFromIntent(intent)
             return
         }
+        if (handleMissedCallBack(intent)) return
         // Experimental CallStyle Answer (CallNotificationActions); a token-less intent is ignored.
         if (intent.hasExtra(CallNotificationActions.EXTRA_ACTION)) {
             onCallNotificationAction(intent)
@@ -2806,6 +3001,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         DebugContactControl.handleIntent(this, intent)
+        DebugMeetControl.handleIntent(this, intent)
         debugAudioLiveAutoStart(intent)
         val control = intent.getStringExtra("test_control") ?: return
         val pendingControl = ++debugControlSequence to System.nanoTime()
@@ -2836,7 +3032,7 @@ class MainActivity : AppCompatActivity() {
                 ensureThermalReady()
             ) {
                 stopPrivateCallRinging()
-                runCatching { privateCall?.accept() }.isSuccess
+                runCatching { acceptPrivateCall() }.isSuccess
             } else false
             "decline" -> if (privateCall != null && privateCallPhase == PrivateCallPhase.INCOMING_RINGING) {
                 stopPrivateCallRinging()
@@ -2888,6 +3084,8 @@ class MainActivity : AppCompatActivity() {
             // never stops a closed LE CoC server, gracefully closed or killed ("Error starting
             // l2cap_listen", bmaraw-ab-call-e9c421d9-r1); CocListenerHub bounds it per role.
             "shutdown" -> {
+                // CleanShutdown: the end of onDestroy waits until nothing is registered and logs clean_shutdown: done.
+                CleanShutdown.begin(intent.getStringExtra(CleanShutdown.EXTRA_NONCE))
                 stopPrivateCallRinging()
                 privateCall?.hangUp()
                 // A force-stop gives the app no callback: Android 10-11 can keep the registration of a scanner that was
@@ -2994,11 +3192,15 @@ class MainActivity : AppCompatActivity() {
     private fun cancelDebugDialWait() {
         debugDialWait = null
         privateCallDiscoveryHandler.removeCallbacks(debugDialTimeout)
+        dialWaitSnackbar?.dismiss()
+        dialWaitSnackbar = null
     }
 
     private fun expireDebugDialWait() {
         val dial = debugDialWait ?: return
         debugDialWait = null
+        dialWaitSnackbar?.dismiss()
+        dialWaitSnackbar = null
         // A scanner in registration-failure back-off (GATT/scanner pool exhausted) explains the missing sighting.
         val scanFailure = GattPoolBackoff.scannerFailureCode()
         logCallInvite(
@@ -3007,6 +3209,12 @@ class MainActivity : AppCompatActivity() {
                 *DebugDialWait.expiryDetails(scanFailure, dial.waitedMs(SystemClock.elapsedRealtime())),
             ),
         )
+        // A contact dial: the not-found guidance now, after its wait (they are recognisable, so Open Nearby keeps looking).
+        val contact = if (dial.contact) savedContacts.firstOrNull { it.prefixHex == dial.prefix } else null
+        if (contact != null && scanFailure == null) {
+            showContactNotFound(contact, dial.callType == CallType.VIDEO, ContactReach.Hint.RECOGNISABLE)
+            return
+        }
         dial.displayName?.let { showDialNotFound(dial.prefix, it, scanFailure) }
     }
 
@@ -3022,7 +3230,7 @@ class MainActivity : AppCompatActivity() {
         dialFailureNotice = text
         dialFailureNoticeKey = key
         dialFailureNoticeAtMs = SystemClock.elapsedRealtime()
-        callBrowserStatus.text = text
+        callsSnackbar(text)
     }
 
     /** Status of a dial that waits for, or just failed to find, its person; null when no dial needs the line. */
@@ -3527,6 +3735,7 @@ class MainActivity : AppCompatActivity() {
             preferredRecoveryParent = null
             activeStreamTarget = null
             activeStreamSourceNodeId = null
+            activeStreamSourceAuthenticated = false
             preserveReceiverContinuityOnNextFormat = false
             clearReceiverBrowserNotice()
         }
@@ -3715,8 +3924,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun readinessNow(): HomeReadiness {
         val adapter = bluetoothAdapter
-        val permissionsGranted = OnboardingActivity.permissions(this)
-            .filter { it != Manifest.permission.POST_NOTIFICATIONS }
+        val permissionsGranted = RuntimePermissionPlan.readiness(Build.VERSION.SDK_INT, DebugTunables.callReadinessPermissions)
             .all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
         val bluetoothOn = runCatching { adapter?.isEnabled == true }.getOrDefault(false)
         return homeReadiness(adapter != null, permissionsGranted, bluetoothOn)
@@ -3748,7 +3956,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateStatusIndicators() {
         if (!::mainNav.isInitialized) return
-        val kind = statusKind(readinessNow(), hiddenNow(), relayPausedByBatteryNow(), hotNow())
+        val kind = statusKind(readinessNow(), hiddenNow(), relayPausedByBatteryNow(), hotNow(), reachabilityScreen(), DebugTunables.honestCallStatus)
         statusKindNow = kind
         val dot = when (kind) {
             StatusKind.READY -> R.color.success
@@ -3770,10 +3978,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Bluetooth off and missing permissions are fixed on a tap (the existing readiness action); the rest opens the sheet. */
     private fun onStatusChipClick() {
-        when (statusKindNow) {
-            StatusKind.BLUETOOTH_OFF, StatusKind.PERMISSIONS -> onHomeReadinessAction()
-            else -> showStatusSheet()
-        }
+        // UX fix 2026-10-21: every status tap opens the sheet; its button still fixes Bluetooth off or missing access.
+        showStatusSheet()
     }
 
     /**
@@ -3811,7 +4017,12 @@ class MainActivity : AppCompatActivity() {
             ),
         )
         val allowCalls = appPreferences.getBoolean(PREF_REACHABLE_FOR_CALLS, true)
-        row(R.id.statusRowCalls, R.string.status_row_calls, getString(if (allowCalls) R.string.status_on else R.string.status_value_hidden))
+        row(R.id.statusRowCalls, R.string.status_row_calls, getString(when {
+            DebugTunables.honestCallStatus && reachabilityScreen() == ReachabilityScreen.WATCH -> R.string.status_calls_paused_watch
+            DebugTunables.honestCallStatus && reachabilityScreen() == ReachabilityScreen.LIVE -> R.string.status_calls_paused_live
+            allowCalls -> R.string.status_on
+            else -> R.string.status_value_hidden
+        }))
         row(
             R.id.statusRowRelay, R.string.status_row_relay,
             getString(
@@ -3833,6 +4044,18 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.status_battery_line, charge.trim().ifEmpty { temperature }, "$temperature, heat ${heat.lowercase()}")
             },
         )
+        row(
+            R.id.statusRowPermissions, R.string.status_row_permissions,
+            if (readiness != HomeReadiness.PERMISSIONS_NEEDED) getString(R.string.status_value_all_allowed) else getString(R.string.readiness_permissions_text),
+        )
+        view.findViewById<View>(R.id.statusFullScreenWarning).apply {
+            visibility = if (FullScreenIntentAccess.showGuidance(Build.VERSION.SDK_INT, DebugTunables.fullScreenCallGuidance, FullScreenIntentAccess.canUse(this@MainActivity))) View.VISIBLE else View.GONE
+            setOnClickListener { runCatching { FullScreenIntentAccess.openSettings(this@MainActivity) } }
+        }
+        view.findViewById<View>(R.id.statusNotificationsWarning).visibility =
+            if (DebugTunables.callReadinessPermissions && !MissedCallNotification.allowed(Build.VERSION.SDK_INT,
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)) View.VISIBLE else View.GONE
+        row(R.id.statusRowIds, R.string.status_row_ids, getString(if (RotatingDiscoveryFeature.enabled) R.string.status_on else R.string.status_off))
         // Naming v2: "Nearby you appear as Gold Fox until 14:15", only while this phone is advertising a rotating call ID.
         ownGeneratedNameLine()?.let { line ->
             view.findViewById<View>(R.id.statusRowNameplate).visibility = View.VISIBLE
@@ -3873,6 +4096,9 @@ class MainActivity : AppCompatActivity() {
             R.id.advancedRowHelp to SettingsPage.HELP,
         ).forEach { (rowId, page) -> findViewById<View>(rowId).setOnClickListener { showSettingsPage(page) } }
         // Connection: the two summaries show two lines; a tap shows all of it (2026-10-17 redesign).
+        findViewById<View>(R.id.settingsRowYourCode).setOnClickListener {
+            startActivity(VerifyContactActivity.intent(this, showCode = true))
+        }
         listOf(R.id.homeConfigurationSummary, R.id.privateCallProfileSummary).forEach { id ->
             findViewById<TextView>(id).setOnClickListener { view ->
                 (view as TextView).maxLines = if (view.maxLines == 2) Int.MAX_VALUE else 2
@@ -3937,21 +4163,29 @@ class MainActivity : AppCompatActivity() {
             findViewById<View>(R.id.emptyStateAction).visibility = View.GONE
         }
         findViewById<android.widget.ListView>(R.id.contactsList).setOnItemClickListener { _, _, position, _ ->
-            if (MessagingV2Feature.enabled) {
-                // Messaging v2: a Contacts row is a conversation row; the contact actions are in the thread.
+            if (MessagingV2Feature.enabled && callBrowserChats) {
+                // The Chats tab: a row is a conversation.
                 conversationRows.nodeIdAt(position)?.let(::openThread)
                 return@setOnItemClickListener
             }
             savedContacts.getOrNull(position)?.let { contactActions.show(it) }
         }
+        findViewById<android.widget.ListView>(R.id.contactsList).setOnItemLongClickListener { _, _, position, _ ->
+            if (!(MessagingV2Feature.enabled && callBrowserChats)) return@setOnItemLongClickListener false
+            conversationRows.nodeIdAt(position)?.let(::showChatRowActions)
+            true
+        }
+        mainNav.menu.findItem(R.id.navChats)?.isVisible = ChatTab.visible(StoreForwardFeature.enabled)
         mainNav.setOnItemSelectedListener { item ->
             val onLive = appScreen == AppScreen.RECEIVER_BROWSER
             when (item.itemId) {
                 R.id.navLive -> if (!onLive) showReceiverBrowser()
                 R.id.navCalls -> if (currentTab() != MainTab.CALLS) showCallsNearby()
+                R.id.navChats -> if (currentTab() != MainTab.CHATS) showChatsTab()
                 R.id.navSettings -> if (appScreen != AppScreen.SETTINGS) showSettings(true)
                 R.id.navContacts -> if (currentTab() != MainTab.CONTACTS) showContactsTab()
             }
+            clearNavTooltips()
             true
         }
         updateMainNav()
@@ -3961,7 +4195,11 @@ class MainActivity : AppCompatActivity() {
     private fun currentTab(): MainTab? = when (appScreen) {
         AppScreen.HOME -> if (callsTabScreen.visibility == View.VISIBLE) MainTab.CALLS else null
         AppScreen.RECEIVER_BROWSER -> MainTab.LIVE
-        AppScreen.CALL_BROWSER -> if (callBrowserContacts) MainTab.CONTACTS else MainTab.CALLS
+        AppScreen.CALL_BROWSER -> when {
+            callBrowserChats -> MainTab.CHATS
+            callBrowserContacts -> MainTab.CONTACTS
+            else -> MainTab.CALLS
+        }
         AppScreen.SETTINGS -> MainTab.SETTINGS
         else -> null
     }
@@ -3977,24 +4215,131 @@ class MainActivity : AppCompatActivity() {
             val itemId = when (tab) {
                 MainTab.LIVE -> R.id.navLive
                 MainTab.CALLS -> R.id.navCalls
+                MainTab.CHATS -> R.id.navChats
                 MainTab.CONTACTS -> R.id.navContacts
                 MainTab.SETTINGS -> R.id.navSettings
             }
             mainNav.menu.findItem(itemId)?.isChecked = true
         }
         if (changed) ViewCompat.requestApplyInsets(findViewById(R.id.main))
+        clearNavTooltips()
+    }
+
+    /**
+     * S22 review 2026-10-21: a "Settings" tooltip stayed over the Live tab's Go live button. Material gives every tab a
+     * long-press tooltip with its title and sets it again whenever the bar updates; the labels are always shown here, so
+     * the tooltips add nothing. Clearing a tooltip also hides one that is showing.
+     */
+    private fun clearNavTooltips() {
+        if (!::mainNav.isInitialized) return
+        mainNav.post {
+            for (index in 0 until mainNav.menu.size()) {
+                mainNav.findViewById<View>(mainNav.menu.getItem(index).itemId)?.let {
+                    androidx.appcompat.widget.TooltipCompat.setTooltipText(it, null)
+                }
+            }
+        }
     }
 
     /** Calls > Nearby: everyone in range now, discovery running. */
     private fun showCallsNearby() {
         callBrowserContacts = false
+        callBrowserChats = false
         showPrivateCallBrowser()
+        // F13: the Calls tab opens on its Nearby segment, so the one-time full-screen offer belongs here too.
+        checkFullScreenCallAccess(offerPrompt = true)
     }
 
     /** Contacts: the saved people; discovery runs too so "Nearby now" is live. */
     private fun showContactsTab() {
         callBrowserContacts = true
+        callBrowserChats = false
+        bindChatsHeader(chats = false)
         showPrivateCallBrowser()
+        checkFullScreenCallAccess(offerPrompt = true)
+    }
+
+    /** The Chats tab: conversations in place with Messaging v2; with the older Messages only, that screen. */
+    private fun showChatsTab() {
+        if (!ChatTab.inPlace(MessagingV2Feature.enabled)) {
+            if (StoreForwardFeature.enabled) startActivity(Intent(this, MessagesActivity::class.java))
+            updateMainNav()
+            return
+        }
+        callBrowserContacts = true
+        callBrowserChats = true
+        bindChatsHeader(chats = true)
+        showPrivateCallBrowser()
+        refreshMessagesUnread(notify = false)
+    }
+
+    /** The shared list screen as Contacts or Chats: title and empty state ("No chats yet", "Message a contact"). */
+    private fun bindChatsHeader(chats: Boolean) {
+        findViewById<TextView>(R.id.contactsTitle)?.setText(if (chats) R.string.chats_title else R.string.contacts_title)
+        findViewById<View>(R.id.contactsEmptyView)?.apply {
+            findViewById<ImageView>(R.id.emptyStateIcon).setImageResource(if (chats) R.drawable.ic_chat else R.drawable.ic_group)
+            findViewById<TextView>(R.id.emptyStateTitle).setText(if (chats) R.string.chats_empty_title else R.string.contacts_empty_title)
+            findViewById<TextView>(R.id.emptyStateText).setText(if (chats) R.string.chats_empty_text else R.string.contacts_empty_text)
+            findViewById<com.google.android.material.button.MaterialButton>(R.id.emptyStateAction).apply {
+                visibility = if (chats) View.VISIBLE else View.GONE
+                setText(R.string.chats_empty_action)
+                setOnClickListener { pickContactToMessage() }
+            }
+        }
+        findViewById<View>(R.id.contactsAddButton)?.visibility = if (chats) View.GONE else View.VISIBLE
+    }
+
+    /** "Message a contact": a plain list of the saved contacts; the chosen one's thread opens. */
+    private fun pickContactToMessage() {
+        val contacts = savedContacts
+        if (contacts.isEmpty()) {
+            Toast.makeText(this, R.string.chats_no_contacts, Toast.LENGTH_LONG).show()
+            return
+        }
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.chats_pick_contact)
+            .setItems(contacts.map { it.title }.toTypedArray()) { _, index ->
+                ChatEntry.threadFor(ChatEntry.Source.CONTACT_ROW, contacts[index].nodeIdHex, MessagingV2Feature.enabled)?.let(::openThread)
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .showTracked()
+    }
+
+    /** Long-press on a chat: Mute or Unmute, and Delete chat (every message with that person, on this phone only). */
+    private fun showChatRowActions(nodeIdHex: String) {
+        val name = savedContacts.firstOrNull { it.nodeIdHex.equals(nodeIdHex, ignoreCase = true) }?.title ?: return
+        val muted = ChatMute.isMuted(this, nodeIdHex)
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(name)
+            .setItems(arrayOf(getString(if (muted) R.string.chat_unmute else R.string.chat_mute), getString(R.string.chat_delete))) { _, which ->
+                if (which == 0) {
+                    ChatMute.setMuted(this, nodeIdHex, !muted)
+                    ConversationNotifier.update(applicationContext, nodeIdHex)
+                } else {
+                    confirmDeleteChat(nodeIdHex, name)
+                }
+            }
+            .showTracked()
+    }
+
+    private fun confirmDeleteChat(nodeIdHex: String, name: String) {
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.chat_delete_title)
+            .setMessage(getString(R.string.chat_delete_text, name))
+            .setPositiveButton(R.string.chat_delete) { _, _ ->
+                val context = applicationContext
+                contactWorker.execute {
+                    runCatching {
+                        val engine = StoreForwardRuntime.node(context).v2 ?: return@runCatching
+                        // The engine's own per-message delete (record, files, sealed segments, key): no new store operation.
+                        engine.threads.forPeer(nodeIdHex.lowercase()).forEach { engine.deleteMessage(it.id) }
+                    }
+                    ConversationNotifier.update(context, nodeIdHex)
+                    runOnUiThread { if (!isDestroyed) updateContactsList() }
+                }
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .showTracked()
     }
 
     /** People tab: the idle Home state (reachable, nothing scanning) with the contacts in front. */
@@ -4004,7 +4349,42 @@ class MainActivity : AppCompatActivity() {
         settingsBackCallback.isEnabled = true
         updateRecentCalls()
         updateMainNav()
+        checkFullScreenCallAccess(offerPrompt = true)
     }
+
+    /** The last `call_fsi` line, so it is logged only when the access or the prompt state changes. */
+    private var lastFullScreenAccessLine: String? = null
+
+    /**
+     * Android 14+ "full-screen incoming calls" access ([FullScreenIntentAccess]): re-checked on every resume (the user may
+     * come back from the Android page) and when the calls area opens. When Android refuses it, the calls area offers it
+     * once, with a link to the system page; Settings keeps the permanent link. Never asked again after that one time.
+     */
+    private fun checkFullScreenCallAccess(offerPrompt: Boolean) {
+        val allowed = runCatching { FullScreenIntentAccess.canUse(this) }.getOrDefault(true)
+        val prompted = appPreferences.getBoolean(FullScreenIntentAccess.PREF_PROMPTED, false)
+        val line = FullScreenIntentAccess.logLine(allowed, prompted)
+        if (line != lastFullScreenAccessLine) {
+            lastFullScreenAccessLine = line
+            Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + line)
+        }
+        callFeatureBinder?.refresh()
+        // Automated benchmark launches never get the offer in their way; a ringing or running call never gets it at all.
+        if (!offerPrompt || isBenchmarkLaunch() || privateCallPhase != null) return
+        if (!FullScreenIntentAccess.offerOnce(Build.VERSION.SDK_INT, CallUx.settings.lockScreen, allowed, prompted)) return
+        appPreferences.edit().putBoolean(FullScreenIntentAccess.PREF_PROMPTED, true).apply()
+        lastFullScreenAccessLine = FullScreenIntentAccess.logLine(allowed, true)
+        Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + lastFullScreenAccessLine)
+        // F15: a non-blocking banner, never a modal: the list stays usable and an incoming call is never covered. Swiping it
+        // away is "Not now"; the Settings link stays.
+        fullScreenAccessBanner = com.google.android.material.snackbar.Snackbar
+            .make(findViewById(android.R.id.content), R.string.fsi_banner_text, com.google.android.material.snackbar.Snackbar.LENGTH_INDEFINITE)
+            .setAction(R.string.fsi_banner_allow) { runCatching { FullScreenIntentAccess.openSettings(this) } }
+            .also { it.show() }
+    }
+
+    /** F15: the one-time full-screen offer (a banner); closed when a call rings or the call screen opens. */
+    private var fullScreenAccessBanner: com.google.android.material.snackbar.Snackbar? = null
 
     private fun updateDestinationControlsVisibility() {
         if (!::destinationLabel.isInitialized) return
@@ -4201,7 +4581,7 @@ class MainActivity : AppCompatActivity() {
                     }.start()
                 }
                 .setNegativeButton(R.string.action_cancel, null)
-                .show()
+                .showTracked()
         }
         neutralNameSwitchBinding = true
         neutralBluetoothNameSwitch.isChecked = appPreferences.getBoolean(NeutralNameOption.PREF, false)
@@ -4229,7 +4609,7 @@ class MainActivity : AppCompatActivity() {
                     applyNeutralName()
                 }
                 .setNegativeButton(R.string.action_cancel, null)
-                .show()
+                .showTracked()
         }
         experimentalRelayedCallsSwitch.isChecked = appPreferences.getBoolean(RelayedCallsFeature.PREF, false)
         experimentalRelayedCallsSwitch.setOnCheckedChangeListener { _, enabled ->
@@ -4383,7 +4763,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun applyRelayChildMediaAge() {
         val benchmarkLaunch = BuildConfig.DEBUG &&
-            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+            benchmarkExtrasPresent()
         DebugTunables.experimentalRelayChildMediaAge = relayChildMediaAgeSetting(
             benchmarkLaunch = benchmarkLaunch,
             benchmarkExtra = intent.getBooleanExtra("test_relay_child_media_age", true),
@@ -4394,7 +4774,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyExperimentalTemporalLayersOnly() {
         val benchmarkLaunch = BuildConfig.DEBUG &&
-            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+            benchmarkExtrasPresent()
         DebugTunables.experimentalTemporalLayers = if (benchmarkLaunch) {
             intent.getBooleanExtra("test_temporal_layers", false)
         } else {
@@ -4428,7 +4808,7 @@ class MainActivity : AppCompatActivity() {
 
     /** A DEBUG build launched with any `test_` extra: features read only their extras (default off). */
     private fun callFeatureBenchmarkLaunch(): Boolean =
-        BuildConfig.DEBUG && intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+        BuildConfig.DEBUG && benchmarkExtrasPresent()
 
     /** The user's explicit choice for a promoted feature switch, or null when never touched. */
     private fun storedCallFeatureChoice(key: String): Boolean? = CallFeatureResolver.storedChoice(appPreferences, key)
@@ -4574,7 +4954,7 @@ class MainActivity : AppCompatActivity() {
         // "Your name": a row with the current name as its value (only while names and titles is on).
         button.visibility = if (PeerLabelFeature.enabled) View.VISIBLE else View.GONE
         findViewById<TextView>(R.id.identityNameValue).text = PeerLabelFeature.localName
-            ?: getString(R.string.settings_name_not_set)
+            ?: OwnNearbyName.nameNotSet(this)
         refreshIdentityAudience()
         button.setOnClickListener {
             promptLabelText(LabelKind.PERSON_NAME, R.string.identity_name_title, R.string.identity_name_hint, PeerLabelFeature.localName) { name ->
@@ -4607,15 +4987,29 @@ class MainActivity : AppCompatActivity() {
                     refreshIdentityAudience()
                 }
                 .setNegativeButton(R.string.action_cancel, null)
-                .show()
+                .showTracked()
         }
     }
+
+    /** The Go live title typed last (kept after Back, Skip or the end of a stream) to prefill the next title dialog. */
+    private var streamTitleDraft: String? = null
 
     /**
      * One optional text field (name, call subject or stream title) checked with [LabelText]. Empty
      * means none. With peer labels off, [onDone] runs at once with null (no dialog, unchanged flow).
+     * [onCancel] (Back or a tap outside) and [onSkip] get the typed text; when absent, both mean [onDone] with null.
      */
-    private fun promptLabelText(kind: LabelKind, titleRes: Int, hintRes: Int, initial: String?, onDone: (String?) -> Unit) {
+    private fun promptLabelText(
+        kind: LabelKind,
+        titleRes: Int,
+        hintRes: Int,
+        initial: String?,
+        onCancel: ((String) -> Unit)? = null,
+        onSkip: ((String) -> Unit)? = null,
+        positiveRes: Int = R.string.action_save,
+        negativeRes: Int = R.string.action_skip,
+        onDone: (String?) -> Unit,
+    ) {
         // Naming v2: the stream title also works with only the public title pages switched on.
         if (!PeerLabelFeature.enabled && !(kind == LabelKind.STREAM_TITLE && PeerLabelFeature.titlePagesEnabled)) {
             onDone(null)
@@ -4635,7 +5029,7 @@ class MainActivity : AppCompatActivity() {
         com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
             .setTitle(titleRes)
             .setView(container)
-            .setPositiveButton(R.string.action_save) { _, _ ->
+            .setPositiveButton(positiveRes) { _, _ ->
                 val text = input.text?.toString().orEmpty()
                 if (text.isBlank()) {
                     onDone(null)
@@ -4651,9 +5045,13 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-            .setNegativeButton(R.string.action_skip) { _, _ -> onDone(null) }
-            .setOnCancelListener { onDone(null) }
-            .show()
+            .setNegativeButton(negativeRes) { _, _ ->
+                if (onSkip != null) onSkip(input.text?.toString().orEmpty()) else onDone(null)
+            }
+            .setOnCancelListener {
+                if (onCancel != null) onCancel(input.text?.toString().orEmpty()) else onDone(null)
+            }
+            .showTracked()
     }
 
     /**
@@ -4671,8 +5069,10 @@ class MainActivity : AppCompatActivity() {
             Log.i("BluetoothVideo", "BENCHMARK store_forward_feature: enabled=$enabled")
         }
         StoreForwardFeature.enabled = enabled
-        // Messaging v2 (DECISIONS Design M), default off: a DEBUG benchmark launch reads only test_messaging_v2.
-        val v2 = MessagingV2Feature.resolve(benchmarkLaunch, { intent.getBooleanExtra(it, false) }, ::storedCallFeatureChoice, enabled)
+        // Messaging v2 (DECISIONS Design M): on with Messages (design decision 2026-10-21); DEBUG test_messaging_v2=false is v1.
+        val v2 = MessagingV2Feature.resolve(
+            benchmarkLaunch, { if (intent.hasExtra(it)) intent.getBooleanExtra(it, true) else null }, ::storedCallFeatureChoice, enabled,
+        )
         if (v2 != MessagingV2Feature.enabled && BuildConfig.DEBUG) {
             Log.i("BluetoothVideo", "BENCHMARK store_forward_feature: messaging_v2=$v2")
         }
@@ -4688,7 +5088,9 @@ class MainActivity : AppCompatActivity() {
             benchmarkLaunch, { name, default -> intent.getBooleanExtra(name, default) }, ::storedCallFeatureChoice, v2,
         )
         scheduleChatTick()
-        findViewById<View>(R.id.homeMessagesButton)?.visibility = if (enabled) View.VISIBLE else View.GONE
+        // Chats are a tab now (ChatTab), never a button on the Live page.
+        findViewById<View>(R.id.homeMessagesButton)?.visibility = View.GONE
+        if (::mainNav.isInitialized) mainNav.menu.findItem(R.id.navChats)?.isVisible = ChatTab.visible(enabled)
         // Automatic sync (Settings > Features, or DEBUG `test_sf_auto_sync`), on top of the above.
         val auto = StoreForwardAutoSyncFeature.resolve(
             benchmarkLaunch,
@@ -4719,10 +5121,29 @@ class MainActivity : AppCompatActivity() {
             val count = runCatching {
                 val node = StoreForwardRuntime.node(context)
                 val seen = InboxSeenStore.forRoot(StoreForwardRuntime.root(context)).read()
-                UnreadMessages.count(node.archive.page(0, UNREAD_SCAN_LIMIT, MessageDirection.IN), seen)
+                UnreadMessages.count(node.archive.page(0, UNREAD_SCAN_LIMIT, MessageDirection.IN).filterNot { LocalReporting.hidden(context, it.peerNode) }, seen)
             }.getOrDefault(0)
+            // The Chats tab's badge: per-chat unread counts with Messaging v2, else the Messages count.
+            val badge = if (MessagingV2Feature.enabled) {
+                runCatching {
+                    val node = StoreForwardRuntime.node(context)
+                    if (node.v2 == null) null else ChatTab.badge(ConversationIndex(node).summaries(showPreview = false, sending = { false }).filterNot { LocalReporting.hidden(context, it.peer.toString()) }.map { it.unread })
+                }.getOrNull()
+            } else {
+                ChatTab.badge(listOf(count))
+            }
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
+                if (::mainNav.isInitialized) {
+                    if (badge == null) {
+                        mainNav.removeBadge(R.id.navChats)
+                    } else {
+                        mainNav.getOrCreateBadge(R.id.navChats).apply {
+                            number = badge
+                            isVisible = true
+                        }
+                    }
+                }
                 tile.text = if (count > 0) getString(R.string.home_messages_unread, count) else getString(R.string.home_messages)
                 // Messaging v2 posts one notification per conversation instead (MessagingV2Notifications.kt).
                 if (notify && !MessagingV2Feature.enabled && MessageNotifications.shouldPost(count, MessagesScreenState.visible, activityResumed)) {
@@ -4819,6 +5240,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * "Find PCs" (PcAnnouncementFeature, Experimental, default off). A DEBUG benchmark launch uses only `test_find_pcs`;
+     * every other launch the user's choice or the shipped default. Read when a discovery scan is created.
+     */
+    private fun applyFindPcs() {
+        val enabled = PcAnnouncementFeature.resolve(
+            DebugTunables.benchmarkLaunch,
+            { intent.getBooleanExtra(it, false) },
+            ::storedFeatureChoice,
+        )
+        if (enabled != PcAnnouncementFeature.enabled) {
+            Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "find_pcs: enabled=$enabled")
+            // Switching it on again is a new try: an earlier refused filter is forgotten.
+            if (enabled) PcAnnouncementFeature.filterRejected = false
+        }
+        PcAnnouncementFeature.enabled = enabled
+    }
+
+    /**
      * Rotating discovery IDs (RotatingDiscoveryFeature, default [RotatingDiscoveryFeature.DEFAULT_ENABLED] for
      * user launches; a DEBUG benchmark launch reads only `test_rotating_ids`). Read when a call
      * endpoint or call scan is created. RV1: while on, the Bluetooth name is the neutral one; turning
@@ -4826,7 +5265,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun applyRotatingIds() {
         val benchmarkLaunch = BuildConfig.DEBUG &&
-            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+            benchmarkExtrasPresent()
         val enabled = RotatingDiscoveryFeature.resolve(
             benchmarkLaunch,
             { intent.getBooleanExtra(it, false) },
@@ -4858,7 +5297,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun applyNeutralName() {
         val benchmarkLaunch = BuildConfig.DEBUG &&
-            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+            benchmarkExtrasPresent()
         // Builds before 2026-10-11 renamed the phone automatically with the rotating switch. A normal launch keeps
         // that name by turning the option on (nothing changes on the radio) and tells the user once; a DEBUG
         // benchmark launch restores the test phone's own name instead (the option is off there).
@@ -4910,7 +5349,7 @@ class MainActivity : AppCompatActivity() {
                     neutralNameSwitchBinding = false
                     applyNeutralName()
                 }
-                .show()
+                .showTracked()
         }
     }
 
@@ -4961,7 +5400,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun applyCallResolutionLadder() {
         val extras = intent.extras?.keySet().orEmpty()
-        val benchmarkLaunch = BuildConfig.DEBUG && extras.any { it.startsWith("test_") }
+        val benchmarkLaunch = BuildConfig.DEBUG && benchmarkExtrasPresent()
         val ladderExtra = BuildConfig.DEBUG && CallResolutionLadderFeature.EXTRA in extras
         val ladderExtraValue = intent.getBooleanExtra(CallResolutionLadderFeature.EXTRA, false)
         // The measured Auto ladder needs the call resolution ladder to move along its rungs; an explicit
@@ -4979,7 +5418,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun applyRelayedCalls() {
         val benchmarkLaunch = BuildConfig.DEBUG &&
-            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+            benchmarkExtrasPresent()
         val enabled = RelayedCallsFeature.resolve(
             benchmarkLaunch,
             { intent.getBooleanExtra(it, false) },
@@ -5113,7 +5552,7 @@ class MainActivity : AppCompatActivity() {
 
     /** A relay duty ended: rebuild the call endpoint quietly (no toast, no screen change) and tidy up. */
     /** A call declined by call blocking (blocked person or unknown caller): no screen, no toast; Recent is refreshed. */
-    // ----- BVMID2 Meet flow (Naming v2, `bvmid2`, off): the host the Add contact screen talks to through MeetBridge -----
+    // ----- BVMID2 Meet flow (Naming v2, `bvmid2`, on by default): the host the Add contact screen talks to through MeetBridge -----
 
     /** The Add contact screen is open: the call endpoint is kept on air for it (see [MeetBridge]). */
     private var meetHold = false
@@ -5126,6 +5565,8 @@ class MainActivity : AppCompatActivity() {
     private var meetReached = false
     private var meetSearchOver = false
     private var meetDeadlineMs = 0L
+    /** The endpoint whose verification scan reached the code's phone (Design QL: it learns the user's confirmation). */
+    @Volatile private var meetScanEndpoint: AndroidPrivateVideoCall? = null
 
     private val meetHost = object : MeetBridge.Host {
         override fun begin() {
@@ -5136,6 +5577,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun end() {
             meetHold = false
+            meetScanEndpoint = null
             QrMeet.display.screenOnlyReachable = false
             QrMeet.display.leave()
             meetCancelScan()
@@ -5151,7 +5593,25 @@ class MainActivity : AppCompatActivity() {
 
         override fun scan(payload: Bvmid2Payload, listener: MeetBridge.ScanListener) = meetStartScan(payload, listener)
 
+        override fun scanConfirmed(peer: IdentityFingerprint, yes: Boolean) {
+            meetScanEndpoint?.qrScanConfirmed(peer, yes)
+        }
+
         override fun cancelScan() = meetCancelScan()
+
+        override fun callContact(peer: IdentityFingerprint) {
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                val prefix = peer.nodePrefixHex.lowercase(Locale.US)
+                callPerson(prefix, video = !IntercomFeatures.current.voiceCalls, name = contactNames[prefix] ?: getString(R.string.call_someone))
+            }
+        }
+
+        override fun codeShown() {
+            // F11: the displayer's call listener advertises at low latency / high power while the code is live.
+            if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK meet_code: shown | boost=${AdvertisingBoost.holding()}")
+            privateCall?.boostAdvertising()
+        }
     }
 
     private val meetHandler = Handler(Looper.getMainLooper())
@@ -5171,8 +5631,33 @@ class MainActivity : AppCompatActivity() {
         meetReached = false
         meetAttemptActive = false
         meetSearchOver = false
-        meetDeadlineMs = SystemClock.elapsedRealtime() + MeetBridge.SCAN_LIMIT_MS
+        val searchMs = MeetBridge.searchMs()
+        val limitMs = MeetBridge.scanLimitMs()
+        meetDeadlineMs = SystemClock.elapsedRealtime() + limitMs
+        // F11: the code's ID, to compare with the scanner's scan_reject lines (id=...) of every refused candidate.
+        if (BuildConfig.DEBUG) Log.i(
+            "BluetoothVideo",
+            "BENCHMARK meet_scan: start | codeRdi=${payload.rdi.toHexKey()} | searchMs=$searchMs | limitMs=$limitMs | " +
+                "filter=${if (ScanFilterFallback.softwareFor(DebugTunables.meetSoftwareFilter)) "software" else "hardware"}",
+        )
         listener.onSearching()
+        startMeetDiscovery(adapter, payload, searchMs + 2_000L)
+        // F11: a fresh scanner half-way if nothing was heard yet (some stacks report an address once per scanner).
+        WeakPairReach.meetRestartAtMs(DebugTunables.weakPairReach)?.let { restartAtMs ->
+            meetHandler.postDelayed({
+                if (meetPayload === payload && meetPeers.isEmpty() && !meetReached) {
+                    if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK meet_scan: restart | afterMs=$restartAtMs")
+                    startMeetDiscovery(adapter, payload, searchMs - restartAtMs + 2_000L)
+                }
+            }, restartAtMs)
+        }
+        meetHandler.postDelayed({ meetSearchOver = true; meetTryNext() }, searchMs)
+        meetHandler.postDelayed({ meetFinish(MeetBridge.Failure.COULD_NOT_CONNECT) }, limitMs)
+    }
+
+    /** One Meet scanner for the code's advert ([durationMs]); a new one replaces the running one. */
+    private fun startMeetDiscovery(adapter: android.bluetooth.BluetoothAdapter, payload: Bvmid2Payload, durationMs: Long) {
+        meetDiscovery?.close()
         lateinit var discovery: BleL2capDiscovery
         discovery = BleL2capDiscovery(
             adapter,
@@ -5191,15 +5676,14 @@ class MainActivity : AppCompatActivity() {
                     ad.flags and DiscoveryAnnouncement.FLAG_CLASSIC_TRANSPORT == 0 &&
                     ad.nodeIdPrefix.contentEquals(payload.rdi)
             },
-            scanDurationMs = MeetBridge.SEARCH_MS + 2_000L,
+            scanDurationMs = durationMs,
             reportDuplicates = true,
             continuousLowLatency = true,
             acceptRotating = true,
+            softwareFilter = DebugTunables.meetSoftwareFilter,
         )
         meetDiscovery = discovery
         discovery.start()
-        meetHandler.postDelayed({ meetSearchOver = true; meetTryNext() }, MeetBridge.SEARCH_MS)
-        meetHandler.postDelayed({ meetFinish(MeetBridge.Failure.COULD_NOT_CONNECT) }, MeetBridge.SCAN_LIMIT_MS)
     }
 
     /** Dials the next untried address, once the endpoint is idle and listening again (a failed attempt ends it quietly). */
@@ -5225,6 +5709,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 if (meetPayload === payload && !meetReached) {
                     meetReached = true
+                    meetScanEndpoint = endpoint
                     meetListener?.onReached(fingerprint, node)
                 }
             }
@@ -5246,6 +5731,11 @@ class MainActivity : AppCompatActivity() {
     private fun meetFinish(failure: MeetBridge.Failure) {
         val listener = meetListener
         val reached = meetReached
+        if (BuildConfig.DEBUG && meetPayload != null) Log.i(
+            "BluetoothVideo",
+            "BENCHMARK meet_scan: end | reached=$reached | failure=${failure.name.lowercase()} | " +
+                "candidates=${meetPeers.size} | tried=${meetTried.size}",
+        )
         meetCancelScan()
         if (!reached) listener?.onFailed(failure)
     }
@@ -5262,6 +5752,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleBlockedCallEnded(endpoint: AndroidPrivateVideoCall) {
+        if (endpoint.endedBusyWhileDialling) {
+            // F14: the user's own dial goes on; a sighting during the endpoint rebuild waits for it.
+            deferPendingDialToWait("busy_declined_incoming")
+            val caller = endpoint.busyDeclinedCaller?.let { incomingPeerName(it) } ?: getString(R.string.people_someone_nearby)
+            val dialling = currentOwnDial()?.name?.takeIf { it.isNotBlank() }
+            Toast.makeText(
+                this,
+                if (dialling != null) getString(R.string.call_busy_declined_while_dialling, caller, dialling)
+                else getString(R.string.call_busy_declined, caller),
+                Toast.LENGTH_LONG,
+            ).show()
+        }
         endpoint.close()
         privateCall = null
         privateCallAvailable = false
@@ -5284,7 +5786,7 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** First switch-on: what the experiment does, with both choices preselected on (user decisions 2 and 3). */
+    /** First switch-on: what the experiment does, with both choices preselected on (design decisions 2 and 3). */
     private fun showRelayedCallsPrompt() {
         val checked = booleanArrayOf(true, true)
         androidx.appcompat.app.AlertDialog.Builder(this)
@@ -5305,7 +5807,7 @@ class MainActivity : AppCompatActivity() {
                 experimentalRelayedCallsSwitch.isChecked = true
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .showTracked()
     }
 
     private fun updateRelayedCallsSettingsUi() {
@@ -5319,7 +5821,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyCallReachability() {
         val benchmarkLaunch = BuildConfig.DEBUG &&
-            intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+            benchmarkExtrasPresent()
         val enabled = CallReachabilityFeature.resolve(
             benchmarkLaunch,
             stored = { appPreferences.getBoolean(PREF_REACHABLE_FOR_CALLS, true) },
@@ -5386,12 +5888,11 @@ class MainActivity : AppCompatActivity() {
     private fun idleEndpointScreen(): Boolean =
         reachabilityScreen().let { it == ReachabilityScreen.HOME || it == ReachabilityScreen.LIVE_BROWSING }
 
-    /** Bluetooth on and every call permission granted (the home readiness card's READY). */
+    /** Bluetooth on and endpoint permissions granted; notification denial stays a readiness warning. */
     private fun callReachabilityReady(): Boolean {
         val adapter = bluetoothAdapter ?: return false
         val bluetoothOn = runCatching { adapter.isEnabled }.getOrDefault(false)
-        return bluetoothOn && OnboardingActivity.permissions(this)
-            .filter { it != Manifest.permission.POST_NOTIFICATIONS }
+        return bluetoothOn && RuntimePermissionPlan.endpoint(Build.VERSION.SDK_INT, DebugTunables.callReadinessPermissions)
             .all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
     }
 
@@ -5513,6 +6014,8 @@ class MainActivity : AppCompatActivity() {
         UpdateFeatures.registerAll(BuildConfig.UPDATER_AVAILABLE)
         NamingFeatures.registerAll()
         MeetBridge.host = meetHost
+        VerificationEvents.listener = verificationListener
+        DialCollision.ownDial = ::currentOwnDial
         applicationContext.let { appContext -> Thread { StrangerNames.install(appContext) }.start() }
         val before = FeatureCatalog.current
         val snapshot = FeatureCatalog.refresh(
@@ -5551,7 +6054,7 @@ class MainActivity : AppCompatActivity() {
                     .setMessage(R.string.feat_classic_dialog_message)
                     .setPositiveButton(R.string.feat_classic_dialog_confirm) { _, _ -> proceed() }
                     .setNegativeButton(R.string.action_cancel, null)
-                    .show()
+                    .showTracked()
                 return true
             }
 
@@ -5559,8 +6062,9 @@ class MainActivity : AppCompatActivity() {
                 onConnectivityFeatureChanged(spec, enabled)
         }
         val privacy = listOf(ConnectivityFeatures.bmh3, ConnectivityFeatures.bmh3Pseudonyms)
-        val share = listOf(ConnectivityFeatures.shareAppNearby)
-        val connection = ConnectivityFeatures.all.filter { it !in privacy && it !in share }
+        // The Google Play flavour offers no "Share app nearby", so it has no settings row there either.
+        val share = listOf(ConnectivityFeatures.shareAppNearby).filter { OfflineAppShareFeature.availableInThisBuild }
+        val connection = ConnectivityFeatures.all.filter { it !in privacy && it != ConnectivityFeatures.shareAppNearby }
         connectivityFeatureBlock = FeatureSettingsBlock(
             findViewById(R.id.connFeaturesContainer), connection, appPreferences, host,
         ).also { it.bind() }
@@ -5623,7 +6127,7 @@ class MainActivity : AppCompatActivity() {
                 refreshVisibleByNameRow()
             }
             .setNegativeButton(R.string.action_cancel, null)
-            .show()
+            .showTracked()
     }
 
     private fun askStartVisibleByName() {
@@ -5656,7 +6160,7 @@ class MainActivity : AppCompatActivity() {
                 startVisibleByName(input.text?.toString().orEmpty(), allow.isChecked, confirmedSameAsCall = false)
             }
             .setNegativeButton(R.string.action_cancel, null)
-            .show()
+            .showTracked()
     }
 
     private fun startVisibleByName(name: String, allowAnyone: Boolean, confirmedSameAsCall: Boolean) {
@@ -5679,7 +6183,7 @@ class MainActivity : AppCompatActivity() {
                     .setMessage(R.string.visible_name_same_message)
                     .setPositiveButton(R.string.visible_name_same_use) { _, _ -> startVisibleByName(name, allowAnyone, confirmedSameAsCall = true) }
                     .setNegativeButton(R.string.action_cancel, null)
-                    .show()
+                    .showTracked()
             VisibleNameWindow.Result.NAME_TOO_LONG_FOR_PAGES ->
                 Toast.makeText(this, R.string.visible_name_too_long, Toast.LENGTH_LONG).show()
             VisibleNameWindow.Result.NAME_INVALID, VisibleNameWindow.Result.NAME_HASH_ZERO ->
@@ -5743,7 +6247,7 @@ class MainActivity : AppCompatActivity() {
                         .setMessage(R.string.update_ask_message)
                         .setPositiveButton(R.string.update_ask_yes) { _, _ -> proceed() }
                         .setNegativeButton(R.string.action_cancel, null)
-                        .show()
+                        .showTracked()
                     return true
                 }
 
@@ -5814,6 +6318,7 @@ class MainActivity : AppCompatActivity() {
                 restartIdleCallEndpointForRelayedCalls()
             }
             ConnectivityFeatures.iphoneDiscovery -> applyCompactDiscovery()
+            ConnectivityFeatures.findPcs -> applyFindPcs()
             ConnectivityFeatures.shareAppNearby -> applyOfflineAppShare()
             ConnectivityFeatures.nativeOpus -> applyNativeOpus()
             // An idle call endpoint was opened with the old switch (its offer hint); rebuild it.
@@ -6334,7 +6839,7 @@ class MainActivity : AppCompatActivity() {
         if (BluetoothOnRecoveryPolicy.deferStreamOfferStart(BluetoothOnRecovery.enabled, BluetoothEpoch.core.recoveryPending)) {
             // Bluetooth is off or just came back: the offer would run against a dead stack. The ON callback starts it.
             BluetoothOnRecovery.log(BluetoothOnRecovery.COMPONENT_STREAM_ADVERTISE, "skipped", "start_deferred_until_bluetooth_on")
-            setStatus("Bluetooth is off. The stream is offered when it is back on.")
+            setStatus(getString(R.string.live_status_bluetooth_off))
             return
         }
         if (streamToken == 0) streamToken = StreamTokenGenerator.next()
@@ -6398,7 +6903,7 @@ class MainActivity : AppCompatActivity() {
                     )),
                     { message ->
                         if (streamPaused) {
-                            setStatus("Broadcast paused. Connections remain available.")
+                            setStatus(getString(R.string.live_status_paused_viewers))
                         } else {
                             setStatus(message)
                         }
@@ -6465,12 +6970,13 @@ class MainActivity : AppCompatActivity() {
                             BluetoothOnRecovery.COMPONENT_STREAM_ADVERTISE, "skipped", "advertise_failed_while_bluetooth_down_kept_armed",
                             "error=${error.message ?: error.javaClass.simpleName}",
                         )
-                        setStatus("Bluetooth is off. The stream is offered again when it is back on.")
+                        setStatus(getString(R.string.live_status_bluetooth_off))
                         return@onFailure
                     }
                     streamArmed = false
                     stopForegroundSessionIfIdle()
-                    setStatus("Could not advertise this stream: ${error.message ?: error.javaClass.simpleName}")
+                    Log.w("BluetoothVideo", "Could not advertise this stream", error)
+                    setStatus(getString(R.string.live_status_failed))
                     updateStartEnabled()
                 }
             }
@@ -6662,7 +7168,7 @@ class MainActivity : AppCompatActivity() {
         streamTitleAdvertiser?.close()
         streamTitleAdvertiser = null
         streamPresenceStarting = false
-        setStatus("Bluetooth is off. The stream is offered again when it is back on.")
+        setStatus(getString(R.string.live_status_bluetooth_off))
     }
 
     /**
@@ -6688,7 +7194,7 @@ class MainActivity : AppCompatActivity() {
         streamTitleAdvertiser = null
         streamPresenceStarting = false
         BluetoothOnRecovery.log(BluetoothOnRecovery.COMPONENT_STREAM_ADVERTISE, "restarted", decision.reason)
-        setStatus("Bluetooth is back on. Offering the stream again.")
+        setStatus(getString(R.string.live_status_bluetooth_back))
         startStreamPresence()
     }
 
@@ -6799,8 +7305,12 @@ class MainActivity : AppCompatActivity() {
             DiscoveryAnnouncement::isStreamOffer,
             scanDurationMs = CONTINUOUS_SCAN_MS,
             reportDuplicates = true,
-            continuousLowLatency = true,
+            // F11 item 5 (Experimental, off): a reachable phone's list scan steps down to balanced after its 8 s burst,
+            // leaving the radio free to answer a caller's connection request (DebugTunables.reachableScanYield).
+            continuousLowLatency = !DebugTunables.reachableScanYield,
             acceptRotating = RotatingDiscoveryFeature.enabled,
+            // A visible list: a scan the stack silently left without results is restarted (ScanStallWatch).
+            stallRecovery = true,
         )
         nearbyStreamDiscovery = discovery
         discovery.start()
@@ -6811,7 +7321,7 @@ class MainActivity : AppCompatActivity() {
         nearbyStreamsLastSeen.clear()
         nearbyStreamPeers = emptyList()
         updateNearbyStreamList()
-        receiverBrowserStatus.text = "Scanning for nearby streams…"
+        receiverBrowserStatus.text = getString(R.string.watch_scanning)
         if (nearbyStreamDiscovery == null) refreshNearbyStreams()
     }
 
@@ -6838,7 +7348,8 @@ class MainActivity : AppCompatActivity() {
             }
             .filter { !AudioLiveFeatures.enabled || it.announcement.streamOfferKind() != StreamOfferKind.MALFORMED } // AUDIO-LIVE hook
             .sortedBy(BleL2capPeer::label)
-            .let { CallBlocking.hideBlockedStreams(applicationContext, it) } // call blocking: blocked people's streams
+            .let { CallBlocking.hideBlockedStreams(applicationContext, it) }
+            .filterNot { LocalReporting.hiddenStream(this, it.announcement.logicalStreamToken()) }
         val listChanged = nearbyStreamPeers.size != updatedPeers.size ||
             nearbyStreamPeers.zip(updatedPeers).any { (old, new) ->
                 old.announcement.streamToken != new.announcement.streamToken ||
@@ -6887,15 +7398,30 @@ class MainActivity : AppCompatActivity() {
                 ?.also { logEstablishmentFallback(reconnectCandidates, it) }
                 ?.let { peer ->
                     if (appScreen == AppScreen.RECEIVER_BROWSER) {
-                        receiverBrowserStatus.text = "Route restored. Reconnecting..."
+                        receiverBrowserStatus.text = getString(R.string.watch_rejoining)
                     } else {
-                        setStatus("Another route found. Reconnecting...")
+                        setStatus(getString(R.string.watch_rejoining))
                     }
                     connectToStream(peer)
                     return
                 }
             if (appScreen == AppScreen.RECEIVER_BROWSER) {
-                receiverBrowserStatus.text = "Connection lost. Looking for the same stream..."
+                receiverBrowserStatus.text = getString(R.string.watch_connection_lost)
+            }
+        }
+        if (pendingReconnect == null && receiver == null && appScreen == AppScreen.RECEIVER_BROWSER) {
+            val due = streamJoinRetry.pending
+            streamJoinRetry.take(nowMs, nearbyStreamPeers) { target, candidate ->
+                target.matches(candidate.announcement) && supportsAdvertisedCodec(candidate.announcement) &&
+                    !candidate.announcement.isFullStreamOffer()
+            }?.let { peer ->
+                Log.i(
+                    "BluetoothVideo",
+                    (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                        "stream_join: retry | auto=${due?.auto} | waitedMs=${due?.let { nowMs - it.notBeforeMs }}",
+                )
+                connectToStream(peer)
+                return
             }
         }
         if (debugAutoSelectStream && selectedStreamPeer == null && receiverLocalMediaFailure == null) {
@@ -7047,6 +7573,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPrivateCallScreen(message: String) {
+        // F15: nothing may cover the call screen (an incoming call's Accept button or an outgoing call's Cancel).
+        dismissOpenDialogs("call_screen")
         stopPrivateCallDiscovery()
         appScreen = AppScreen.CALL
         cameraScreen.visibility = View.GONE
@@ -7094,8 +7622,7 @@ class MainActivity : AppCompatActivity() {
     /** Shows the visible "Using BLE GATT" notice for an automatic choice. */
     private fun showCocTransportNotice(choice: CocTransportChoice) {
         val notice = choice.notice ?: return
-        callBrowserStatus.text = notice
-        Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
+        Log.i("BluetoothVideo", "Call transport notice (not shown, user feedback 2026-10-21): $notice")
     }
 
     /**
@@ -7124,7 +7651,7 @@ class MainActivity : AppCompatActivity() {
         if (privateCall == null) {
             val selectedCodec = codecs.getOrNull(codecSpinner.selectedItemPosition)
             if (selectedCodec == null) {
-                callBrowserStatus.text = "This phone has no supported video encoder."
+                callsSnackbar(getString(R.string.call_no_video_support))
                 return
             }
             val transportChoice = forcedChoice
@@ -7177,11 +7704,12 @@ class MainActivity : AppCompatActivity() {
                 callSettings,
                 outgoingVideoRotationDegrees(),
                 remoteSurfaceProvider = {
+                    // Null until the call view has a surface (a voice call answered from the lock screen has none):
+                    // the receiver then waits for it instead of ending the call (VideoSurfaceWait).
                     privateCallRemoteSurface
                         ?: callRemotePreview.surfaceTexture?.let(::Surface)?.also {
                             privateCallRemoteSurface = it
                         }
-                        ?: error("Call video surface is not ready")
                 },
                 playbackDelayProfile = receiverPlaybackDelay,
                 relayHelper = relayedCalls,
@@ -7249,8 +7777,8 @@ class MainActivity : AppCompatActivity() {
                             val shown = displayStatus(message)
                             if (shown == null) notePrivateCallLinkDetail(message)
                             if (shown != null) {
+                                // Off the call screen nothing narrates the call (user feedback 2026-10-21).
                                 if (appScreen == AppScreen.CALL) showCallStatusText(shown)
-                                else callBrowserStatus.text = shown
                             }
                         }
                     }
@@ -7263,6 +7791,16 @@ class MainActivity : AppCompatActivity() {
                 onIncoming = { peerLabel ->
                     runOnUiThread {
                         if (privateCall !== endpoint) return@runOnUiThread
+                        dismissOpenDialogs("incoming_call")
+                        // F14: a call that rings while the user dials is from the person being dialled (any other was
+                        // declined as busy): it is the conversation, so the user's own dial stops here.
+                        currentOwnDial()?.let { dial ->
+                            cancelDebugDialWait()
+                            pendingPrivateCallPeerKey = null
+                            dialSelectionStartedAtMs = 0L
+                            ownDial = null
+                            logCallInvite(DebugDialWait.line("cancelled", dial.advertKey, "reason" to "target_called_first"))
+                        }
                         val interruptedScreen = reachabilityScreen()
                         privateCallReturnHome = interruptedScreen == ReachabilityScreen.HOME ||
                             interruptedScreen == ReachabilityScreen.LIVE_BROWSING
@@ -7445,6 +7983,16 @@ class MainActivity : AppCompatActivity() {
                 },
                 onLocalKeyFrameNeeded = { privateCallCameraEncoder?.requestKeyFrame() },
                 onLinkSample = ::onPrivateCallLinkSample,
+                onLinkStall = { poor ->
+                    runOnUiThread {
+                        if (privateCall !== endpoint) return@runOnUiThread
+                        if (poor) {
+                            showCallStatusText(getString(R.string.call_poor_connection))
+                        } else if (privateCallPhase == PrivateCallPhase.ACTIVE) {
+                            setCallStatus(ACTIVE_CALL_STATUS)
+                        }
+                    }
+                },
                 fitCallVideo = { requested, activeCallCodec ->
                     // Experimental call encoder fit (default off). Raw benchmark inputs fix the geometry.
                     if (!DebugTunables.callEncoderFit || debugRawInputFile != null) {
@@ -7490,6 +8038,7 @@ class MainActivity : AppCompatActivity() {
                             handleRelayDutyEnded(endpoint)
                             return@runOnUiThread
                         }
+                        recordEndedRecentCall(endpoint)
                         val returnHome = privateCallReturnHome && CallReachabilityFeature.enabled
                         val returnLive = returnHome && privateCallReturnLive && ReachableWhileBrowsingFeature.enabled
                         privateCallReturnHome = false
@@ -7505,11 +8054,20 @@ class MainActivity : AppCompatActivity() {
                         privateCall = null
                         // Logged after the teardown, outside the log-loss window that follows the final reports.
                         if (BuildConfig.DEBUG) Log.i("BluetoothVideo", privateCallEndedUiEvidence(message))
+                        // UX fix 2026-10-21: an unanswered incoming call leaves a "Missed call from <name>" notification.
+                        if (MissedCallNotification.isMissed(message)) {
+                            MissedCallNotification.post(
+                                this, callRealName?.invoke(), endpoint.endedPeerNodeIdHex?.take(12),
+                                video = incomingCallType != CallType.VOICE,
+                            )
+                        }
+                        incomingCallType = null
                         privateCallSettings = null
                         privateCallResolutionLadder = null
                         privateCallGpuScale = null
                         privateCallSentResolution = null
                         privateCallRateController = null
+                        privateCallLinkShare = null
                         privateCallFpsHysteresis = null
                         privateCallClimbGuard = null
                         privateCallAudioFirstGate = null
@@ -7530,7 +8088,7 @@ class MainActivity : AppCompatActivity() {
                                     0L
                                 },
                             )
-                            Toast.makeText(this, "$message. Reachable for calls again.", Toast.LENGTH_SHORT).show()
+                            showCallOutcome(message)
                         } else if (returnHome && !isFinishing && !isDestroyed) {
                             // The call came in through Home reachability: back to Home, available again
                             // after the same GATT server pause as the Call screen.
@@ -7542,7 +8100,7 @@ class MainActivity : AppCompatActivity() {
                                     0L
                                 },
                             )
-                            Toast.makeText(this, "$message. Reachable for calls again.", Toast.LENGTH_SHORT).show()
+                            showCallOutcome(message)
                         } else if (!isFinishing && !isDestroyed) {
                             showPrivateCallBrowser(
                                 if (callTransport == BluetoothTransportOption.BLE_GATT) {
@@ -7551,18 +8109,48 @@ class MainActivity : AppCompatActivity() {
                                     0L
                                 },
                             )
-                            callBrowserStatus.text = "$message. Available for another call."
-                            if (cocRetryPeer != null) {
-                                CocRegistrations.session.choose(outgoingTransport, CocAutoGatt.current).notice
-                                    ?.let { callBrowserStatus.text = "$it. $message." }
+                            val contactEnded = MessagingV2Feature.enabled && savedContacts.any {
+                                it.nodeIdHex.equals(endpoint.endedPeerNodeIdHex ?: "", ignoreCase = true)
                             }
+                            if (!CallEndText.isConnectFailure(message) && !contactEnded) showCallOutcome(message)
+                            // UX fix 2026-10-21: a connect failure says who could not be reached and offers Call again;
+                            // the technical detail stays in the log ("Private call ended: ...").
+                            val failedPeer = lastOutgoingCallPeer
+                            val endedContact = endpoint.endedPeerNodeIdHex?.takeIf { hex ->
+                                MessagingV2Feature.enabled && savedContacts.any { it.nodeIdHex.equals(hex, ignoreCase = true) }
+                            }
+                            if (!CallEndText.isConnectFailure(message) && endedContact != null) {
+                                // Chat entry point (2026-10-21): "Message" right after a call with a contact.
+                                com.google.android.material.snackbar.Snackbar
+                                    .make(callBrowserStatus, CallEndText.forUser(this, message), com.google.android.material.snackbar.Snackbar.LENGTH_LONG)
+                                    .setAction(R.string.contact_message) { messageContact(endedContact, ChatEntry.Source.CALL_ENDED) }
+                                    .show()
+                            }
+                            if (CallEndText.isConnectFailure(message) && failedPeer != null) {
+                                val name = peerName(failedPeer.first)
+                                com.google.android.material.snackbar.Snackbar
+                                    .make(callBrowserStatus, getString(R.string.call_couldnt_reach, name), com.google.android.material.snackbar.Snackbar.LENGTH_LONG)
+                                    .setAction(R.string.action_call_again) {
+                                        callBack(failedPeer.first.announcement.nodeIdPrefix.toHexKey(), failedPeer.second == CallType.VIDEO, name)
+                                    }
+                                    .show()
+                            }
+                            // The CoC retry's transport notice is logged, not shown (user feedback 2026-10-21).
+                        }
+                        val endedCall = endpoint.endedRecentCall
+                        if (!isFinishing && !isDestroyed && !isBenchmarkLaunch() &&
+                            StrangerCallFollowup.offer(endedCall, contactNames.keys, DebugTunables.strangerCallFollowup)) {
+                            val name = recentCallName(requireNotNull(endedCall))
+                            com.google.android.material.snackbar.Snackbar
+                                .make(findViewById(R.id.mainNav), getString(R.string.add_after_call, name), com.google.android.material.snackbar.Snackbar.LENGTH_LONG)
+                                .setAction(R.string.action_add_contact_short) { openAddContact(name) }
+                                .show()
                         }
                     }
                 },
             )
             privateCall = endpoint
             privateCallAvailabilityStarting = true
-            callBrowserStatus.setText(R.string.people_starting)
             thread(name = "PrivateCallAvailability") {
                 val result = runCatching { endpoint.startAvailability() }
                 runOnUiThread {
@@ -7592,12 +8180,14 @@ class MainActivity : AppCompatActivity() {
                             startPrivateCallEndpoint()
                             return@onFailure
                         }
-                        callBrowserStatus.text = if (callTransport == BluetoothTransportOption.BLE_L2CAP) {
-                            "Can't receive calls over L2CAP right now (${error.message}). " +
-                                "Switch to BLE GATT or restart Bluetooth."
-                        } else {
-                            "Private calls unavailable: ${error.message}"
-                        }
+                        setCallsNotice(
+                            if (callTransport == BluetoothTransportOption.BLE_L2CAP) {
+                                "Can't receive calls over L2CAP right now (${error.message}). " +
+                                    "Switch to BLE GATT or restart Bluetooth."
+                            } else {
+                                "Private calls unavailable: ${error.message}"
+                            },
+                        )
                     }.onSuccess {
                         // The Classic "make visible" dialog belongs to the Call screen, never Home.
                         val homeEndpoint = idleEndpointScreen()
@@ -7645,12 +8235,9 @@ class MainActivity : AppCompatActivity() {
     private fun restartPrivateCallDiscovery() {
         if (appScreen != AppScreen.CALL_BROWSER || !hasRequiredPermissions()) return
         stopPrivateCallDiscovery()
-        val dialStatus = dialStatusOverride()
-        if (dialStatus != null) {
-            callBrowserStatus.text = dialStatus
-        } else if (privateCallPeers.isEmpty()) {
-            callBrowserStatus.setText(R.string.people_starting)
-        }
+        // Searching shows as the small indicator, never as text (user feedback 2026-10-21).
+        callsActionableNotice = null
+        if (privateCallPeers.isEmpty()) callsSearchStartedMs = SystemClock.elapsedRealtime()
         val adapter = bluetoothAdapter ?: return
         val localPrefix = AndroidNodeIdentityStore().getOrCreate().nodeId.toByteArray()
             .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES)
@@ -7672,23 +8259,58 @@ class MainActivity : AppCompatActivity() {
                     )
                     val observedAtMs = SystemClock.elapsedRealtime()
                     if (peer.announcement.rotating) {
-                        copiedIds.observe(key, peer.device.address, peer.announcement.routeCost, observedAtMs)
+                        copiedIds.observe(key, peer.device.address, peer.announcement.routeCost, observedAtMs, peer.twinForm)
                     }
                     privateCallPeersLastSeen[key] = peer to observedAtMs
+                    callPeerCadence.observe(key, observedAtMs)
                     if (dialFailureNoticeKey == key) dialFailureNotice = null // the person is nearby after all
                     refreshPrivateCallPeers()
+                    // One phone, one row: a rotating ID announced from the address another rotating row used is that phone's
+                    // next epoch (the stack kept the address); the old row goes instead of staying tappable until it expires.
+                    if (DialPersonMatch.enabled && peer.announcement.rotating) {
+                        val stale = privateCallPeersLastSeen.entries.firstOrNull { (otherKey, seen) ->
+                            otherKey != key && seen.first.announcement.rotating &&
+                                seen.first.device.address.equals(peer.device.address, ignoreCase = true)
+                        }?.key
+                        if (stale != null && stale != pendingPrivateCallPeerKey) {
+                            privateCallPeersLastSeen.remove(stale)
+                            callPeerCadence.forget(stale)
+                            refreshPrivateCallPeers()
+                        }
+                    }
                     val waitingDial = debugDialWait
-                    if (waitingDial != null && waitingDial.matches(key)) {
+                    // A pending user dial follows its person across a rotating-ID epoch (DialPersonMatch): the same key, the
+                    // same recognised contact, or the same advertising address.
+                    val dialledKey = pendingPrivateCallPeerKey
+                    val dialMatch = if (dialledKey == null) null else DialPersonMatch.matches(
+                        pendingPrivateCallTarget?.takeIf { it.key == dialledKey } ?: DialPersonMatch.Target(dialledKey, null, null),
+                        key,
+                        if (peer.announcement.rotating) recognisedContactPrefix(peer) else null,
+                        peer.device.address,
+                    )
+                    if (waitingDial != null &&
+                        waitingDial.matchesPerson(key, if (waitingDial.contact) recognisedContactPrefix(peer) else null)
+                    ) {
                         resumeDebugDialWait(waitingDial, peer)
                     } else if (
-                        pendingPrivateCallPeerKey == key &&
+                        dialMatch != null &&
                         peer.announcement.version == pendingPrivateCallPeerVersion &&
                         privateCallPeerWasRefreshed(observedAtMs, pendingPrivateCallSelectedAtMs)
                     ) {
                         pendingPrivateCallPeerKey = null
+                        pendingPrivateCallTarget = null
+                        if (dialMatch != DialPersonMatch.By.KEY && dialledKey != null) {
+                            // The same person under the next epoch's ID: the busy rule (F14) and the logs follow the new key.
+                            ownDial = ownDial?.copy(advertKey = key)
+                            privateCallPeersLastSeen.remove(dialledKey)
+                            callPeerCadence.forget(dialledKey)
+                        }
                         if (dialSelectionStartedAtMs != 0L) {
                             logCallInvite(
-                                DebugDialWait.line("peer_seen", key, "waitedMs" to (observedAtMs - dialSelectionStartedAtMs)),
+                                DebugDialWait.line(
+                                    "peer_seen", key, "waitedMs" to (observedAtMs - dialSelectionStartedAtMs),
+                                    "matchedBy" to dialMatch.name.lowercase(), "dialled" to dialledKey,
+                                ),
                             )
                             dialSelectionStartedAtMs = 0L
                         }
@@ -7715,7 +8337,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     if (privateCallDiscovery !== discovery) return@runOnUiThread
                     privateCallDiscovery = null
-                    callBrowserStatus.text = message
+                    setCallsNotice(message)
                     privateCallDiscoveryHandler.postDelayed(
                         ::restartPrivateCallDiscovery,
                         SCAN_ERROR_RETRY_MS,
@@ -7736,8 +8358,14 @@ class MainActivity : AppCompatActivity() {
             },
             scanDurationMs = CONTINUOUS_SCAN_MS,
             reportDuplicates = true,
-            continuousLowLatency = true,
+            // F11 item 5 (Experimental, off): a reachable phone's list scan steps down to balanced after its 8 s burst,
+            // leaving the radio free to answer a caller's connection request (DebugTunables.reachableScanYield).
+            continuousLowLatency = !DebugTunables.reachableScanYield,
             acceptRotating = RotatingDiscoveryFeature.enabled,
+            // A visible list: a scan the stack silently left without results is restarted (ScanStallWatch).
+            stallRecovery = true,
+            // F11 follow-up (Experimental, off): no offloaded filter for the visible call list (A/B on the Redmi 12).
+            softwareFilter = DebugTunables.callListSoftwareFilter,
         )
         privateCallDiscovery = discovery
         discovery.start()
@@ -7747,7 +8375,16 @@ class MainActivity : AppCompatActivity() {
     private fun refreshPrivateCallPeers() {
         val nowMs = SystemClock.elapsedRealtime()
         privateCallPeersLastSeen.entries.removeAll {
-            !privateCallPeerIsFresh(it.value.second, nowMs)
+            val stale = !callPeerCadence.isFresh(it.key, it.value.second, nowMs)
+            if (stale) {
+                if (BuildConfig.DEBUG) Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK call_row_expired: node=${it.key} | unheardMs=${nowMs - it.value.second} | " +
+                        "windowMs=${callPeerCadence.staleAfterMs(it.key)}",
+                )
+                callPeerCadence.forget(it.key)
+            }
+            stale
         }
         val directPeers = privateCallPeersLastSeen.values.map { it.first }
         // Experimental relayed calls: targets known only through helpers get a row of their own (a benchmark
@@ -7763,7 +8400,10 @@ class MainActivity : AppCompatActivity() {
             RelayedCallsFeature.requireRelays == 0 &&
                 directPeers.any { it.announcement.nodeIdPrefix.contentEquals(relayed.announcement.nodeIdPrefix) }
         }
-        val updatedPeers = (basePeers + extraPeers).sortedBy(BleL2capPeer::label)
+        val updatedPeers = (basePeers + extraPeers).sortedBy(BleL2capPeer::label).filterNot { peer ->
+            val prefix = recognisedContactPrefix(peer) ?: peer.announcement.nodeIdPrefix.toHexKey().takeIf { !peer.announcement.rotating }
+            prefix != null && LocalReporting.hidden(this, prefix)
+        }
         val listChanged = privateCallPeers.size != updatedPeers.size ||
             privateCallPeers.zip(updatedPeers).any { (old, new) ->
                 old.label != new.label ||
@@ -7773,14 +8413,34 @@ class MainActivity : AppCompatActivity() {
         privateCallPeers = updatedPeers
         if (listChanged) updatePrivateCallPeerList()
         completePendingCallBack()
-        val status = dialStatusOverride() ?: if (privateCallPeers.isEmpty()) {
-            getString(R.string.people_starting)
-        } else {
-            "" // the list shows them; no count line
-        }
-        val autoNotice = callTransportChoice?.takeIf { callEndpointTransport != null }?.notice
-        val statusWithNotice = if (autoNotice != null) "$autoNotice. $status" else status
+        // Only an actionable state stays on the line; the list, the indicator and the empty state say the rest.
+        val statusWithNotice = CallsQuiet.line(callsActionableNotice)
         if (callBrowserStatus.text.toString() != statusWithNotice) callBrowserStatus.text = statusWithNotice
+        updateNearbySelfLine()
+        updateCallsSearching()
+    }
+
+    /**
+     * Calls > Nearby only: "You appear as Gold Fox · changes every 15 min" (OwnNearbyName). Refreshed with the list, whose
+     * expiry tick runs every second, so it follows the rotating-ID boundary.
+     */
+    private fun updateNearbySelfLine() {
+        val line = findViewById<TextView>(R.id.nearbySelfLine) ?: return
+        val shown = if (callBrowserContacts || callBrowserChats) null else OwnNearbyName.current(this)
+        line.visibility = if (shown == null) View.GONE else View.VISIBLE
+        if (shown == null) return
+        line.setOnClickListener { SettingsInfo.show(this, R.string.appear_as_info_title, R.string.appear_as_info) }
+        // One line (user feedback 2026-10-21): "You appear as <name>" and the (i); a long name is shortened, never wrapped.
+        val width = line.width - line.paddingStart - line.paddingEnd
+        if (width <= 0) {
+            line.post { if (!isDestroyed) updateNearbySelfLine() }
+            return
+        }
+        val markRoom = 30 * resources.displayMetrics.density
+        val room = width - line.paint.measureText(getString(R.string.appear_as, "")) - markRoom
+        val name = android.text.TextUtils.ellipsize(shown.name, line.paint, room.coerceAtLeast(0f), android.text.TextUtils.TruncateAt.END)
+        val text = getString(R.string.appear_as, name)
+        if (line.text.toString().trimEnd('\u00A0') != text) line.text = text
     }
 
     private fun expirePrivateCallPeers() {
@@ -7821,12 +8481,15 @@ class MainActivity : AppCompatActivity() {
                 relayed = relays > 0,
                 avatarColor = identityColor(prefix),
                 showVoice = voice,
-                isContact = prefix in contactNames,
+                isContact = prefix in contactNames || (DebugTunables.nearbyListUx && recognisedContactPrefix(peer) in contactNames),
             )
         }
         updateContactsList()
+        findViewById<View>(R.id.nearbyPeopleSearch).visibility =
+            if (DebugTunables.nearbyListUx && nearbyPeopleSession.showSearch(people, nearbySearchQuery)) View.VISIBLE else View.GONE
         peopleAdapter.submit(
-            nearbyRows(people, contactNames.keys),
+            if (DebugTunables.nearbyListUx) nearbyPeopleSession.rows(people, people.filter { it.isContact }.mapTo(HashSet()) { it.key }, nearbySearchQuery)
+            else nearbyRows(people, contactNames.keys),
         )
     }
 
@@ -7887,18 +8550,24 @@ class MainActivity : AppCompatActivity() {
     private fun incomingDisplay(prefix: String): DisplayIdentity =
         PeerLabels.forPeer(prefix, contactNames[prefix]).display(generatedName = privateCall?.strangerGeneratedName())
 
+    private val nearbyPeopleSession = NearbyPeopleSession()
+    private var nearbySearchQuery = ""
+
     private val peopleAdapter by lazy {
         PeopleAdapter(this) { key, video ->
             privateCallPeers.firstOrNull { it.announcement.nodeIdPrefix.toHexKey() == key }?.let { peer ->
                 // A copied ID needs a second tap: the call still meets the real key check, but the name may not be who you mean.
                 if (peer.announcement.rotating && copiedIds.warned(key)) {
+                    // Logged so a driver that taps the call button sees why no call phase follows (2026-10-20: a PC
+                    // announcing one compact ID from two addresses raised this prompt on the A15s).
+                    if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK people_call: copied_id_prompt | node=$key | video=$video")
                     com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
                         .setIcon(R.drawable.ic_warning)
                         .setTitle(R.string.people_copied_id)
                         .setMessage(R.string.people_copied_id_message)
                         .setPositiveButton(R.string.people_copied_id_call) { _, _ -> startPeopleCall(peer, video) }
                         .setNegativeButton(R.string.action_cancel, null)
-                        .show()
+                        .showTracked()
                     return@let
                 }
                 startPeopleCall(peer, video)
@@ -7926,7 +8595,7 @@ class MainActivity : AppCompatActivity() {
     /** The row's call buttons: the chosen call type directly (same checks as choosing from the menu). */
     private fun callPeerDirectly(peer: BleL2capPeer, type: CallType) {
         if (privateCall?.suspendMessageSync() == true) {
-            callBrowserStatus.text = "Pausing the message exchange for your call. Tap the person again in a moment."
+            callsSnackbar(getString(R.string.call_waiting_for_messages))
             return
         }
         startOutgoingPrivateCall(peer, if (IntercomFeatures.current.voiceCalls) type else CallType.VIDEO)
@@ -7937,9 +8606,16 @@ class MainActivity : AppCompatActivity() {
 
     private val contactWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val contactActions by lazy {
-        ContactActions(this, contactWorker, ::refreshContactNames) { contact, video ->
-            callBack(contact.prefixHex, video, contact.title)
-        }
+        ContactActions(
+            this,
+            contactWorker,
+            ::refreshContactNames,
+            onCall = { contact, video -> callContact(contact, video) },
+            hintFor = ::contactHint,
+            onMessage = {
+                if (MessagingV2Feature.enabled) { contact -> messageContact(contact.nodeIdHex, ChatEntry.Source.CONTACT_DETAIL) } else null
+            },
+        )
     }
 
     // ----- Messaging v2 conversations (phase 1c, switch test_messaging_v2) -----
@@ -7961,7 +8637,7 @@ class MainActivity : AppCompatActivity() {
                 override fun nearbyPrefixes(): Set<String> = privateCallPeers.map { it.announcement.nodeIdPrefix.toHexKey() }.toSet()
                 override fun contactEntry(nodeIdHex: String): ContactEntry? = savedContacts.firstOrNull { it.nodeIdHex == nodeIdHex }
                 override fun contactNames(): Map<String, String> = contactNames
-                override fun call(prefixHex: String, video: Boolean, name: String) = callBack(prefixHex, video, name)
+                override fun call(prefixHex: String, video: Boolean, name: String) = callPerson(prefixHex, video, name)
                 override fun showContactActions(contact: ContactEntry) = contactActions.show(contact)
                 override fun openVerify(nodeIdHex: String, name: String) {
                     startActivity(VerifyContactActivity.intent(this@MainActivity, nodeIdHex, name))
@@ -7970,6 +8646,7 @@ class MainActivity : AppCompatActivity() {
                 override fun threadClosed() {
                     threadBackCallback.isEnabled = false
                     updateContactsList()
+                    refreshMessagesUnread(notify = false)
                 }
             },
         )
@@ -7979,6 +8656,13 @@ class MainActivity : AppCompatActivity() {
         override fun handleOnBackPressed() {
             if (threadScreenDelegate.isInitialized()) threadScreen.close()
         }
+    }
+
+    /** Every chat entry point lands here: the Chats tab in front, then that person's thread. */
+    private fun messageContact(nodeIdHex: String?, source: ChatEntry.Source) {
+        val target = ChatEntry.threadFor(source, nodeIdHex, MessagingV2Feature.enabled) ?: return
+        if (!callBrowserChats) showChatsTab()
+        openThread(target)
     }
 
     private fun openThread(nodeIdHex: String) {
@@ -8017,10 +8701,7 @@ class MainActivity : AppCompatActivity() {
             if (peer != null) runOnUiThread {
                 val live = appScreen == AppScreen.CAMERA || appScreen == AppScreen.PLAYBACK || appScreen == AppScreen.CALL ||
                     privateCallPhase != null
-                if (!isDestroyed && !live) {
-                    showContactsTab()
-                    openThread(peer.toString())
-                }
+                if (!isDestroyed && !live) messageContact(peer.toString(), ChatEntry.Source.NOTIFICATION)
             }
         }.apply { name = "mv2-open-conversation"; isDaemon = true }.start()
     }
@@ -8028,7 +8709,7 @@ class MainActivity : AppCompatActivity() {
     /** The Contacts tab: saved people only, "Nearby now" for those in range. */
     private fun updateContactsList() {
         if (!::contactsTabScreen.isInitialized) return
-        if (MessagingV2Feature.enabled) {
+        if (MessagingV2Feature.enabled && callBrowserChats) {
             conversationRows.update(savedContacts) { privateCallPeers.map { it.announcement.nodeIdPrefix.toHexKey() }.toSet() }
             ConversationNotifier.contactsChanged(applicationContext)
             if (threadScreenDelegate.isInitialized() && threadScreen.isOpen) threadScreen.contactsChanged()
@@ -8037,9 +8718,10 @@ class MainActivity : AppCompatActivity() {
         val inRange = contactsInRange()
         // Name with video call, voice call and info buttons; no initial or check mark (every contact is verified).
         findViewById<android.widget.ListView>(R.id.contactsList).adapter = ContactRowAdapter(
-            this, savedContacts, inRange,
+            this, savedContacts, inRange, contactHints,
             onCall = { contact, video -> callContact(contact, video) },
             onInfo = { contactActions.show(it) },
+            onMessage = if (MessagingV2Feature.enabled) { contact -> messageContact(contact.nodeIdHex, ChatEntry.Source.CONTACT_ROW) } else null,
         )
         findViewById<View>(R.id.contactsEmptyView).visibility = if (savedContacts.isEmpty()) View.VISIBLE else View.GONE
     }
@@ -8047,21 +8729,66 @@ class MainActivity : AppCompatActivity() {
     /** Saved names of verified contacts by node-ID prefix (read off the main thread). */
     @Volatile private var contactNames: Map<String, String> = emptyMap()
 
+    /** What the Contacts rows say about a contact that cannot be recognised nearby yet, by prefix ([ContactReach]). */
+    @Volatile private var contactHints: Map<String, ContactReach.Hint> = emptyMap()
+
     private fun refreshContactNames() {
         val context = applicationContext
         Thread {
             val names = runCatching { SecurityUiBackend.current.contactNames(context) }.getOrDefault(emptyMap())
             val saved = runCatching { ContactNames.sorted(SecurityUiBackend.current.contacts(context)) }
                 .getOrDefault(emptyList())
+            val hints = saved.associate { it.prefixHex to contactHint(it) }
             runOnUiThread {
-                if (names != contactNames || saved != savedContacts) {
+                if (names != contactNames || saved != savedContacts || hints != contactHints) {
                     contactNames = names
                     savedContacts = saved
+                    contactHints = hints
                     updatePrivateCallPeerList()
                     updateContactsList()
                 }
             }
         }.start()
+    }
+
+    /**
+     * Whether this phone can recognise [contact] nearby and, if not, what the user can do ([ContactReach]). Off the main
+     * thread: the presence vault and the claims file may touch the Keystore and the disk.
+     */
+    private fun contactHint(contact: ContactEntry): ContactReach.Hint = runCatching {
+        val vault = if (RotatingDiscoveryFeature.enabled) RotatingDiscovery.presenceVault() else null
+        val fingerprint = IdentityFingerprint.fromHex(contact.fingerprintHex)
+        ContactReach.hint(
+            recognitionOn = vault?.ensureLoaded() == true,
+            holdsLease = vault?.contact(fingerprint.nodeId)?.presence != null,
+            scannedBothWays = runCatching { ContactClaims.store(applicationContext).get(fingerprint)?.scannedBothWays == true }
+                .getOrDefault(false),
+            meetAvailable = MeetBridge.available(),
+        )
+    }.getOrDefault(ContactReach.Hint.RECOGNISABLE)
+
+    /**
+     * The user verified [nodeIdHex] ([fingerprintHex]) on any screen ([VerificationEvents]). A call with that person may now
+     * exchange presence leases (its session was judged at the handshake), and a stranger's recent entry for them becomes the
+     * contact's entry, so Recent calls them like Contacts does.
+     */
+    private fun onContactVerified(nodeIdHex: String, fingerprintHex: String) {
+        privateCall?.onPeerVerified(nodeIdHex)
+        val inCall = privateCallStrangerRecent?.takeIf { privateCall?.revealedPeerFingerprint?.hex == fingerprintHex }
+        if (inCall != null) privateCallStrangerRecent = null
+        val stranger = StrangerRecentLinks.take(fingerprintHex) ?: inCall
+        refreshContactNames()
+        if (stranger == null) return
+        val context = applicationContext
+        Thread {
+            val promoted = runCatching { RecentCalls.promoteStranger(context, stranger, fingerprintHex) }.getOrDefault(false)
+            if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK recent_promoted: changed=$promoted")
+            runOnUiThread { if (!isDestroyed) updateRecentCalls() }
+        }.start()
+    }
+
+    private val verificationListener: (String, String) -> Unit = { nodeIdHex, fingerprintHex ->
+        runOnUiThread { if (!isDestroyed) onContactVerified(nodeIdHex, fingerprintHex) }
     }
 
     /**
@@ -8132,12 +8859,20 @@ class MainActivity : AppCompatActivity() {
                 afterReveal = !stranger,
             )?.let { lines += DisplayIdentityText.warningText(it) }
         }
+        // So two people meeting can match up: the made-up name this phone shows nearby (user request 2026-10-21).
+        OwnNearbyName.currentLine(this)?.let { lines += it }
         return lines.joinToString("\n")
     }
 
     // ----- Relay control (design decision 2026-10-10) -----
 
-    private fun isBenchmarkLaunch(): Boolean = intent.extras?.keySet()?.any { it.startsWith("test_") } == true
+    private fun isBenchmarkLaunch(): Boolean = benchmarkExtrasPresent()
+
+    /** Any `test_` extra, unless DEBUG `test_user_launch=true` asks for a person's launch ([BenchmarkLaunch]). */
+    private fun benchmarkExtrasPresent(): Boolean = BenchmarkLaunch.fromExtras(
+        intent.extras?.keySet().orEmpty(),
+        userLaunch = BuildConfig.DEBUG && intent.getBooleanExtra(BenchmarkLaunch.EXTRA_USER_LAUNCH, false),
+    )
 
     /**
      * Forwarding for a join of [streamToken]: the per-stream choice, else the global default.
@@ -8161,11 +8896,30 @@ class MainActivity : AppCompatActivity() {
     /** A call back waits for that person to appear in discovery: prefix, video, deadline. */
     private var pendingCallBack: Triple<String, Boolean, Long>? = null
 
+    /** The generated name of the current call's stranger entry, until it is linked to the revealed fingerprint. */
+    private var privateCallStrangerRecent: String? = null
+
+    private fun recordEndedRecentCall(endpoint: AndroidPrivateVideoCall) {
+        if (!DebugTunables.completeRecentCalls || isBenchmarkLaunch()) return
+        val call = endpoint.takeEndedRecentCall() ?: return
+        if (call.strangerName.isNotEmpty()) endpoint.revealedPeerFingerprint?.let {
+            StrangerRecentLinks.remember(it.hex, call.strangerName)
+        }
+        contactWorker.execute {
+            RecentCalls.record(applicationContext, call)
+            runOnUiThread { if (!isDestroyed) updateRecentCalls() }
+        }
+    }
+
     private fun recordRecentCall() {
         val endpoint = privateCall ?: return
         if (isBenchmarkLaunch()) return // automated runs leave no history
+        privateCallStrangerRecent = null
         // F20: a stranger who is not (yet) a verified contact is remembered by the generated name and the time only.
         endpoint.recentStrangerName()?.let { stranger ->
+            // In memory only: if the user verifies this person later, the entry becomes theirs (onContactVerified).
+            privateCallStrangerRecent = stranger
+            endpoint.revealedPeerFingerprint?.let { StrangerRecentLinks.remember(it.hex, stranger) }
             val context = applicationContext
             val call = RecentCall("", endpoint.localCallType == CallType.VIDEO, System.currentTimeMillis(), strangerName = stranger)
             Thread { runCatching { RecentCalls.record(context, call) } }.start()
@@ -8183,12 +8937,21 @@ class MainActivity : AppCompatActivity() {
         Thread { runCatching { RecentCalls.record(context, call) } }.start()
     }
 
+    internal fun localReportChanged() {
+        updateRecentCalls()
+        updateContactsList()
+        refreshMessagesUnread(notify = false)
+        refreshNearbyStreamPeers()
+        refreshPrivateCallPeers()
+    }
+
     private fun updateRecentCalls() {
         val list = findViewById<ViewGroup>(R.id.homeRecentList) ?: return
         val empty = findViewById<View>(R.id.homeRecentEmpty)
         val context = applicationContext
         Thread {
             val calls = runCatching { RecentCalls.load(context) }.getOrDefault(emptyList())
+                .filterNot { LocalReporting.hidden(context, it.fingerprintHex.ifEmpty { it.nodePrefixHex }) }
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 list.removeAllViews()
@@ -8196,6 +8959,48 @@ class MainActivity : AppCompatActivity() {
                 empty.visibility = if (calls.isEmpty()) View.VISIBLE else View.GONE
             }
         }.start()
+    }
+
+    private fun recentCallName(call: RecentCall): String =
+        if (call.strangerName.isNotEmpty()) call.strangerName.split(' ', '-').take(2).joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+        else peerRowName(PeerLabels.forPeer(call.nodePrefixHex, contactNames[call.nodePrefixHex]))
+
+    private fun openAddContact(name: String) {
+        startActivity(VerifyContactActivity.intent(this, peerName = name))
+    }
+
+    private fun showStrangerRecentActions(name: String) {
+        val sheet = com.google.android.material.bottomsheet.BottomSheetDialog(this)
+        val column = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            val pad = (24 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad, pad, pad)
+            addView(TextView(context).apply { setText(R.string.recent_stranger_actions) })
+            addView(com.google.android.material.button.MaterialButton(context).apply {
+                setText(R.string.recent_open_calls)
+                setOnClickListener { sheet.dismiss(); showPrivateCallBrowser() }
+            })
+            addView(com.google.android.material.button.MaterialButton(context).apply {
+                setText(R.string.action_add_contact)
+                setOnClickListener { sheet.dismiss(); openAddContact(name) }
+            })
+        }
+        sheet.setContentView(column)
+        sheet.show()
+    }
+
+    private fun bindRecentOutcome(row: View, call: RecentCall) {
+        if (!DebugTunables.completeRecentCalls) return
+        row.findViewById<TextView>(R.id.personReach).apply {
+            val arrow = when (call.direction) {
+                CallDirection.INCOMING -> getString(R.string.recent_incoming_arrow)
+                CallDirection.OUTGOING -> getString(R.string.recent_outgoing_arrow)
+                CallDirection.UNKNOWN -> ""
+            }
+            text = getString(R.string.recent_outcome, arrow, getString(call.result.labelRes), text)
+            setTextColor(ContextCompat.getColor(this@MainActivity,
+                if (call.result == CallResult.MISSED) R.color.danger else R.color.text_secondary))
+        }
     }
 
     /** F20: a stranger's recent entry: the generated name and the time, nothing to call back or block. */
@@ -8216,8 +9021,12 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.recent_stranger, getString(if (call.video) R.string.recent_video else R.string.recent_voice, time))
         row.findViewById<View>(R.id.personVoiceButton).visibility = View.GONE
         row.findViewById<View>(R.id.personVideoButton).visibility = View.GONE
-        row.setOnClickListener { Toast.makeText(this, R.string.recent_stranger_note, Toast.LENGTH_LONG).show() }
-        row.contentDescription = getString(R.string.peer_row_description, name, row.findViewById<TextView>(R.id.personReach).text)
+        row.setOnClickListener {
+            if (DebugTunables.strangerCallFollowup) showStrangerRecentActions(name)
+            else Toast.makeText(this, R.string.recent_stranger_note, Toast.LENGTH_LONG).show()
+        }
+        bindRecentOutcome(row, call)
+        row.contentDescription = getString(R.string.recent_stranger_row_description, name, row.findViewById<TextView>(R.id.personReach).text)
         return row
     }
 
@@ -8252,14 +9061,36 @@ class MainActivity : AppCompatActivity() {
             setCompoundDrawablesRelative(icon, null, null, null)
             compoundDrawablePadding = (6 * resources.displayMetrics.density).toInt()
         }
-        // A history row: a tap calls back (long press blocks); the buttons live on the People tab.
-        row.findViewById<View>(R.id.personVoiceButton).visibility = View.GONE
-        row.findViewById<View>(R.id.personVideoButton).visibility = View.GONE
+        // A history row: a tap calls back (long press blocks). A saved contact's row also has the call buttons and is
+        // dialled exactly like Contacts (fixed prefix or a recognised rotating ID, callPerson).
         val voiceAllowed = IntercomFeatures.current.voiceCalls
-        row.setOnClickListener { callBack(call.nodePrefixHex, video = call.video || !voiceAllowed, name = name) }
+        val contactRow = label.nameKind == PeerLabel.NameKind.CONTACT
+        row.findViewById<View>(R.id.personVoiceButton).apply {
+            visibility = if (contactRow && voiceAllowed) View.VISIBLE else View.GONE
+            contentDescription = getString(R.string.people_voice_call, name)
+            setOnClickListener { callPerson(call.nodePrefixHex, video = false, name = name) }
+        }
+        row.findViewById<View>(R.id.personVideoButton).apply {
+            visibility = if (contactRow) View.VISIBLE else View.GONE
+            contentDescription = getString(R.string.people_video_call, name)
+            setOnClickListener { callPerson(call.nodePrefixHex, video = true, name = name) }
+        }
+        row.setOnClickListener {
+            if (DebugTunables.strangerCallFollowup && !contactRow) showStrangerRecentActions(name)
+            else callPerson(call.nodePrefixHex, video = call.video || !voiceAllowed, name = name)
+        }
         row.setOnLongClickListener { CallBlockingUi.blockFromRecent(this, call, name); true } // call blocking
-        row.contentDescription = getString(R.string.peer_row_description, name, row.findViewById<TextView>(R.id.personReach).text)
+        bindRecentOutcome(row, call)
+        row.contentDescription = getString(R.string.recent_row_description, name, row.findViewById<TextView>(R.id.personReach).text)
         return row
+    }
+
+    /** "Missed call" notification, Call back action ([MissedCallNotification]): the same path as a Recent call back. */
+    private fun handleMissedCallBack(intent: Intent?): Boolean {
+        val target = intent?.let { MissedCallNotification.takeCallBack(this, it) } ?: return false
+        if (!::callBrowserStatus.isInitialized) return false
+        callBack(target.prefix, video = target.video, name = target.name.ifEmpty { getString(R.string.call_someone) })
+        return true
     }
 
     /** One tap call back: open People and call this person as soon as discovery sees them. */
@@ -8268,13 +9099,13 @@ class MainActivity : AppCompatActivity() {
         if (threadScreenDelegate.isInitialized() && threadScreen.isOpen) threadScreen.close()
         pendingCallBack = Triple(prefix, video, SystemClock.elapsedRealtime() + CALL_BACK_WAIT_MS)
         callBrowserContacts = false
+        callBrowserChats = false
         showPrivateCallBrowser()
-        callBrowserStatus.text = getString(R.string.recent_call_back, name)
         privateCallDiscoveryHandler.postDelayed({
             val pending = pendingCallBack ?: return@postDelayed
             if (pending.first == prefix && SystemClock.elapsedRealtime() >= pending.third) {
                 pendingCallBack = null
-                if (appScreen == AppScreen.CALL_BROWSER) callBrowserStatus.text = getString(R.string.recent_not_nearby, name)
+                if (appScreen == AppScreen.CALL_BROWSER) callsSnackbar(getString(R.string.recent_not_nearby, name))
             }
         }, CALL_BACK_WAIT_MS)
     }
@@ -8296,22 +9127,220 @@ class MainActivity : AppCompatActivity() {
      * so right away and offer the Nearby list (recognition needs one answered call after the mutual scan).
      */
     private fun callContact(contact: ContactEntry, video: Boolean) {
-        val peer = privateCallPeers.firstOrNull { it.announcement.nodeIdPrefix.toHexKey() == contact.prefixHex }
-            ?: privateCallPeers.firstOrNull { candidate ->
-                candidate.announcement.rotating &&
-                    RotatingDiscovery.recognize(candidate.announcement).singleOrNull()?.contact?.toString()?.take(12) == contact.prefixHex
-            }
+        val peer = findPersonNearby(contact.prefixHex)
+        if (BuildConfig.DEBUG) {
+            // Design QL phone test: whether a Contacts call found the contact (by its lease-derived rotating ID or prefix).
+            Log.i(
+                "BluetoothVideo",
+                "BENCHMARK contact_call: found=${peer != null} | rotating=${peer?.announcement?.rotating} | " +
+                    "video=$video | nearbyCallPeers=${privateCallPeers.size} | peers=" +
+                    privateCallPeers.joinToString(",") { candidate ->
+                        val ad = candidate.announcement
+                        val hits = if (ad.rotating) RotatingDiscovery.recognize(ad).size else -1
+                        "${if (ad.rotating) "v5" else "v2"}:${ad.nodeIdPrefix.toHexKey().take(4)}:cost${ad.routeCost}:hits$hits"
+                    },
+            )
+        }
         if (peer != null) {
-            withWifiCheck { callPeerDirectly(peer, if (video) CallType.VIDEO else CallType.VOICE) }
+            withWifiCheck(voice = !video) { callPeerDirectly(peer, if (video) CallType.VIDEO else CallType.VOICE) }
             return
         }
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.contact_not_found_title, contact.title))
-            .setMessage(R.string.contact_not_found_text)
-            .setPositiveButton(R.string.contact_not_found_nearby) { _, _ -> callBack(contact.prefixHex, video, contact.title) }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
+        // Not in the list now. A contact this phone can recognise may simply not be listed yet (the call scan restarts after
+        // a call, or does not run on Recent): wait for its sighting. Otherwise say why it cannot be found (the vault and
+        // claims are read off the main thread).
+        contactWorker.execute {
+            val hint = contactHint(contact)
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                if (ContactReach.mayWaitForCallBack(hint)) {
+                    withWifiCheck(voice = !video) { startContactDialWait(contact, video) }
+                } else {
+                    showContactNotFound(contact, video, hint)
+                }
+            }
+        }
     }
+
+    /** "Looking for <name>…" with Cancel while a contact dial waits for its sighting (any screen, also Contacts). */
+    private var dialWaitSnackbar: com.google.android.material.snackbar.Snackbar? = null
+
+    /**
+     * A contact called from Contacts, Recent or a conversation that is not in the call list right now: the same bounded wait
+     * as a tapped row ([DebugDialWait], 10 s) for a sighting of its fixed prefix or of a rotating ID recognised as exactly this
+     * contact, with the call scan running. The call starts from that sighting; only when the wait runs out does the
+     * "not found nearby" guidance appear. Phone runs userflow-b57d0eaf-20261019: Recent and Contacts calls right after a
+     * call found an empty list (`nearbyCallPeers=0`) and failed at once.
+     */
+    private fun startContactDialWait(contact: ContactEntry, video: Boolean) {
+        if (threadScreenDelegate.isInitialized() && threadScreen.isOpen) threadScreen.close()
+        cancelDebugDialWait()
+        dialFailureNotice = null
+        pendingCallBack = null
+        val type = if (video || !IntercomFeatures.current.voiceCalls) CallType.VIDEO else CallType.VOICE
+        // F11: room for five sightings at this scanner's measured rate (10-30 s), not a fixed 10 s on a slow scanner.
+        val typicalGapMs = callPeerCadence.typicalGapMs()
+        val waitMs = WeakPairReach.dialWaitMs(typicalGapMs, DebugTunables.weakPairReach)
+        val dial = DebugDialWait.Pending(
+            contact.prefixHex, type, messageSync = false, startedAtMs = SystemClock.elapsedRealtime(),
+            waitMs = waitMs, displayName = contact.title, contact = true,
+        )
+        debugDialWait = dial
+        ownDial = OwnDial(advertKey = contact.prefixHex, targetPrefix = contact.prefixHex, name = contact.title)
+        privateCallDiscoveryHandler.postDelayed(debugDialTimeout, waitMs)
+        logCallInvite(
+            DebugDialWait.line(
+                "waiting", dial.prefix, "reason" to "contact_not_listed", "timeoutMs" to waitMs,
+                "typicalGapMs" to (typicalGapMs ?: "none"),
+                "nearbyCallPeers" to privateCallPeers.size, "scanRunning" to (privateCallDiscovery != null),
+            ),
+        )
+        // The call scan runs only on the Call screens: open Contacts there (from Recent), or restart a scan that is down.
+        if (appScreen != AppScreen.CALL_BROWSER) {
+            callBrowserContacts = true
+            callBrowserChats = false
+            showPrivateCallBrowser()
+        } else if (privateCallDiscovery == null) {
+            restartPrivateCallDiscovery()
+        }
+        dialWaitSnackbar = com.google.android.material.snackbar.Snackbar
+            .make(
+                findViewById(android.R.id.content),
+                DebugDialWait.lookingStatus(contact.title),
+                com.google.android.material.snackbar.Snackbar.LENGTH_INDEFINITE,
+            )
+            .setAction(R.string.action_cancel) {
+                if (debugDialWait === dial) {
+                    cancelDebugDialWait()
+                    logCallInvite(DebugDialWait.line("cancelled", dial.prefix, "waitedMs" to dial.waitedMs(SystemClock.elapsedRealtime())))
+                    if (appScreen == AppScreen.CALL_BROWSER) callBrowserStatus.text = ""
+                }
+            }
+            .also { it.show() }
+    }
+
+    /**
+     * F14: the user's own dial while it is still looking for its person (address refresh of a tapped row, or a dial wait);
+     * null once it connected, ended or was cancelled. Read on a call's reader thread (volatile fields).
+     */
+    private fun currentOwnDial(): OwnDial? {
+        val dial = ownDial ?: return null
+        val pending = pendingPrivateCallPeerKey != null || debugDialWait?.displayName != null
+        return dial.takeIf { pending }
+    }
+
+    /**
+     * F14: a user dial in its address refresh becomes a bounded wait (the same conversion as a discovery restart), so a
+     * sighting that comes while the endpoint is being rebuilt after a busy decline waits for it instead of being lost.
+     */
+    private fun deferPendingDialToWait(reason: String) {
+        val key = pendingPrivateCallPeerKey ?: return
+        if (dialSelectionStartedAtMs == 0L) return
+        val startedAtMs = dialSelectionStartedAtMs
+        dialSelectionStartedAtMs = 0L
+        pendingPrivateCallPeerKey = null
+        val wait = DebugDialWait.Pending(
+            key, pendingPrivateCallType, pendingPrivateCallMessageSync, startedAtMs,
+            displayName = pendingPrivateCallPeerName,
+        )
+        debugDialWait = wait
+        privateCallDiscoveryHandler.removeCallbacks(debugDialTimeout)
+        privateCallDiscoveryHandler.postDelayed(debugDialTimeout, wait.remainingMs(SystemClock.elapsedRealtime()))
+        logCallInvite(DebugDialWait.line("waiting", key, "reason" to reason))
+    }
+
+    /** The rotating ID of [peer] recognised as exactly one contact: that contact's prefix, else null. */
+    private fun recognisedContactPrefix(peer: BleL2capPeer): String? =
+        if (!peer.announcement.rotating) {
+            null
+        } else {
+            RotatingDiscovery.recognize(peer.announcement).singleOrNull()?.contact?.toString()?.take(12)
+        }
+
+    /**
+     * A saved contact that Contacts cannot dial now. A contact this phone can recognise is "not found nearby yet" and
+     * Open Nearby waits for them. Without their presence lease the wait could never match (they advertise a changing ID),
+     * so the dialog says how the phones learn to recognise each other and Nearby opens for browsing only.
+     */
+    private fun showContactNotFound(contact: ContactEntry, video: Boolean, hint: ContactReach.Hint) {
+        val name = contact.title
+        val dialog = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setNegativeButton(R.string.action_cancel, null)
+        val openMeet = { startActivity(VerifyContactActivity.intent(this)) }
+        val browse = { browseNearby(getString(R.string.contact_browse_nearby, name)) }
+        when (hint) {
+            ContactReach.Hint.RECOGNISABLE -> dialog
+                .setTitle(getString(R.string.contact_not_found_title, name))
+                .setMessage(getString(R.string.contact_not_found_text, name))
+                .setPositiveButton(R.string.contact_not_found_nearby) { _, _ ->
+                    if (ContactReach.mayWaitForCallBack(hint)) callBack(contact.prefixHex, video, name) else browse()
+                }
+            ContactReach.Hint.ASK_TO_SCAN -> dialog
+                .setTitle(getString(R.string.contact_ask_scan_title, name))
+                .setMessage(getString(R.string.contact_ask_scan_text, name))
+                .setPositiveButton(R.string.contact_show_my_code) { _, _ -> startActivity(VerifyContactActivity.intent(this, showCode = true)) }
+                .setNeutralButton(R.string.contact_not_found_nearby) { _, _ -> browse() }
+            ContactReach.Hint.SCAN_AGAIN -> dialog
+                .setTitle(getString(R.string.contact_not_recognised_title, name))
+                .setMessage(getString(R.string.contact_scan_again_text, name))
+                .setPositiveButton(R.string.contact_scan_again) { _, _ -> openMeet() }
+                .setNeutralButton(R.string.contact_not_found_nearby) { _, _ -> browse() }
+            ContactReach.Hint.CALL_FROM_NEARBY -> dialog
+                .setTitle(getString(R.string.contact_not_recognised_title, name))
+                .setMessage(getString(R.string.contact_call_once_text, name))
+                .setPositiveButton(R.string.contact_not_found_nearby) { _, _ -> browse() }
+        }
+        val shown = dialog.showTracked()
+        // F15: a stale "not found" question never lingers: it closes itself after a minute.
+        Handler(Looper.getMainLooper()).postDelayed({ if (shown.isShowing) shown.dismiss() }, NOT_FOUND_DIALOG_MS)
+    }
+
+    /** F15: every dialog this activity shows, so an incoming call or the call screen is never left under one. */
+    private val openDialogs = LinkedHashSet<android.app.Dialog>()
+
+    private fun androidx.appcompat.app.AlertDialog.Builder.showTracked(): androidx.appcompat.app.AlertDialog {
+        val dialog = show()
+        openDialogs += dialog
+        dialog.setOnDismissListener { openDialogs -= dialog }
+        return dialog
+    }
+
+    /** F15: closes every open dialog of this activity (the call screen or an incoming call takes the screen). */
+    private fun dismissOpenDialogs(reason: String) {
+        val open = openDialogs.filter { it.isShowing }
+        openDialogs.clear()
+        open.forEach { runCatching { it.dismiss() } }
+        runCatching { contactActions.dismissOpen() }
+        fullScreenAccessBanner?.dismiss()
+        fullScreenAccessBanner = null
+        if (open.isNotEmpty() && BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK dialogs_dismissed: count=${open.size} | reason=$reason")
+    }
+
+    /** Nearby for browsing: no pending call back (it could not match), [status] says what to look for. */
+    private fun browseNearby(status: String) {
+        if (threadScreenDelegate.isInitialized() && threadScreen.isOpen) threadScreen.close()
+        pendingCallBack = null
+        callBrowserContacts = false
+        callBrowserChats = false
+        showPrivateCallBrowser()
+        setCallsNotice(status)
+    }
+
+    /** Every "call this person" tap (a Recent row, a conversation): a saved contact goes the Contacts way ([callContact]). */
+    private fun callPerson(prefix: String, video: Boolean, name: String) {
+        val contact = savedContacts.firstOrNull { it.prefixHex == prefix }
+        if (contact != null) callContact(contact, video) else callBack(prefix, video, name)
+    }
+
+    /**
+     * The phone in range that is this person: a plain announcement with their fixed prefix, or a rotating ID recognised as
+     * exactly this contact (presence leases). One rule for Contacts, Recent and the call back.
+     */
+    private fun findPersonNearby(prefix: String): BleL2capPeer? =
+        privateCallPeers.firstOrNull { it.announcement.nodeIdPrefix.toHexKey() == prefix }
+            ?: privateCallPeers.firstOrNull { candidate ->
+                candidate.announcement.rotating &&
+                    RotatingDiscovery.recognize(candidate.announcement).singleOrNull()?.contact?.toString()?.take(12) == prefix
+            }
 
     /** Called when the people list changes: completes a pending call back. */
     private fun completePendingCallBack() {
@@ -8322,18 +9351,40 @@ class MainActivity : AppCompatActivity() {
         }
         // Rotating IDs (default since 0.2.0): a contact advertises a changing ID, so also match the phone whose
         // lease-derived ID is recognised as exactly this contact (the same rule the Calls list uses for its names).
-        val peer = privateCallPeers.firstOrNull { it.announcement.nodeIdPrefix.toHexKey() == prefix }
-            ?: privateCallPeers.firstOrNull { candidate ->
-                candidate.announcement.rotating &&
-                    RotatingDiscovery.recognize(candidate.announcement).singleOrNull()?.contact?.toString()?.take(12) == prefix
-            }
-            ?: return
+        val peer = findPersonNearby(prefix) ?: return
         Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "call_back: matched | rotating=${peer.announcement.rotating}")
         pendingCallBack = null
-        withWifiCheck { callPeerDirectly(peer, if (video) CallType.VIDEO else CallType.VOICE) }
+        withWifiCheck(voice = !video) { callPeerDirectly(peer, if (video) CallType.VIDEO else CallType.VOICE) }
     }
 
     /** Fills the shared empty-state component (view_empty_state) of one screen. */
+    /**
+     * The Nearby list's empty state: the ordinary "No one found yet", or, while the scanner cannot even register
+     * ([ScanRestartHint]), "Bluetooth needs a restart" with a button to the Bluetooth settings.
+     */
+    private var callEmptyShowsRestart: Boolean? = null
+
+    private fun bindCallEmptyState() {
+        // A startup that stopped before the layout (permissions) has no list to update.
+        if (findViewById<View?>(R.id.callEmptyView) == null) return
+        val restart = ScanRestartHint.due()
+        if (restart == callEmptyShowsRestart) return
+        callEmptyShowsRestart = restart
+        if (restart) {
+            Log.i("BluetoothVideo", "BENCHMARK scan_restart_hint: event=shown | failures=${GattPoolBackoff.shared.failures(PoolSource.SCANNER)}")
+            bindEmptyState(
+                R.id.callEmptyView, R.drawable.ic_group, R.string.people_bluetooth_restart_title,
+                R.string.people_bluetooth_restart_text, R.string.people_bluetooth_restart_action,
+            ) {
+                runCatching { startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)) }
+            }
+        } else {
+            bindEmptyState(R.id.callEmptyView, R.drawable.ic_group, R.string.people_empty_title, R.string.people_empty_text, R.string.people_empty_action) {
+                restartPrivateCallDiscovery()
+            }
+        }
+    }
+
     private fun bindEmptyState(rootId: Int, icon: Int, title: Int, text: Int, action: Int, onAction: () -> Unit) {
         val root = findViewById<View>(rootId)
         root.findViewById<ImageView>(R.id.emptyStateIcon).setImageResource(icon)
@@ -8361,8 +9412,30 @@ class MainActivity : AppCompatActivity() {
         sync()
     }
 
-    /** Full peer identity (node prefix, Bluetooth address, transport) behind the friendly list label. */
+    /** Nearby actions; the DEBUG control retains the earlier technical details. */
     private fun showPrivateCallPeerDetails(peer: BleL2capPeer) {
+        if (DebugTunables.nearbyListUx) {
+            val name = peerName(peer)
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle(name)
+                .setItems(arrayOf(getString(R.string.nearby_action_call), getString(R.string.action_add_contact), getString(R.string.nearby_action_block)).let { if (DebugTunables.localReporting) it + getString(R.string.report_action) else it }) { _, which ->
+                    when (which) {
+                        0 -> withWifiCheck { choosePrivateCallType(peer) }
+                        1 -> openAddContact(name)
+                        2, 3 -> {
+                            val prefix = recognisedContactPrefix(peer) ?: peer.announcement.nodeIdPrefix.toHexKey().takeIf { !peer.announcement.rotating }
+                            val fingerprint = savedContacts.firstOrNull { it.nodeIdHex.startsWith(prefix ?: "-") }
+                                ?.fingerprintHex?.let { runCatching { IdentityFingerprint.fromHex(it) }.getOrNull() }
+                            if (which == 3) CallBlockingUi.report(this, fingerprint, onDone = ::updateRecentCalls)
+                            else if (fingerprint != null) CallBlockingUi.confirmBlock(this, fingerprint, name)
+                            else CallBlockingUi.afterDeclineAndBlock(this, null)
+                        }
+                    }
+                }
+                .setNegativeButton(R.string.action_cancel, null)
+                .showTracked()
+            return
+        }
         val prefix = peer.announcement.nodeIdPrefix.toHexKey()
         val handle = if (peer.announcement.rotating) {
             getString(R.string.people_rotating_handle)
@@ -8382,7 +9455,7 @@ class MainActivity : AppCompatActivity() {
                 ),
             )
             .setPositiveButton(R.string.action_close, null)
-            .show()
+            .showTracked()
     }
 
     private fun stopPrivateCallDiscovery() {
@@ -8681,7 +9754,7 @@ class MainActivity : AppCompatActivity() {
         autoSyncPendingKey?.let { cancelAutoSync(it, "user_tap") }
         // Experimental store-and-forward: a live call takes the radio from a running exchange.
         if (privateCall?.suspendMessageSync() == true) {
-            callBrowserStatus.text = "Pausing the message exchange for your call. Tap the person again in a moment."
+            callsSnackbar(getString(R.string.call_waiting_for_messages))
             return
         }
         val messages = StoreForwardFeature.enabled
@@ -8692,12 +9765,12 @@ class MainActivity : AppCompatActivity() {
         val name = peerName(peer)
         if (!messages) {
             androidx.appcompat.app.AlertDialog.Builder(this)
-                .setTitle("Call $name")
-                .setItems(arrayOf("Voice call", "Video call")) { _, which ->
+                .setTitle(getString(R.string.call_choose_title, name))
+                .setItems(arrayOf(getString(R.string.people_voice_call_generic), getString(R.string.people_video_call_generic))) { _, which ->
                     startOutgoingPrivateCall(peer, if (which == 0) CallType.VOICE else CallType.VIDEO)
                 }
-                .setNegativeButton("Cancel", null)
-                .show()
+                .setNegativeButton(R.string.action_cancel, null)
+                .showTracked()
             return
         }
         val options = buildList<Pair<String, () -> Unit>> {
@@ -8709,7 +9782,7 @@ class MainActivity : AppCompatActivity() {
             .setTitle(name)
             .setItems(options.map { it.first }.toTypedArray()) { _, which -> options[which].second() }
             .setNegativeButton("Cancel", null)
-            .show()
+            .showTracked()
     }
 
     @SuppressLint("MissingPermission")
@@ -8721,6 +9794,9 @@ class MainActivity : AppCompatActivity() {
         refreshTimeoutMs: Long = DebugDialWait.refreshTimeoutMs(auto),
         debugDial: Boolean = false,
     ) {
+        if (!messageSync && requestCallMedia(callType == CallType.VIDEO) {
+                startOutgoingPrivateCall(discoveredPeer, callType, messageSync, auto, refreshTimeoutMs, debugDial)
+            }) return
         if (pendingPrivateCallPeerKey != null) return
         // A new user tap replaces a dial still waiting for its person after a discovery restart.
         if (!auto) {
@@ -8736,7 +9812,7 @@ class MainActivity : AppCompatActivity() {
                 rotating = discoveredPeer.announcement.rotating,
             )
             if (fresh == null) {
-                callBrowserStatus.text = getString(R.string.relayed_route_gone)
+                callsSnackbar(getString(R.string.relayed_route_gone))
                 return
             }
             pendingPrivateCallType = callType
@@ -8748,22 +9824,33 @@ class MainActivity : AppCompatActivity() {
         pendingPrivateCallMessageSync = messageSync && StoreForwardFeature.enabled
         val key = discoveredPeer.announcement.nodeIdPrefix.toHexKey()
         pendingPrivateCallPeerKey = key
+        pendingPrivateCallTarget = DialPersonMatch.Target(
+            key,
+            if (discoveredPeer.announcement.rotating) recognisedContactPrefix(discoveredPeer) else null,
+            discoveredPeer.device.address,
+        )
         pendingPrivateCallPeerVersion = discoveredPeer.announcement.version
         pendingPrivateCallSelectedAtMs = SystemClock.elapsedRealtime()
         // Every non-automatic dial (a user tap or a DEBUG dial) keeps waiting through a discovery restart.
         dialSelectionStartedAtMs = if (auto) 0L else pendingPrivateCallSelectedAtMs
         val dialName = if (auto) null else peerName(discoveredPeer)
         pendingPrivateCallPeerName = dialName
+        // F14: a user's own dial (not an automatic exchange, not a DEBUG dial) makes other incoming calls busy meanwhile.
+        ownDial = if (!auto && !debugDial) {
+            OwnDial(
+                advertKey = key,
+                targetPrefix = if (discoveredPeer.announcement.rotating) recognisedContactPrefix(discoveredPeer) else key,
+                name = dialName.orEmpty(),
+                fixedPrefix = !discoveredPeer.announcement.rotating,
+            )
+        } else {
+            null
+        }
         logCallInvite(
             DebugDialWait.line(
                 "refreshing_address", key, "timeoutMs" to refreshTimeoutMs, "debugDial" to debugDial, "userDial" to (!auto && !debugDial),
             ),
         )
-        callBrowserStatus.text = if (auto) {
-            "Syncing messages with ${peerName(discoveredPeer)} automatically..."
-        } else {
-            DebugDialWait.lookingStatus(dialName.orEmpty())
-        }
         privateCallDiscoveryHandler.postDelayed(
             {
                 if (pendingPrivateCallPeerKey == key) {
@@ -8785,6 +9872,12 @@ class MainActivity : AppCompatActivity() {
                         logAutoSync("connect_failed", key, "detail=refresh_timeout")
                         refreshPrivateCallPeers()
                     } else {
+                        // Their phone stopped offering calls: the row goes at once, and the status says so.
+                        if (scanFailure == null) {
+                            privateCallPeersLastSeen.remove(key)
+                            callPeerCadence.forget(key)
+                            refreshPrivateCallPeers()
+                        }
                         showDialNotFound(key, dialName ?: key, scanFailure)
                     }
                 }
@@ -8820,7 +9913,6 @@ class MainActivity : AppCompatActivity() {
         if (endpoint.relayingNow) {
             cocRetryPeer = discoveredPeer to pendingPrivateCallType
             endpoint.preemptRelay()
-            callBrowserStatus.text = getString(R.string.relay_preempted)
             return
         }
         // Experimental CoC -> GATT fallback (default off): a peer that advertises GATT (it fell back)
@@ -8857,7 +9949,8 @@ class MainActivity : AppCompatActivity() {
             pendingPrivateCallMessageSync = false
             val peerName = peerName(peer)
             val syncing = runCatching { endpoint.startMessageSync(peer) }.getOrDefault(false)
-            callBrowserStatus.text = if (syncing) "Exchanging messages with $peerName..." else "Message exchange could not start."
+            if (!syncing) callsSnackbar(getString(R.string.call_end_messages_failed))
+            if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "message exchange with $peerName: started=$syncing")
             if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK store_forward sync_start peer=${peer.label} started=$syncing")
             if (autoSync) {
                 logAutoSync("connecting", peerKey, "started=$syncing")
@@ -8873,13 +9966,14 @@ class MainActivity : AppCompatActivity() {
             if (privateCall === endpoint) {
                 stopPrivateCallEndpoint()
                 showPrivateCallBrowser()
-                callBrowserStatus.text = "Call could not start: ${error.message ?: error.javaClass.simpleName}"
+                Log.w("BluetoothVideo", "Call could not start", error)
+                callsSnackbar(getString(R.string.call_couldnt_start))
             }
             return
         }
         if (!started) {
             if (privateCall === endpoint && appScreen == AppScreen.CALL_BROWSER) {
-                callBrowserStatus.text = "An incoming call is already connecting."
+                callsSnackbar(getString(R.string.call_incoming_busy))
             }
             return
         }
@@ -8922,7 +10016,7 @@ class MainActivity : AppCompatActivity() {
                 if (::callPartyState.isInitialized) callPartyState.setText(R.string.call_outgoing)
             }
             PrivateCallPhase.OUTGOING_RINGING -> {
-                setCallStatus("Ringing...")
+                setCallStatus(getString(R.string.call_status_ringing))
                 if (::callPartyState.isInitialized) callPartyState.setText(R.string.call_ringing)
             }
             PrivateCallPhase.INCOMING_RINGING -> Unit
@@ -8934,12 +10028,14 @@ class MainActivity : AppCompatActivity() {
                 cancelCallButton.visibility = View.GONE
                 activeCallControls.visibility = View.VISIBLE
                 setCallStatus(
-                    if (privateCall?.localCallType == CallType.VOICE) "Starting encrypted voice call..."
-                    else "Starting two-way video and audio...",
+                    getString(
+                        if (privateCall?.localCallType == CallType.VOICE) R.string.call_status_starting_voice
+                        else R.string.call_status_starting_video,
+                    ),
                 )
             }
             PrivateCallPhase.ACTIVE -> {
-                recordRecentCall()
+                if (!DebugTunables.completeRecentCalls) recordRecentCall()
                 findViewById<android.widget.Chronometer>(R.id.callTopTimer).apply {
                     if (visibility != View.VISIBLE) {
                         base = SystemClock.elapsedRealtime()
@@ -8960,6 +10056,11 @@ class MainActivity : AppCompatActivity() {
             PrivateCallPhase.ENDED -> {
                 callChromeAutoHide.reset()
                 hideCallParty()
+                // A stranger who revealed only after the entry was recorded: keep the link for a later verification.
+                privateCallStrangerRecent?.let { stranger ->
+                    privateCall?.revealedPeerFingerprint?.let { StrangerRecentLinks.remember(it.hex, stranger) }
+                }
+                privateCallStrangerRecent = null
             }
         }
     }
@@ -9146,6 +10247,10 @@ class MainActivity : AppCompatActivity() {
                 null
             },
         )
+        // F16 fix 2 (Experimental, off): an Automatic call follows the camera's real rate in sustained low light.
+        if (DebugTunables.callFpsFollow && encoderRateControl == EncoderRateControl.AUTOMATIC) {
+            encoder.fpsFollow = CallFpsFollow(callSettings.fps)
+        }
         privateCallCameraEncoder = encoder
         // The learned call start (and any thermal limit) before the encoder configures, not after a second.
         if (startRateGuardOn() && privateCallLinkRateLimitBps != null) applyThermalAdaptation(thermalStatus)
@@ -9267,6 +10372,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Voice calls: the ringing call's caller offered (or withdrew) a voice call. */
     private fun onIncomingPrivateCallType(type: CallType) {
+        incomingCallType = type
         if (privateCallPhase != PrivateCallPhase.INCOMING_RINGING) return
         val acceptButton = findViewById<View>(R.id.acceptCallButton)
         if (type == CallType.VOICE) {
@@ -9375,6 +10481,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun togglePrivateCallCamera() {
+        val endpoint = privateCall ?: return
+        if (!privateCallCameraEnabled && requestCallMedia(video = true) {
+                if (privateCall === endpoint && privateCallPhase in setOf(PrivateCallPhase.ACTIVE, PrivateCallPhase.NEGOTIATING_MEDIA)) togglePrivateCallCamera()
+            }) return
         privateCallCameraEnabled = !privateCallCameraEnabled
         // A call that began as a voice call runs a service without the camera type. Adding video must
         // widen the service first (Android 14 refuses camera use from a service without the type once
@@ -9668,7 +10778,13 @@ class MainActivity : AppCompatActivity() {
         callRinger.stopRingback()
         stopPrivateCallDiscovery()
         cleanupPrivateCallMedia(keepService)
-        privateCall?.close()
+        privateCall?.let { endpoint ->
+            if (!endpoint.endedQuietly && !endpoint.endedFromRelayDuty) {
+                endpoint.captureEndedRecentCall(message ?: "Call ended")
+                recordEndedRecentCall(endpoint)
+            }
+            endpoint.close()
+        }
         privateCall = null
         privateCallPhase = null
         VoiceNoteGate.callPhase = null
@@ -9682,6 +10798,7 @@ class MainActivity : AppCompatActivity() {
         privateCallGpuScale = null
         privateCallSentResolution = null
         privateCallRateController = null
+        privateCallLinkShare = null
         privateCallFpsHysteresis = null
         privateCallClimbGuard = null
         privateCallAudioFirstGate = null
@@ -9721,15 +10838,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun connectToStream(peer: BleL2capPeer) {
         if (!supportsAdvertisedCodec(peer.announcement)) {
-            receiverBrowserStatus.text = "This phone cannot decode that stream's codec."
+            receiverBrowserStatus.text = getString(R.string.watch_cannot_play)
             return
         }
         if (peer.announcement.isFullStreamOffer() && reconnectTarget?.matches(peer.announcement) != true) {
-            receiverBrowserStatus.text = "That stream has no free viewer slot right now. It will show as available when one frees."
+            receiverBrowserStatus.text = getString(R.string.watch_stream_full)
             return
         }
         val preservingPlayback = appScreen == AppScreen.PLAYBACK &&
             reconnectTarget?.matches(peer.announcement) == true && receiverWasActive
+        // Any join replaces a pending retry and its message.
+        streamJoinRetry.cancel()
+        streamJoinSnackbar?.dismiss()
+        streamJoinSnackbar = null
         resetReceiverRecoveryNotice()
         val logicalTarget = LogicalStreamTarget.from(peer.announcement)
         Log.i(
@@ -9755,6 +10876,7 @@ class MainActivity : AppCompatActivity() {
             receiverContinuityLastReportNs = 0L
             receiverWasActive = false
             activeStreamSourceNodeId = null
+            activeStreamSourceAuthenticated = false
             reconnectFromNodeIdPrefix = null
             preferredRecoveryParent = null
         }
@@ -9769,7 +10891,7 @@ class MainActivity : AppCompatActivity() {
             showPlaybackScreen()
         }
         audioLive.onJoin(peer.announcement, audioListenTitle(peer)) // AUDIO-LIVE hook
-        setStatus("Requesting ${peer.label}…")
+        setStatus(getString(R.string.watch_joining, peer.label))
         if (hasRequiredPermissions()) {
             preview.post { if (receiver == null) startReceiving() }
         } else {
@@ -9821,7 +10943,7 @@ class MainActivity : AppCompatActivity() {
             )
             .firstOrNull() ?: return false
         logEstablishmentFallback(peer, chosen)
-        setStatus("Using a recently seen route to the same stream...")
+        setStatus(getString(R.string.watch_reconnecting))
         connectToStream(chosen)
         return true
     }
@@ -9904,6 +11026,7 @@ class MainActivity : AppCompatActivity() {
         }
         activeStreamTarget = null
         activeStreamSourceNodeId = null
+        activeStreamSourceAuthenticated = false
         reconnectFromNodeIdPrefix = null
         preferredRecoveryParent = null
         preserveReceiverContinuityOnNextFormat = false
@@ -9911,10 +11034,37 @@ class MainActivity : AppCompatActivity() {
         if (streamEnded) {
             showReceiverBrowserNotice("Stream ended. Scanning for nearby broadcasts.")
         } else if (allowReconnect && peer != null) {
-            receiverBrowserStatus.text = "Connection lost. Looking for the same stream..."
+            receiverBrowserStatus.text = getString(R.string.watch_connection_lost)
         } else {
             showReceiverBrowserNotice(failureNotice ?: "Could not connect. Scanning for nearby broadcasts.")
+            if (peer != null && !localMediaFailure) onStreamJoinFailed(peer)
         }
+    }
+
+    /** A live join (radio or video) that never became active: say so, offer Try again, retry once by itself. */
+    private fun onStreamJoinFailed(peer: BleL2capPeer) {
+        val target = LogicalStreamTarget.from(peer.announcement)
+        val title = if (PeerLabelFeature.titlePagesEnabled) StreamTitles.board.title(peer.announcement.streamToken) else null
+        val auto = streamJoinRetry.onJoinFailed(target, SystemClock.elapsedRealtime())
+        Log.i(
+            "BluetoothVideo",
+            (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                "stream_join: failed | title=${title != null} | autoRetry=${auto != null} | enabled=${DebugTunables.streamJoinRetry}",
+        )
+        if (!DebugTunables.streamJoinRetry) return
+        streamJoinSnackbar?.dismiss()
+        streamJoinSnackbar = com.google.android.material.snackbar.Snackbar
+            .make(findViewById<View>(R.id.main), StreamJoinRetry.failureMessage(title), STREAM_JOIN_SNACKBAR_MS)
+            .setAction(R.string.stream_join_try_again) {
+                streamJoinSnackbar = null
+                // The user asked: the failed route's cooldown does not hold this one back.
+                suppressedStreamRoutes.remove(StreamReconnectTarget.from(peer))
+                streamJoinRetry.onTryAgain(target, SystemClock.elapsedRealtime())
+                Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "stream_join: try_again")
+                refreshNearbyStreams()
+                refreshNearbyStreamPeers()
+            }
+            .also { it.show() }
     }
 
     private fun updateConnectionDot(receiverCount: Int) {
@@ -10107,7 +11257,7 @@ class MainActivity : AppCompatActivity() {
                     activeSettings.fps in it.fpsOptions
             }
         if (!fits) {
-            setStatus("The ${nextLens.displayName.lowercase()} camera cannot match this stream's size; flip it before going live.")
+            setStatus(getString(R.string.live_camera_size, nextLens.displayName.lowercase()))
             return
         }
         cameraLens = nextLens
@@ -10236,32 +11386,21 @@ class MainActivity : AppCompatActivity() {
             adapter == null -> onPermissionsReady()
             adapter.isEnabled -> onPermissionsReady()
             else -> {
-                setStatus("Turn on Bluetooth to continue.")
+                setStatus(getString(R.string.status_turn_on_bluetooth))
                 bluetoothEnableRequest.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
             }
         }
     }
 
-    private fun requiredPermissions(): List<String> = buildList {
-            if ((sessionRole == SessionRole.SEND || appScreen == AppScreen.CALL_BROWSER ||
-                    appScreen == AppScreen.CALL) && requestedTransportExperiment == null
-            ) {
-                if (!audioLive.mode) add(Manifest.permission.CAMERA) // AUDIO-LIVE hook: a radio broadcast never opens the camera
-                add(Manifest.permission.RECORD_AUDIO)
-            }
-            val needsBleAccess = outgoingTransport.isBle || requestedTransportExperiment != null ||
-                usesBroadcastDiscovery() || debugAutoSelectStream || sessionRole == SessionRole.RELAY ||
-                appScreen == AppScreen.CALL_BROWSER || appScreen == AppScreen.CALL
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                add(Manifest.permission.BLUETOOTH_CONNECT)
-                if (needsBleAccess) {
-                    add(Manifest.permission.BLUETOOTH_SCAN)
-                    add(Manifest.permission.BLUETOOTH_ADVERTISE)
-                }
-            } else if (needsBleAccess) {
-                add(Manifest.permission.ACCESS_FINE_LOCATION)
-            }
-        }
+    private fun requiredPermissions(): List<String> {
+        val capturesMedia = (sessionRole == SessionRole.SEND || appScreen == AppScreen.CALL ||
+            (!DebugTunables.callReadinessPermissions && appScreen == AppScreen.CALL_BROWSER)) && requestedTransportExperiment == null
+        val needsBleAccess = outgoingTransport.isBle || requestedTransportExperiment != null ||
+            usesBroadcastDiscovery() || debugAutoSelectStream || sessionRole == SessionRole.RELAY ||
+            appScreen == AppScreen.CALL_BROWSER || appScreen == AppScreen.CALL
+        // AUDIO-LIVE hook: a radio broadcast never opens the camera. The rules are in RuntimePermissionPlan (JVM-tested).
+        return RuntimePermissionPlan.required(Build.VERSION.SDK_INT, capturesMedia, !audioLive.mode && (appScreen != AppScreen.CALL || privateCall?.localCallType != CallType.VOICE), needsBleAccess)
+    }
 
     @SuppressLint("MissingPermission")
     private fun runRequestedTransportExperiment() {
@@ -10280,14 +11419,36 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
     }
 
+    /** Names only the access that is still missing ([MissingPermissions]), from string resources. */
+    private fun missingPermissionsText(): String {
+        val missing = requiredPermissions().filter { permission ->
+            ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
+        }
+        val names = MissingPermissions.groups(missing).map { group ->
+            getString(
+                when (group) {
+                    MissingPermissions.Group.NEARBY_DEVICES -> R.string.permission_name_nearby
+                    MissingPermissions.Group.CAMERA -> R.string.permission_name_camera
+                    MissingPermissions.Group.MICROPHONE -> R.string.permission_name_microphone
+                    MissingPermissions.Group.LOCATION -> R.string.permission_name_location
+                },
+            )
+        }
+        if (names.isEmpty()) return getString(R.string.permissions_needed_generic)
+        return getString(
+            R.string.permissions_needed,
+            MissingPermissions.join(names, getString(R.string.list_separator), getString(R.string.list_last_separator)),
+        )
+    }
+
     @SuppressLint("MissingPermission")
     private fun refreshDevices() {
         bleDiscovery?.close()
         bleDiscovery = null
         val adapter = bluetoothAdapter
         when {
-            adapter == null -> setStatus("This phone does not support Bluetooth.")
-            !adapter.isEnabled -> setStatus("Turn Bluetooth on, then refresh.")
+            adapter == null -> setStatus(getString(R.string.status_no_bluetooth))
+            !adapter.isEnabled -> setStatus(getString(R.string.status_bluetooth_off_retry))
             appScreen == AppScreen.RECEIVER_BROWSER -> refreshNearbyStreams()
             appScreen == AppScreen.CALL_BROWSER -> startPrivateCallEndpoint()
             appScreen == AppScreen.CAMERA && usesBroadcastDiscovery() ->
@@ -10305,10 +11466,10 @@ class MainActivity : AppCompatActivity() {
             debugLaunchRequested && outgoingTransport == BluetoothTransportOption.CLASSIC_RFCOMM ->
                 refreshClassicDestinations(adapter)
             debugLaunchRequested -> refreshBleReceivers(adapter)
-            else -> setStatus("Ready. Start a broadcast or open Nearby broadcasts.")
+            else -> setStatus(getString(R.string.status_ready_live))
         }
         if (ThermalGuardPolicy.shouldBlockStreaming(thermalStatus)) {
-            setStatus("Phone is critically hot. Let it cool before starting video.")
+            setStatus(getString(R.string.status_too_hot))
         } else if (thermalStatus >= PowerManager.THERMAL_STATUS_MODERATE) {
             setStatus(
                 if (thermalReductionOn) {
@@ -10450,6 +11611,52 @@ class MainActivity : AppCompatActivity() {
     private fun selectedBlePeer(): BleL2capPeer? =
         blePeers.getOrNull(deviceSpinner.selectedItemPosition)
 
+    /** The visible reason the start is blocked ([LiveStartGate]); before, the text went only to the hidden status line. */
+    private fun renderLiveStartNotice(block: LiveStartBlock) {
+        val notice = findViewById<View>(R.id.liveStartNotice) ?: return
+        notice.visibility = if (block == LiveStartBlock.NONE) View.GONE else View.VISIBLE
+        if (block == LiveStartBlock.NONE) return
+        val missing = requiredPermissions().filter { permission ->
+            ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
+        }
+        val action = LiveStartGate.action(
+            block,
+            askedThisProcess = startPermissionsAsked || homePermissionsAsked,
+            rationaleDue = missing.any { shouldShowRequestPermissionRationale(it) },
+        )
+        findViewById<TextView>(R.id.liveStartNoticeText).text = when (block) {
+            LiveStartBlock.PERMISSIONS -> missingPermissionsText()
+            LiveStartBlock.BLUETOOTH_OFF -> getString(R.string.live_blocked_bluetooth_off)
+            LiveStartBlock.NO_BLUETOOTH -> getString(R.string.readiness_unsupported_text)
+            LiveStartBlock.NONE -> ""
+        }
+        findViewById<android.widget.Button>(R.id.liveStartNoticeAction).apply {
+            visibility = if (action == LiveStartAction.NONE) View.GONE else View.VISIBLE
+            when (action) {
+                LiveStartAction.ASK -> setText(R.string.readiness_permissions_action)
+                LiveStartAction.OPEN_SETTINGS -> setText(R.string.action_open_settings)
+                LiveStartAction.TURN_ON_BLUETOOTH -> setText(R.string.readiness_off_action)
+                LiveStartAction.NONE -> Unit
+            }
+            setOnClickListener { onLiveStartAction(action) }
+        }
+    }
+
+    private fun onLiveStartAction(action: LiveStartAction) {
+        when (action) {
+            LiveStartAction.ASK -> ensurePermissionsAndRefresh()
+            LiveStartAction.OPEN_SETTINGS -> runCatching {
+                startActivity(
+                    Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(android.net.Uri.fromParts("package", packageName, null)),
+                )
+            }
+            LiveStartAction.TURN_ON_BLUETOOTH ->
+                runCatching { bluetoothEnableRequest.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }
+            LiveStartAction.NONE -> Unit
+        }
+    }
+
     private fun updateStartEnabled() {
         val idle = sender == null && broadcaster == null && receiver == null && relay == null &&
             privateCallRelay == null &&
@@ -10483,6 +11690,7 @@ class MainActivity : AppCompatActivity() {
         val streamActive = streamArmed || sender != null || broadcaster != null ||
             receiver != null || relay != null || privateCallRelay != null
         streamToggleButton.isEnabled = streamActive || canStart
+        renderLiveStartNotice(LiveStartGate.block(streamActive || !idle, transportReady, permissionsReady, bluetoothReady))
         applyLiveToggleLook(streamActive)
         streamToggleButton.contentDescription = when (sessionRole) {
             SessionRole.SEND -> if (streamActive) "Stop broadcast" else "Start broadcast"
@@ -10692,6 +11900,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun armDiscoverableStream() {
         if (!ensureThermalReady()) return
+        // Audit 2026-10-21: the first VIDEO live gets the same one-time "Before you go live" as audio only (never for automation).
+        if (!audioLive.mode && !benchmarkExtrasPresent() && LiveDisclosure.needed(appPreferences.getBoolean(LiveDisclosure.PREF_VIDEO, false))) {
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.audio_live_disclosure_title)
+                .setMessage(R.string.video_live_disclosure_message)
+                .setPositiveButton(R.string.video_live_disclosure_confirm) { _, _ ->
+                    appPreferences.edit().putBoolean(LiveDisclosure.PREF_VIDEO, true).apply()
+                    armDiscoverableStream()
+                }
+                .setNegativeButton(R.string.action_cancel, null)
+                .showTracked()
+            return
+        }
         streamArmed = true
         applyAutoLadderToStreamSettings()
         if (audioLive.mode) { // AUDIO-LIVE hook: microphone service type, no camera
@@ -10703,7 +11924,7 @@ class MainActivity : AppCompatActivity() {
             ActiveVideoSessionService.start(this, usesCamera = true)
         }
         updateConnectionDot(0)
-        setStatus("Stream is ON. Waiting for a receiver.")
+        setStatus(getString(R.string.live_status_waiting))
         updateStartEnabled()
         startStreamPresence()
     }
@@ -10713,7 +11934,7 @@ class MainActivity : AppCompatActivity() {
         if (!streamArmed || !ensureThermalReady()) return
         val peers = resolveClassicViewerPeers(pendingViewerPeers)
         if (peers.isEmpty()) {
-            setStatus("No receiver is ready yet.")
+            setStatus(getString(R.string.live_status_no_viewer))
             return
         }
         val audioConfig = audioLive.source?.sendConfig?.takeIf { audioLive.mode } // AUDIO-LIVE hook
@@ -10776,6 +11997,7 @@ class MainActivity : AppCompatActivity() {
             onAllDisconnected = {
                 runOnUiThread {
                     if (broadcaster !== newBroadcaster) return@runOnUiThread
+                    streamMediaPrewarmed = false
                     audioLive.onAllListenersGone() // AUDIO-LIVE hook
                     cameraEncoder?.close()
                     cameraEncoder = null
@@ -10798,7 +12020,16 @@ class MainActivity : AppCompatActivity() {
             onFirstConnected = {
                 runOnUiThread {
                     if (broadcaster !== newBroadcaster) return@runOnUiThread
-                    startBroadcastMedia(newBroadcaster, codec, activeSettings)
+                    when (SourceMediaPrewarm.onFirstViewer(streamMediaPrewarmed, cameraEncoder != null)) {
+                        SourceMediaPrewarm.FirstViewer.START_MEDIA -> startBroadcastMedia(newBroadcaster, codec, activeSettings)
+                        SourceMediaPrewarm.FirstViewer.KEY_FRAME_AND_MICROPHONE -> {
+                            // The encoder is already running: admitSender replays its codec configuration and onPeerReady
+                            // forces the key frame; only the microphone, which waited for this viewer, starts here.
+                            streamMediaPrewarmed = false
+                            if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK source_prewarm: event=first_viewer")
+                            startBroadcastMicrophone(newBroadcaster)
+                        }
+                    }
                 }
             },
             onPeerReady = { cameraEncoder?.requestKeyFrame(force = true) },
@@ -10835,6 +12066,13 @@ class MainActivity : AppCompatActivity() {
             gattPool = streamGattPool(),
         )
         refreshViewerDiscoveryForCapacity()
+        // Experimental (test_source_media_prewarm, off): camera and encoder warm up while the first viewer's link is set up.
+        streamMediaPrewarmed = false
+        if (SourceMediaPrewarm.applies(DebugTunables.sourceMediaPrewarm, audioLive.mode, autoLadderActive(), debugReplayPath != null)) {
+            streamMediaPrewarmed = true
+            if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK source_prewarm: event=start")
+            startBroadcastMedia(newBroadcaster, codec, activeSettings)
+        }
     }
 
     /**
@@ -10879,7 +12117,7 @@ class MainActivity : AppCompatActivity() {
             sessionHandler.removeCallbacks(pausedHeartbeatRunnable)
             sessionHandler.postDelayed(pausedHeartbeatRunnable, PAUSED_HEARTBEAT_MS)
             refreshStreamPresenceAdvertisement()
-            setStatus("Broadcast paused. Connections remain available.")
+            setStatus(getString(R.string.live_status_paused_viewers))
         } else {
             val codec = codecs.getOrNull(codecSpinner.selectedItemPosition) ?: return
             val activeSettings = activeStreamSettings ?: return
@@ -10888,7 +12126,7 @@ class MainActivity : AppCompatActivity() {
             activeBroadcaster.resumeStream()
             refreshStreamPresenceAdvertisement()
             stopIdleCameraPreview()
-            setStatus("Resuming broadcast...")
+            setStatus(getString(R.string.live_status_resuming))
             startBroadcastMedia(activeBroadcaster, codec, activeSettings)
         }
         updatePauseButton()
@@ -10904,13 +12142,13 @@ class MainActivity : AppCompatActivity() {
             sessionHandler.removeCallbacks(pausedHeartbeatRunnable)
             sessionHandler.postDelayed(pausedHeartbeatRunnable, PAUSED_HEARTBEAT_MS)
             refreshStreamPresenceAdvertisement()
-            setStatus("Broadcast paused. The microphone is off. Connections remain available.")
+            setStatus(getString(R.string.live_status_paused_audio))
         } else {
             streamPaused = false
             sessionHandler.removeCallbacks(pausedHeartbeatRunnable)
             activeBroadcaster.resumeStream()
             refreshStreamPresenceAdvertisement()
-            setStatus("Broadcast resumed.")
+            setStatus(getString(R.string.live_status_resumed))
         }
         audioLive.onPauseChanged(streamPaused)
         updateStartEnabled()
@@ -10966,19 +12204,11 @@ class MainActivity : AppCompatActivity() {
             videoScaleMode,
             {
                 runOnUiThread {
-                    if (
-                        broadcaster !== activeBroadcaster || streamPaused || microphoneEncoder != null ||
-                            !debugBroadcastAudioEnabled
-                    ) return@runOnUiThread
-                    runCatching { startMicrophoneAudio(activeBroadcaster::send) }
-                        .onFailure { error ->
-                            if (broadcaster === activeBroadcaster) {
-                                stopStreaming(
-                                    "Microphone could not start: " +
-                                        (error.message ?: error.javaClass.simpleName),
-                                )
-                            }
-                        }
+                    // Pre-warmed media: the microphone waits for an authenticated viewer (onFirstConnected starts it).
+                    if (SourceMediaPrewarm.holdMicrophone(streamMediaPrewarmed, activeBroadcaster.connectedPeerLabels().size)) {
+                        return@runOnUiThread
+                    }
+                    startBroadcastMicrophone(activeBroadcaster)
                 }
             },
             debugRawInputFile = debugRawInputFile,
@@ -10996,6 +12226,22 @@ class MainActivity : AppCompatActivity() {
                 stopStreaming("Camera or microphone could not start: ${error.message ?: error.javaClass.simpleName}")
             }
         }
+    }
+
+    private fun startBroadcastMicrophone(activeBroadcaster: BluetoothVideoBroadcaster) {
+        if (
+            broadcaster !== activeBroadcaster || streamPaused || microphoneEncoder != null ||
+                !debugBroadcastAudioEnabled
+        ) return
+        runCatching { startMicrophoneAudio(activeBroadcaster::send) }
+            .onFailure { error ->
+                if (broadcaster === activeBroadcaster) {
+                    stopStreaming(
+                        "Microphone could not start: " +
+                            (error.message ?: error.javaClass.simpleName),
+                    )
+                }
+            }
     }
 
     @SuppressLint("MissingPermission")
@@ -11089,6 +12335,7 @@ class MainActivity : AppCompatActivity() {
                         audioLive.onListenActive(active) // AUDIO-LIVE hook
                         if (active) {
                             receiverWasActive = true
+                            selectedStreamPeer?.let { streamJoinRetry.onJoined(LogicalStreamTarget.from(it.announcement)) }
                             consecutiveRouteFailures.clear()
                             reconnectFromNodeIdPrefix = null
                             preferredRecoveryParent = null
@@ -11157,8 +12404,14 @@ class MainActivity : AppCompatActivity() {
             },
             onAudioLiveLevel = { level -> runOnUiThread { if (receiver === newReceiver) audioLive.onListenLevel(level) } },
             expectedMediaSourceNodeId = activeStreamSourceNodeId,
-            onMediaSourceAuthenticated = { sourceNodeId ->
+            onMediaSourceAuthenticated = { sourceNodeId, authenticated ->
                 if (receiver === newReceiver) {
+                    if (authenticated && LocalReporting.hidden(applicationContext, sourceNodeId.toString())) {
+                        selectedStreamPeer?.announcement?.logicalStreamToken()?.let { LocalReporting.hideStream(applicationContext, it) }
+                        runOnUiThread { if (receiver === newReceiver) showReceiverBrowser() }
+                        throw java.io.IOException("Reported source")
+                    }
+                    activeStreamSourceAuthenticated = authenticated
                     activeStreamSourceNodeId = sourceNodeId
                 }
             },
@@ -11386,6 +12639,7 @@ class MainActivity : AppCompatActivity() {
                 audioLive.onListenLinkLost(reconnecting = appScreen == AppScreen.PLAYBACK) // AUDIO-LIVE hook
             }
         }
+        activeStreamSourceAuthenticated = false
         receiver = newReceiver
         viewerFrameAge?.onLinkStarted()
         updateStartEnabled()
@@ -11410,7 +12664,8 @@ class MainActivity : AppCompatActivity() {
                 receiver = null
                 newReceiver.close()
                 stopForegroundSessionIfIdle()
-                setStatus("Receiver could not start: ${error.message ?: error.javaClass.simpleName}")
+                Log.w("BluetoothVideo", "Receiver could not start", error)
+                setStatus(getString(R.string.watch_failed))
                 updateStartEnabled()
             }
         }
@@ -11480,7 +12735,8 @@ class MainActivity : AppCompatActivity() {
                 relay = null
                 newRelay.close()
                 stopForegroundSessionIfIdle()
-                setStatus("Relay could not start: ${error.message ?: error.javaClass.simpleName}")
+                Log.w("BluetoothVideo", "Relay could not start", error)
+                setStatus(getString(R.string.relay_failed))
                 updateStartEnabled()
             }
         }
@@ -11709,7 +12965,8 @@ class MainActivity : AppCompatActivity() {
         runCatching { newPreview.start() }.onFailure { error ->
             if (cameraPreview === newPreview) cameraPreview = null
             newPreview.close()
-            setStatus("Camera preview could not start: ${error.message ?: error.javaClass.simpleName}")
+            Log.w("BluetoothVideo", "Camera preview could not start", error)
+            setStatus(getString(R.string.camera_failed))
         }
     }
 
@@ -11732,14 +12989,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
+        val resumeTimer = StartupTimer(SystemClock::elapsedRealtime)
         super.onResume()
         logMessageLifecycle("resume")
+        // Back from the Bluetooth settings (or after the 2-minute staleness): the hint follows the scanner's state.
+        bindCallEmptyState()
         activityResumed = true
+        if (landOnCallsAfterOnboarding && OnboardingActivity.isDone(this)) {
+            landOnCallsAfterOnboarding = false
+            showCallsNearby()
+        }
+        // Back from Wi-Fi settings: the call or stream the Wi-Fi advice paused goes on (audit 2026-10-21).
+        pendingAfterWifiSettings?.let { pending ->
+            pendingAfterWifiSettings = null
+            window.decorView.post { if (!isFinishing && !isDestroyed) pending() }
+        }
+        if (!startupAborted) debugRawObserver?.start()
         if (!bluetoothStateReceiverRegistered) {
             registerReceiver(bluetoothStateReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
             bluetoothStateReceiverRegistered = true
         }
         updateHomeReadiness()
+        // Back from the app's settings page: the camera screen's access notice follows what was granted.
+        if (::streamToggleButton.isInitialized && !startupAborted) updateStartEnabled()
         IncomingUiWatch.shared.onCallScreenShown() // no-op unless an incoming-call full-screen alert is waiting for its screen
         verifiedStoreBanner?.start()
         // Names saved or changed in the verify flow or Contacts screen show in the lists at once.
@@ -11748,6 +13020,10 @@ class MainActivity : AppCompatActivity() {
         // The launch itself came from a message notification (the activity was not running).
         openConversationFromIntent(intent)
         if (::callsTabScreen.isInitialized && callsTabScreen.visibility == View.VISIBLE) updateRecentCalls()
+        // The calls area: Calls (Nearby or Recent segment) and Contacts.
+        checkFullScreenCallAccess(
+            offerPrompt = ::callsTabScreen.isInitialized && currentTab().let { it == MainTab.CALLS || it == MainTab.CONTACTS },
+        )
         updatesHome?.onResume()
         maybeStartGapNameProbe("resume")
         // Pick up link capacity measured since the picker was configured (workstream D).
@@ -11779,6 +13055,8 @@ class MainActivity : AppCompatActivity() {
             startPrivateCallEndpoint()
         }
         if (threadScreenDelegate.isInitialized()) threadScreen.onResume()
+        resumeTimer.mark("all")
+        Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + resumeTimer.line("onResume"))
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -11834,6 +13112,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStop() {
         logMessageLifecycle("stop")
+        debugRawObserver?.stop()
         if (cameraEncoder != null || privateCallCameraEncoder != null) {
             activeCameraViewfinderNeedsRefresh = true
         }
@@ -11848,18 +13127,20 @@ class MainActivity : AppCompatActivity() {
      * which time-shares the radio with Bluetooth: S24 -> M31 GATT 600 kbps ran at 1.9 FPS with
      * the M31 on 2.4 GHz Wi-Fi and 13 FPS with it off. The user may continue anyway.
      */
-    private fun withWifiCheck(action: () -> Unit) {
+    private fun withWifiCheck(voice: Boolean = false, action: () -> Unit) {
         val advice = WifiCoexistence.advice()
-        val recentlyAnswered = System.currentTimeMillis() - wifiAdviceAnsweredAtMs < WIFI_ADVICE_QUIET_MS
-        if (advice == null || recentlyAnswered) {
+        val answeredAtMs = appPreferences.getLong(WifiAdvicePolicy.PREF_ANSWERED_AT, 0L)
+        if (advice == null || !WifiAdvicePolicy.shouldAsk(voice, System.currentTimeMillis(), answeredAtMs)) {
             action()
             return
         }
+        fun answered() = appPreferences.edit().putLong(WifiAdvicePolicy.PREF_ANSWERED_AT, System.currentTimeMillis()).apply()
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Turn off Wi-Fi for smoother video")
+            .setTitle(R.string.wifi_advice_title)
             .setMessage(advice)
-            .setPositiveButton("Open Wi-Fi settings") { _, _ ->
-                wifiAdviceAnsweredAtMs = System.currentTimeMillis()
+            .setPositiveButton(R.string.share_nearby_open_wifi) { _, _ ->
+                answered()
+                pendingAfterWifiSettings = action
                 val panel = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     Intent(android.provider.Settings.Panel.ACTION_WIFI)
                 } else {
@@ -11867,11 +13148,59 @@ class MainActivity : AppCompatActivity() {
                 }
                 runCatching { startActivity(panel) }
             }
-            .setNegativeButton("Continue anyway") { _, _ ->
-                wifiAdviceAnsweredAtMs = System.currentTimeMillis()
+            .setNegativeButton(R.string.wifi_advice_continue) { _, _ ->
+                answered()
                 action()
             }
-            .show()
+            .showTracked()
+    }
+
+    /** Audit 2026-10-21: ending a live stream that people are watching asks first ("End live for 3 viewers?"). */
+    private fun confirmEndLive(end: () -> Unit) {
+        val viewers = lastConnectedCount
+        if (!LiveEndConfirm.ask(viewers) || benchmarkExtrasPresent()) {
+            end()
+            return
+        }
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(resources.getQuantityString(R.plurals.live_end_confirm_title, viewers, viewers))
+            .setPositiveButton(R.string.live_end_confirm_action) { _, _ -> end() }
+            .setNegativeButton(R.string.action_cancel, null)
+            .showTracked()
+    }
+
+    /** Calls page: an error or outcome as a short snackbar (with an action when one helps), never as a status line. */
+    private fun callsSnackbar(text: CharSequence, actionRes: Int = 0, action: (() -> Unit)? = null) {
+        if (isFinishing || isDestroyed) return
+        val bar = com.google.android.material.snackbar.Snackbar.make(
+            findViewById(android.R.id.content), text, com.google.android.material.snackbar.Snackbar.LENGTH_LONG,
+        )
+        if (action != null && actionRes != 0) bar.setAction(actionRes) { action() }
+        bar.show()
+    }
+
+    /** An actionable state for the Calls status line; null clears it. */
+    private fun setCallsNotice(text: String?) {
+        callsActionableNotice = text
+        if (::callBrowserStatus.isInitialized) callBrowserStatus.text = CallsQuiet.line(text)
+    }
+
+    /** After a call: an outcome worth knowing (no answer, busy, declined, dropped) as a snackbar; "Call ended" says nothing. */
+    private fun showCallOutcome(message: String) {
+        val kind = CallEndText.kind(message)
+        if (CallEndText.worthTelling(kind)) callsSnackbar(getString(kind.res))
+    }
+
+    /**
+     * Calls > Nearby: a small indeterminate indicator while discovery runs (like Android's Bluetooth settings), and the
+     * empty state only after [CallsQuiet.EMPTY_HINT_AFTER_MS] without anyone found.
+     */
+    private fun updateCallsSearching() {
+        val nearby = appScreen == AppScreen.CALL_BROWSER && !callBrowserContacts && !callBrowserChats
+        findViewById<View>(R.id.callsSearchingIndicator)?.visibility =
+            if (nearby && privateCallDiscovery != null) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.callEmptyView)?.alpha =
+            if (CallsQuiet.emptyHintVisible(SystemClock.elapsedRealtime() - callsSearchStartedMs)) 1f else 0f
     }
 
     private fun setStatus(message: String) {
@@ -11885,7 +13214,7 @@ class MainActivity : AppCompatActivity() {
         thermalListenerRegistered = true
         updateThermalBadge()
         if (ThermalGuardPolicy.shouldBlockStreaming(thermalStatus)) {
-            setStatus("Phone is critically hot. Let it cool before starting video.")
+            setStatus(getString(R.string.status_too_hot))
         } else if (thermalStatus >= PowerManager.THERMAL_STATUS_MODERATE) {
             setStatus(
                 if (thermalReductionOn) {
@@ -11949,7 +13278,20 @@ class MainActivity : AppCompatActivity() {
         val restarted = privateCallCodec?.let { codec ->
             autoRestartCallAfterLinkChange(controller, codec, privateCallActiveAudioBitRate ?: StreamProtocol.AUDIO_BIT_RATE)
         }
-        val changed = controller.onSample(PRIVATE_CALL_RATE_LINK, sample, System.nanoTime()) ?: restarted
+        val controllerChanged = controller.onSample(PRIVATE_CALL_RATE_LINK, sample, System.nanoTime()) ?: restarted
+        // F16 fix 1 (Experimental, off): leave airtime for the direction this phone receives (CallLinkShare).
+        val share = if (DebugTunables.callLinkShare) {
+            privateCallLinkShare ?: CallLinkShare(CALL_REVERSE_SHARE_FLOOR_BPS).also { privateCallLinkShare = it }
+        } else {
+            null
+        }
+        val requestedBps = privateCallSettings?.bitRate ?: controller.effectiveVideoBps
+        val shareChanged = share?.onWindow(sample.reverseLateMaxMs, controller.effectiveVideoBps, requestedBps) == true
+        if (shareChanged && share != null) {
+            Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + share.line(requestedBps, controller.effectiveVideoBps))
+        }
+        val changed = (controllerChanged ?: if (shareChanged) controller.effectiveVideoBps else null)
+            ?.let { target -> share?.apply(target) ?: target }
         privateCallClimbGuard?.onSample(sample.backlogAgeMs, sample.peerQueueMs, sample.childLate, SystemClock.elapsedRealtime())
         privateCallAudioFirstGate?.let { gate ->
             // Floor congestion: the controller sends the least video it can and the link is still behind.
@@ -12798,7 +14140,7 @@ class MainActivity : AppCompatActivity() {
      * it does not block sharing; an incoming call gives it a phase and stops the share.
      */
     private fun liveSessionBlocksAppShare(): Boolean =
-        streamArmed || sender != null || broadcaster != null || receiver != null || relay != null ||
+        audioLive.mode || audioLive.listening || streamArmed || sender != null || broadcaster != null || receiver != null || relay != null ||
             privateCallRelay != null || cameraEncoder != null || privateCallCameraEncoder != null ||
             (privateCall != null && privateCallPhase != null) || reconnectTarget != null
 
@@ -12830,7 +14172,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun ensureThermalReady(): Boolean {
         if (!ThermalGuardPolicy.shouldBlockStreaming(thermalStatus)) return true
-        setStatus("Phone is critically hot. Let it cool before starting video.")
+        setStatus(getString(R.string.status_too_hot))
         return false
     }
 
@@ -12886,8 +14228,28 @@ class MainActivity : AppCompatActivity() {
             .setIcon(R.drawable.ic_lock)
             .setTitle(R.string.stream_info_title)
             .setMessage(getString(R.string.stream_info_message, name))
+            .apply {
+                if (DebugTunables.localReporting && activeStreamSourceNodeId != null) {
+                    val id = requireNotNull(activeStreamSourceNodeId)
+                    val fingerprint = PeerIdentityGate.authenticatedFingerprint(id)
+                        ?: savedContacts.firstOrNull { it.nodeIdHex == id.toString() }?.fingerprintHex?.let(IdentityFingerprint::fromHex)
+                    if (StreamModerationPolicy.canModerateIdentity(activeStreamSourceAuthenticated, fingerprint != null)) {
+                        setNegativeButton(R.string.block_action) { _, _ ->
+                            CallBlockingUi.block(this@MainActivity, requireNotNull(fingerprint), name) { showReceiverBrowser() }
+                        }
+                        setNeutralButton(R.string.report_action) { _, _ ->
+                            CallBlockingUi.report(this@MainActivity, fingerprint, selectedStreamPeer?.announcement?.logicalStreamToken()) { showReceiverBrowser() }
+                        }
+                    } else {
+                        setNegativeButton(R.string.hide_livestream) { _, _ ->
+                            selectedStreamPeer?.announcement?.logicalStreamToken()?.let { LocalReporting.hideStream(applicationContext, it) }
+                            showReceiverBrowser()
+                        }
+                    }
+                }
+            }
             .setPositiveButton(R.string.action_close, null)
-            .show()
+            .showTracked()
     }
 
     /**
@@ -13047,11 +14409,11 @@ class MainActivity : AppCompatActivity() {
         when (command) {
             CallNotificationCommand.ACCEPT -> {
                 if (!ensureThermalReady()) {
-                    setCallStatus("Cannot accept: heat status is Critical or higher.")
+                    setCallStatus(getString(R.string.call_cannot_accept_hot))
                     return
                 }
                 stopPrivateCallRinging()
-                runCatching { privateCall?.accept() }.onFailure { setCallStatus(it.message ?: "Could not accept") }
+                runCatching { acceptPrivateCall() }.onFailure { setCallStatus(it.message ?: "Could not accept") }
             }
             CallNotificationCommand.DECLINE -> {
                 stopPrivateCallRinging()
@@ -13068,6 +14430,22 @@ class MainActivity : AppCompatActivity() {
             CallNotificationCommand.IGNORE -> Unit
         }
     }
+
+    /**
+     * DEBUG: `am broadcast -a CleanShutdown.ACTION -p <package> --es nonce <n>` runs the shutdown control in a running app.
+     * Unlike `am start ... --es test_control shutdown` it never starts a fresh process.
+     */
+    private val debugCleanShutdownReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: Intent) {
+            if (!BuildConfig.DEBUG || isFinishing || isDestroyed) return
+            onNewIntent(
+                Intent(this@MainActivity, MainActivity::class.java)
+                    .putExtra("test_control", "shutdown")
+                    .putExtra(CleanShutdown.EXTRA_NONCE, intent.getStringExtra(CleanShutdown.EXTRA_NONCE)),
+            )
+        }
+    }
+    private var debugCleanShutdownRegistered = false
 
     private val callNotificationReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: Intent) {
@@ -13088,6 +14466,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        GattPoolBackoff.onScannerChanged = null
         BluetoothEpoch.unregister(streamEpochName)
         verifiedStoreBanner?.close()
         chatTickHandler.removeCallbacksAndMessages(null)
@@ -13095,14 +14474,20 @@ class MainActivity : AppCompatActivity() {
         if (MessagingV2Feature.enabled) conversationRows.stop()
         NameWindowRuntime.removeListener(nameWindowChanged)
         if (MeetBridge.host === meetHost) MeetBridge.host = null
+        if (VerificationEvents.listener === verificationListener) VerificationEvents.listener = null
+        DialCollision.ownDial = { null }
         meetCancelScan()
         updatesHome?.stop()
-        contactWorker.shutdownNow()
         if (callNotificationReceiverRegistered) {
             runCatching { unregisterReceiver(callNotificationReceiver) }
             callNotificationReceiverRegistered = false
         }
+        if (debugCleanShutdownRegistered) {
+            runCatching { unregisterReceiver(debugCleanShutdownReceiver) }
+            debugCleanShutdownRegistered = false
+        }
         if (startupAborted) {
+            contactWorker.shutdown()
             // onCreate stopped before any view, service or radio existed.
             super.onDestroy()
             return
@@ -13127,6 +14512,8 @@ class MainActivity : AppCompatActivity() {
         stopStreamPresence()
         stopNearbyStreamDiscovery()
         stopPrivateCallEndpoint()
+        // Drain the ended-call history write queued by endpoint cleanup.
+        contactWorker.shutdown()
         bleDiscovery?.close()
         bleDiscovery = null
         debugBenchmarkCoordinator?.close()
@@ -13150,6 +14537,13 @@ class MainActivity : AppCompatActivity() {
             Thread { runCatching { SecurityUiBackend.current.wipe(context, panic = true, confirmationText = null) } }.start()
         }
         if (::callChromeAutoHide.isInitialized) callChromeAutoHide.release()
+        if (CleanShutdown.requested) {
+            // DEBUG clean shutdown: the teardown above closed the endpoint, discovery, advertisers and streams. Stop any
+            // scanner left and the session service, then log clean_shutdown: done once nothing is registered (or 2.5 s).
+            ScanRegistry.stopAll()
+            runCatching { ActiveVideoSessionService.stop(applicationContext) }
+            CleanShutdown.awaitAndLog(Handler(Looper.getMainLooper()))
+        }
         super.onDestroy()
     }
 
@@ -13216,12 +14610,20 @@ class MainActivity : AppCompatActivity() {
         const val VIEWER_EXPIRY_CHECK_MS = 4_000L
         const val CACHED_ROUTE_MAX_AGE_MS = 10_000L
         const val NEARBY_EXPIRY_CHECK_MS = 1_000L
+
+        /** F16 fix 1: the reverse-direction share never caps this side's video below this. */
+        const val CALL_REVERSE_SHARE_FLOOR_BPS = 60_000
+
+        /** F15: a "not found nearby" dialog closes itself after this long. */
+        const val NOT_FOUND_DIALOG_MS = 60_000L
         const val SCAN_ERROR_RETRY_MS = 30_000L
         const val ROUTE_SCAN_ERROR_RETRY_MS = 2_000L
         const val PAUSED_HEARTBEAT_MS = 2_000L
         const val FAILED_ROUTE_SUPPRESSION_MS = 8_000L
+
+        /** "Couldn't join" stays up long enough to read and press Try again. */
+        const val STREAM_JOIN_SNACKBAR_MS = 10_000
         const val WITHDRAWN_ROUTE_SUPPRESSION_MS = 30_000L
         const val RECEIVER_NOTICE_MS = 3_000L
-        const val WIFI_ADVICE_QUIET_MS = 10 * 60 * 1_000L
     }
 }

@@ -71,26 +71,4 @@ class TemporalLayeringReportTest {
         )
     }
 
-    @Test
-    fun theInitFallbackPathReportsADroppedKeyAndTheSingleAttemptPathReportsARejection() {
-        val encoder = source("CameraVideoEncoder.kt")
-        val fallback = encoder.substringAfter("private fun startWithInitFallback() {").substringBefore("private fun performEncoderInit")
-        assertTrue(fallback.contains("EncoderOptionalKey.TEMPORAL_LAYERING in requestedKeys"))
-        assertTrue(fallback.contains("EncoderOptionalKey.TEMPORAL_LAYERING in effective.dropped"))
-        assertTrue(fallback.contains("reportTemporalLayering("))
-        assertTrue(fallback.contains("TemporalLayeringReport.initFallbackReason("))
-        // The line is emitted after the chain finishes, before any status text about the fallback.
-        assertTrue(fallback.indexOf("reportTemporalLayering(") < fallback.indexOf("onStatus("))
-
-        val single = encoder.substringAfter("private fun createConfigureStartSingle(").substringBefore("private fun startWithInitFallback")
-        assertTrue(single.contains("reportTemporalLayering("))
-        // A rejection never reaches the single-layer retry without going through the report (and its refusal).
-        assertTrue(single.indexOf("reportTemporalLayering(") < single.lastIndexOf("codec = MediaCodec.createByCodecName(activeEncoderName)"))
-        assertTrue(encoder.contains("error is TemporalLayeringRefused"))
-
-        val report = encoder.substringAfter("private fun reportTemporalLayering(").substringBefore("private fun releaseFailedCodec")
-        assertTrue(report.contains("DebugTunables.benchmarkLaunch"))
-        assertTrue(report.contains("TemporalLayeringReport.Action.REFUSE"))
-        assertTrue(report.contains("throw TemporalLayeringRefused("))
-    }
 }

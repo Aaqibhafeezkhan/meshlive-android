@@ -20,6 +20,10 @@ internal class ContactActions(
     private val worker: ExecutorService,
     private val onChanged: () -> Unit,
     private val onCall: (ContactEntry, video: Boolean) -> Unit,
+    /** Whether this phone can recognise the contact nearby ([ContactReach]); called on [worker]. */
+    private val hintFor: (ContactEntry) -> ContactReach.Hint = { ContactReach.Hint.RECOGNISABLE },
+    /** "Message" in the contact sheet (only with the chat UI on); null hides the row. */
+    private val onMessage: (() -> ((ContactEntry) -> Unit)?) = { null },
 ) {
     private val security: SecurityUi get() = SecurityUiBackend.current
 
@@ -32,11 +36,12 @@ internal class ContactActions(
             }.getOrDefault(false)
             // Naming v2: what this contact last called themselves (sealed, local), shown here and never as the title.
             val claim = runCatching { ContactClaims.store(context).get(IdentityFingerprint.fromHex(contact.fingerprintHex)) }.getOrNull()
-            activity.runOnUiThread { if (!activity.isDestroyed) show(contact, blocked, claim) }
+            val hint = runCatching { hintFor(contact) }.getOrDefault(ContactReach.Hint.RECOGNISABLE)
+            activity.runOnUiThread { if (!activity.isDestroyed) show(contact, blocked, claim, hint) }
         }
     }
 
-    private fun show(contact: ContactEntry, blocked: Boolean, claim: ContactClaim?) {
+    private fun show(contact: ContactEntry, blocked: Boolean, claim: ContactClaim?, hint: ContactReach.Hint) {
         val view = LayoutInflater.from(activity).inflate(R.layout.sheet_contact, null)
         val dialog = BottomSheetDialog(activity)
         val date = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(contact.verifiedAtMs))
@@ -51,17 +56,36 @@ internal class ContactActions(
         view.findViewById<TextView>(R.id.contactRowBlockTitle)
             .setText(if (blocked) R.string.blocked_people_unblock else R.string.block_action)
         bindClaim(view, dialog, contact, claim)
+        bindRecognitionHint(view, dialog, contact, hint)
         fun row(id: Int, action: () -> Unit) = view.findViewById<android.view.View>(id).setOnClickListener {
             dialog.dismiss()
             action()
         }
         row(R.id.contactRowVoice) { onCall(contact, false) }
         row(R.id.contactRowVideo) { onCall(contact, true) }
+        onMessage()?.let { message ->
+            view.findViewById<android.view.View>(R.id.contactRowMessage).visibility = android.view.View.VISIBLE
+            row(R.id.contactRowMessage) { message(contact) }
+        }
         row(R.id.contactRowRename) { rename(contact) }
         row(R.id.contactRowBlock) { blockOrUnblock(contact, blocked) }
+        view.findViewById<android.view.View>(R.id.contactRowReport).visibility =
+            if (DebugTunables.localReporting) android.view.View.VISIBLE else android.view.View.GONE
+        row(R.id.contactRowReport) {
+            CallBlockingUi.report(activity, IdentityFingerprint.fromHex(contact.fingerprintHex), onDone = onChanged)
+        }
         row(R.id.contactRowRemove) { confirmForget(contact) }
         dialog.setContentView(view)
         dialog.show()
+        openSheet = dialog
+    }
+
+    /** The sheet on screen, so an incoming call or the call screen can close it (F15). */
+    private var openSheet: BottomSheetDialog? = null
+
+    fun dismissOpen() {
+        openSheet?.takeIf { it.isShowing }?.dismiss()
+        openSheet = null
     }
 
     /**
@@ -104,6 +128,26 @@ internal class ContactActions(
                 dialog.dismiss()
                 activity.startActivity(VerifyContactActivity.intent(activity))
             }
+        }
+    }
+
+    /**
+     * A contact this phone cannot recognise nearby yet: "Ask <name> to scan your code too" (or scan again) with the Add contact
+     * entry, so Contacts can call them afterwards. Nothing for a recognisable contact.
+     */
+    private fun bindRecognitionHint(view: android.view.View, dialog: BottomSheetDialog, contact: ContactEntry, hint: ContactReach.Hint) {
+        val (note, action) = when (hint) {
+            ContactReach.Hint.ASK_TO_SCAN -> activity.getString(R.string.contact_ask_scan_title, contact.title) to R.string.contact_show_my_code
+            ContactReach.Hint.SCAN_AGAIN -> activity.getString(R.string.contact_not_recognised_title, contact.title) to R.string.contact_scan_again
+            else -> return
+        }
+        view.findViewById<TextView>(R.id.contactSheetDetail).append("\n" + note)
+        val row = view.findViewById<android.view.View>(R.id.contactRowScanConfirm)
+        row.visibility = android.view.View.VISIBLE
+        view.findViewById<TextView>(R.id.contactRowScanConfirmTitle).setText(action)
+        row.setOnClickListener {
+            dialog.dismiss()
+            activity.startActivity(VerifyContactActivity.intent(activity))
         }
     }
 

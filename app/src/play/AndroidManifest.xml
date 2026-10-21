@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        The Google Play flavour (docs/dev/architecture.md "Distribution and releases"). Google Play updates this build: no updater, no install permission
+        (Device and Network Abuse policy: a Play app updates only through Play). Outbound "Share app nearby" remains
+        available with the shared screen, file provider and nearby Wi-Fi permission; it does not install or update this
+        phone. Split installs still refuse sharing (docs/PLAY_RELEASE.md). The session service keeps camera, microphone,
+        connectedDevice and mediaPlayback; the location type (Android 10-11 background scan,
+        BuildConfig.LOCATION_FGS_AVAILABLE=false) and permission stay removed pending a supported use-case justification.
+        tools/tests/test_flavour_manifests.py checks the merged manifest.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" tools:node="remove" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" tools:node="remove" />
+
+    <application>
+        <service
+            android:name=".ActiveVideoSessionService"
+            android:exported="false"
+            android:foregroundServiceType="camera|microphone|connectedDevice|mediaPlayback"
+            tools:replace="android:foregroundServiceType" />
+    </application>
+</manifest>

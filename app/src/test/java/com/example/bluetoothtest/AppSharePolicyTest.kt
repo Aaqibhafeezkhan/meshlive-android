@@ -45,10 +45,10 @@ class AppSharePolicyTest {
 
     @Test
     fun publishedReleaseFingerprintMatchesReadme() {
-        val readme = File("../docs/USER_GUIDE.md").takeIf { it.isFile } ?: File("docs/USER_GUIDE.md")
+        val readme = File("../docs/user-guide.md").takeIf { it.isFile } ?: File("docs/user-guide.md")
         if (!readme.isFile) return // Not run from the project tree.
         assertTrue(
-            "docs/USER_GUIDE.md 'Verifying a release' must carry AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256",
+            "docs/user-guide.md 'Verifying a release' must carry AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256",
             readme.readText().contains(AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256),
         )
         assertTrue(AppSharePolicy.matchesPublishedReleaseKey(listOf(AppSharePolicy.PUBLISHED_RELEASE_CERT_SHA256.lowercase())))
@@ -127,6 +127,9 @@ class AppSharePolicyTest {
             signingCertSha256 = listOf("AA:BB"), matchesPublishedReleaseKey = false, splitCount = 0, refusal = null,
         )
         val text = AppShare.shareText(info, AppShareFormat.APK)
+        // The text a receiver sees names the app as it is called now (emulator crawl 2026-10-21: the old name).
+        assertTrue(text.startsWith("MeshLive 1.0 (1). "))
+        assertFalse(text.contains("Bluetooth Video"))
         assertTrue(text.contains("APK SHA-256 ab"))
         assertTrue(text.contains("AA:BB"))
         assertTrue(AppShare.shareText(info, AppShareFormat.ZIP_RENAMED).contains("Rename"))

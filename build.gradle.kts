@@ -1,5 +1,5 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
-// Plugin versions resolved here are locked in buildscript-gradle.lockfile (docs/ARCHITECTURE.md "Build notes", toolchain pins).
+// Plugin versions resolved here are locked in buildscript-gradle.lockfile (docs/dev/architecture.md "Build notes", toolchain pins).
 buildscript {
     configurations.classpath {
         resolutionStrategy.activateDependencyLocking()

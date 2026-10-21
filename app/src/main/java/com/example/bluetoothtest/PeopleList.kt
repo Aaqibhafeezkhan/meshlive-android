@@ -38,6 +38,20 @@ internal fun nearbyRows(people: List<PeopleItem.Person>, contactKeys: Set<String
     return contacts.sortedBy { it.name.lowercase() } + others.sortedBy { it.name.lowercase() }
 }
 
+/** Order belongs to this activity session, including people who disappear and come back. */
+internal class NearbyPeopleSession {
+    private val firstSeen = LinkedHashMap<String, Int>()
+
+    fun rows(people: List<PeopleItem.Person>, contactKeys: Set<String>, query: String = ""): List<PeopleItem> {
+        people.forEach { firstSeen.getOrPut(it.key) { firstSeen.size } }
+        val term = query.trim()
+        return people.filter { it.name.contains(term, ignoreCase = true) }
+            .sortedWith(compareBy<PeopleItem.Person> { it.key !in contactKeys }.thenBy { firstSeen[it.key] })
+    }
+
+    fun showSearch(people: List<PeopleItem.Person>, query: String): Boolean = people.size > 8 || query.isNotEmpty()
+}
+
 /**
  * Updated in place ([submit]) so the continuous refresh does not reset scrolling or flicker.
  * Taps on a row go through the ListView's item listener ([personAt]); the call buttons call

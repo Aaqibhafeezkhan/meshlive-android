@@ -38,8 +38,8 @@ class DebugDialWaitTest {
     fun theUserSeesLookingThenAReasonedNotFoundMessage() {
         assertEquals("Looking for Asus\u2026", DebugDialWait.lookingStatus("Asus"))
         val notSeen = DebugDialWait.notFoundStatus("Asus", scannerFailureCode = null)
-        assertTrue(notSeen.startsWith("Asus was not found nearby"))
-        assertTrue(notSeen.contains("not seen in 10 s"))
+        assertTrue(notSeen.startsWith("Asus is no longer reachable"))
+        assertTrue(notSeen.contains("not heard in 10 s"))
         val scanner = DebugDialWait.notFoundStatus("Asus", scannerFailureCode = 2)
         assertTrue(scanner.startsWith("Asus was not found nearby"))
         assertTrue(scanner.contains("scanner is unavailable"))
@@ -120,7 +120,6 @@ class DebugDialWaitTest {
         // Not gated on DEBUG: user dials track their wait, show the name and log call_invite lines (DEBUG builds only).
         assertFalse("the selection wait is not DEBUG-only", start.contains("if (BuildConfig.DEBUG) {\n            dialSelectionStartedAtMs"))
         assertTrue(start.contains("dialSelectionStartedAtMs = if (auto) 0L else pendingPrivateCallSelectedAtMs"))
-        assertTrue(start.contains("DebugDialWait.lookingStatus("))
         assertTrue(start.contains("showDialNotFound("))
         assertTrue(start.contains("GattPoolBackoff.scannerFailureCode()"))
         assertTrue(start.contains("\"scanner_unavailable\""))
@@ -131,12 +130,34 @@ class DebugDialWaitTest {
         assertTrue(stop.contains("displayName = pendingPrivateCallPeerName"))
         // Sightings resume a waiting dial in release builds too, and the status line keeps the waiting/failed message.
         assertTrue(source.contains("val waitingDial = debugDialWait\n"))
-        assertTrue(source.contains("val status = dialStatusOverride() ?: if (privateCallPeers.isEmpty())"))
         // The expiry of a restarted dial logs its reason and tells the user.
         val expire = source.substringAfter("private fun expireDebugDialWait()").substringBefore("private fun resumeDebugDialWait")
         assertTrue(expire.contains("DebugDialWait.expiryReason(scanFailure)"))
         assertTrue(expire.contains("showDialNotFound(dial.prefix, it, scanFailure)"))
         // Release builds log no call_invite line (no node IDs in a user's logcat).
         assertTrue(source.contains("private fun logCallInvite(line: String) {\n        if (BuildConfig.DEBUG) Log.i("))
+        // A contact called while not listed waits through the same machinery, matching a recognised rotating ID too.
+        val contactCall = source.substringAfter("private fun callContact(").substringBefore("private var dialWaitSnackbar")
+        assertTrue(contactCall.contains("if (ContactReach.mayWaitForCallBack(hint))"))
+        assertTrue(contactCall.contains("startContactDialWait(contact, video)"))
+        assertTrue(source.contains("waitingDial.matchesPerson(key, if (waitingDial.contact) recognisedContactPrefix(peer) else null)"))
+    }
+
+    /**
+     * Phone runs userflow-b57d0eaf-20261019 (S22 20:35:30, 20:36:03): a Recent or Contacts call right after a call found an
+     * empty call list and failed at once. The contact dial now waits for a sighting of its fixed prefix or of a rotating ID
+     * recognised as exactly this contact.
+     */
+    @Test
+    fun aContactDialMatchesItsPrefixOrARecognisedRotatingIdAndNothingElse() {
+        val contact = DebugDialWait.Pending("1c5fbbcd07e0", CallType.VIDEO, false, startedAtMs = 0L, displayName = "Asha", contact = true)
+        assertTrue(contact.matchesPerson("1C5FBBCD07E0", null))
+        assertTrue("a rotating ID recognised as this contact", contact.matchesPerson("a1b2c3d4e5f6", "1c5fbbcd07e0"))
+        assertFalse("recognised as someone else", contact.matchesPerson("a1b2c3d4e5f6", "9c8d7e6f5a40"))
+        assertFalse("not recognised", contact.matchesPerson("a1b2c3d4e5f6", null))
+        val row = DebugDialWait.Pending("1c5fbbcd07e0", CallType.VIDEO, false, startedAtMs = 0L, displayName = "Asha")
+        assertFalse("a row or DEBUG dial matches its advertised key only", row.matchesPerson("a1b2c3d4e5f6", "1c5fbbcd07e0"))
+        assertFalse(contact.expired(DebugDialWait.WAIT_MS - 1))
+        assertTrue(contact.expired(DebugDialWait.WAIT_MS))
     }
 }

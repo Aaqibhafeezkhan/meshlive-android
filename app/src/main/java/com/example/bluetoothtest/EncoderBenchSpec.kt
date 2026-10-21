@@ -3,7 +3,7 @@ package com.example.bluetoothtest
 import kotlin.math.ceil
 
 /**
- * DEBUG-only radio-free encoder bench (`test_encoder_bench`, default off, Experimental; docs/SWITCHES.md).
+ * DEBUG-only radio-free encoder bench (`test_encoder_bench`, default off, Experimental; docs/dev/switches.md).
  *
  * The bench feeds the declared native raw-motion fixture (the same `test_raw_yuv` input the benchmark suite
  * uses for streams and calls) through the phone's real selected encoder ([CameraVideoEncoder] in its raw-input

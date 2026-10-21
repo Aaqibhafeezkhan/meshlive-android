@@ -19,17 +19,16 @@
         android:layout_weight="1"
         android:gravity="center_vertical"
         android:orientation="horizontal">
-        <TextView
+        <com.example.bluetoothtest.InfoLabelView
             android:id="@+id/featureRowInfo"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:minHeight="56dp"
             android:gravity="center_vertical"
             android:background="?attr/selectableItemBackground"
-            android:drawableEnd="@drawable/ic_info_small"
-            android:drawablePadding="6dp"
-            android:drawableTint="@color/text_secondary"
-            android:textAppearance="@style/TextAppearance.App.RowLabel" />
+            android:textAppearance="@style/TextAppearance.App.RowLabel"
+            android:paddingTop="16dp"
+            android:paddingBottom="16dp"/>
     </LinearLayout>
 
     <com.google.android.material.materialswitch.MaterialSwitch

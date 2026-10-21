@@ -1,11 +1,11 @@
 package com.example.bluetoothtest
 
 /**
- * The shipped defaults of the connectivity features promoted on 2026-10-11 (docs/SWITCHES.md register,
+ * The shipped defaults of the connectivity features promoted on 2026-10-11 (docs/dev/switches.md register,
  * "Experimental, alternative and optional behaviour"). Each feature has exactly one constant here.
  * Every one stays OFF until the phone test named beside it passes; turning a feature on for users
  * who never touched its switch is then a one-line change. The privacy features BMH3 and BMH3_PSEUDONYMS
- * were switched on for 0.2.0-beta (user decision 2026-10-12, after T14/T15 passed). A user's explicit choice always wins, and
+ * were switched on for 0.2.0-beta (design decision 2026-10-12, after T14/T15 passed). A user's explicit choice always wins, and
  * a DEBUG benchmark launch (any `test_` extra) never reads these constants (see [FeatureCatalog]).
  */
 internal object ConnectivityFeatureDefaults {
@@ -22,7 +22,10 @@ internal object ConnectivityFeatureDefaults {
     const val CLASSIC_WITHOUT_PAIRING = false
 
     /** Compact (single-UUID) announcements of iPhones in discovery (T8: masked scan filter on the six phones). */
-    const val IPHONE_DISCOVERY = true // on since 2026-10-17: first iPhone calls and streams passed both ways (user decision)
+    const val IPHONE_DISCOVERY = true // on since 2026-10-17: first iPhone calls and streams passed both ways (design decision)
+
+    /** Experimental "Find PCs": the Windows PC's service-data announcement in discovery (Design QW; extended-advert scan). Off. */
+    const val FIND_PCS = false
 
     /** Help > Share app nearby over Wi-Fi Direct (T9). Flipping it makes the Help entry a normal one. */
     const val SHARE_APP_NEARBY = false
@@ -82,6 +85,19 @@ internal object ConnectivityFeatures {
         iconRes = R.drawable.ic_visibility,
         group = GROUP,
         phoneTest = "T8",
+    )
+
+    /** Experimental (Design QW). Needs rotating IDs at run time: the mapped announcement is a rotating call offer. */
+    val findPcs = FeatureSpec(
+        id = "find_pcs",
+        prefKey = PcAnnouncementFeature.PREF,
+        defaultEnabled = ConnectivityFeatureDefaults.FIND_PCS,
+        benchmarkExtra = PcAnnouncementFeature.EXTRA,
+        titleRes = R.string.feat_find_pcs,
+        descriptionRes = R.string.feat_find_pcs_description,
+        iconRes = R.drawable.ic_visibility,
+        group = GROUP,
+        phoneTest = "QW",
     )
 
     val shareAppNearby = FeatureSpec(
@@ -148,7 +164,7 @@ internal object ConnectivityFeatures {
 
     /** In Settings order. */
     val all: List<FeatureSpec> = listOf(
-        classicWithoutPairing, cocAutoGatt, dualListening, iphoneDiscovery, nativeOpus, shareAppNearby, bmh3, bmh3Pseudonyms,
+        classicWithoutPairing, cocAutoGatt, dualListening, iphoneDiscovery, findPcs, nativeOpus, shareAppNearby, bmh3, bmh3Pseudonyms,
     )
 
     /** Idempotent: an activity can be recreated. */

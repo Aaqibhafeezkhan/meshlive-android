@@ -26,7 +26,7 @@
     <string name="settings_details">Details</string>
     <string name="settings_privacy_title">Privacy</string>
     <string name="settings_calls_title">Calls</string>
-    <string name="settings_share_title">Share app offline</string>
+    <string name="settings_share_title">Share app nearby</string>
     <string name="settings_section_about">About and updates</string>
     <string name="settings_name_not_set">Not set</string>
     <string name="settings_experiments_title">Experiments</string>
@@ -46,7 +46,7 @@
     <string name="status_row_battery">Battery and temperature</string>
     <string name="status_on">On</string>
     <string name="status_off">Off</string>
-    <string name="status_value_hidden">Off: others cannot find you</string>
+    <string name="status_value_hidden">Not available for nearby calls</string>
     <string name="status_value_needs_permission">Needs permission</string>
     <string name="status_value_unavailable">Not available</string>
     <string name="status_value_relay_paused">Paused to save battery</string>
@@ -59,7 +59,7 @@
     <string name="broadcast_title_idle">Ready to go live</string>
     <string name="broadcast_title_live">You are live</string>
     <string name="broadcast_title_relay">Relay</string>
-    <string name="watch_title_live">Live stream</string>
+    <string name="watch_title_live">Livestream</string>
     <string name="live_viewers_count">%1$d watching</string>
     <string name="calls_nearby">Nearby</string>
     <string name="calls_recent">Recent</string>

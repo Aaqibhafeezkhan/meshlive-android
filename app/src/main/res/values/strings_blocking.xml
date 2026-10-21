@@ -2,17 +2,17 @@
 <!-- Call blocking (CallBlocking.kt, CallBlockingUi.kt, BlockedPeopleActivity.kt). Local only. -->
 <resources>
     <string name="block_unknown_callers">Block unknown callers</string>
-    <string name="block_unknown_callers_description">Calls from anyone who is not a verified contact are declined without ringing and shown in Recent as a blocked call. A contact whose phone cannot prove who it is before ringing (for example after a long time apart) is declined too; call them back from Recent.</string>
+    <string name="block_unknown_callers_description">Calls not recognised as verified contacts are blocked without ringing and appear in Recent. Some saved contacts may also be blocked if they can\'t be recognised; you can call them back. If your saved contacts can\'t be read, calls may still ring.</string>
     <string name="blocked_people_action">Blocked people</string>
     <string name="blocked_people_title">Blocked people</string>
-    <string name="blocked_people_intro">Their calls are declined without ringing and their live streams are hidden from Watch. They are not told. Only this phone knows.</string>
+    <string name="blocked_people_intro">Blocked calls won\'t ring, and blocked livestreams are hidden on this phone. People aren\'t notified when you block them.</string>
     <string name="blocked_people_empty_title">No one is blocked</string>
     <string name="blocked_people_empty_text">Block someone from Recent (press and hold a row), from a contact, or with Decline and block on an incoming call.</string>
     <string name="blocked_people_row_since">Blocked %1$s</string>
     <string name="blocked_people_row_description">%1$s, blocked</string>
     <string name="blocked_people_unblock">Unblock</string>
     <string name="blocked_people_unblock_title">Unblock %1$s?</string>
-    <string name="blocked_people_unblock_message">Their calls will ring again and their live streams will show in Watch.</string>
+    <string name="blocked_people_unblock_message">Their calls will ring again and their livestreams will show in Live.</string>
     <string name="blocked_people_unblocked">%1$s unblocked</string>
     <string name="blocked_people_unreadable">The block list cannot be read right now. Calls are not blocked until it can. Tap to reset it.</string>
     <string name="blocked_people_reset_title">Reset the block list?</string>
@@ -20,7 +20,7 @@
     <string name="blocked_people_reset_action">Reset</string>
     <string name="block_action">Block</string>
     <string name="block_title">Block %1$s?</string>
-    <string name="block_message">Their calls will be declined without ringing and their live streams hidden from Watch. They are not told.\n\nThis works while their phone shows its real ID before the call rings: your verified contacts, and phones that do not hide their ID. A person who is not your contact normally calls under a one-time ID that changes on every call, and cannot be recognised. To stop those calls, turn on Block unknown callers in Settings.</string>
+    <string name="block_message">Their livestreams will be hidden. Calls will be blocked when MeshLive can recognise their phone. Calls using a temporary ID may still ring; turn on Block unknown callers to stop those too. They won\'t be notified.</string>
     <string name="block_done">%1$s blocked</string>
     <string name="block_already">%1$s is already blocked</string>
     <string name="block_full">The block list is full. Unblock someone first.</string>
@@ -28,8 +28,8 @@
     <string name="block_decline_and_block">Decline and block</string>
     <string name="block_declined_and_blocked">Declined and blocked %1$s</string>
     <string name="block_not_possible_title">Declined, but not blocked</string>
-    <string name="block_not_possible_message">This caller hides who they are until you answer, using a one-time ID that changes on every call, so this phone cannot recognise them next time.\n\nTo stop calls from people who are not your contacts, turn on Block unknown callers.</string>
-    <string name="block_turn_on_unknown">Turn on</string>
+    <string name="block_not_possible_message">This caller\'s temporary ID can\'t be blocked for future calls. Turn on Block unknown callers to stop calls from people outside your verified contacts.</string>
+    <string name="block_turn_on_unknown">Block all unknown callers</string>
     <string name="block_unknown_turned_on">Block unknown callers is on</string>
     <string name="recent_blocked_call">Blocked call</string>
     <string name="recent_blocked_call_detail">Declined, %1$s</string>

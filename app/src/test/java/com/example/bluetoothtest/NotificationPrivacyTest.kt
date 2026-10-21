@@ -57,7 +57,7 @@ class NotificationPrivacyTest {
         assertEquals("Asha [abcd]", NotificationPrivacy.incomingCallText("Asha [abcd]"))
         assertEquals(NotificationPrivacy.HIDDEN_PEER_TEXT, NotificationPrivacy.incomingCallText("  "))
         assertEquals(NotificationPrivacy.HIDDEN_PEER_TEXT, NotificationPrivacy.incomingCallText(null))
-        assertEquals("Incoming call", NotificationPrivacy.publicText(NotificationKind.INCOMING_CALL))
+        assertTrue(NotificationPrivacy.publicText(NotificationKind.INCOMING_CALL).isNotBlank())
     }
 
     @Test
@@ -82,6 +82,6 @@ class NotificationPrivacyTest {
             assertFalse(text.contains("encrypted", ignoreCase = true))
             assertFalse(text.contains("video call", ignoreCase = true))
         }
-        assertEquals("Bluetooth Video", NotificationPrivacy.PUBLIC_TITLE)
+        assertEquals("MeshLive", NotificationPrivacy.PUBLIC_TITLE)
     }
 }

@@ -37,7 +37,7 @@ class AndroidVideoReceiver(
     private val debugTraceSessionName: String? = null,
     private val forwardReceivedStreams: Boolean = false,
     private val expectedMediaSourceNodeId: NodeId? = null,
-    private val onMediaSourceAuthenticated: (NodeId) -> Unit = {},
+    private val onMediaSourceAuthenticated: (NodeId, Boolean) -> Unit = { _, _ -> },
     private val onForwardedChildrenChanged: (Int) -> Unit = {},
     private val onVideoRecovery: (Boolean) -> Unit = {},
     /**
@@ -856,7 +856,6 @@ class AndroidVideoReceiver(
             require(expectedMediaSourceNodeId == null || mediaSourceNodeId == expectedMediaSourceNodeId) {
                 "The replacement route belongs to a different stream source"
             }
-            onMediaSourceAuthenticated(mediaSourceNodeId)
             val pendingForwardingEnvelopes = mutableListOf<MeshEnvelope>()
             val keyFrameRequests = ArrayBlockingQueue<Unit>(1)
             val forwardedChildCount = AtomicInteger(0)
@@ -922,6 +921,9 @@ class AndroidVideoReceiver(
                     "Forwarded-stream grant does not match its media stream"
                 }
             }
+            // Direct sources are handshake-bound. Forwarded audio verifies its source certificate in readHeader;
+            // forwarded video has only the relay's grant, not proof from the claimed source.
+            onMediaSourceAuthenticated(mediaSourceNodeId, forwardedGrant == null || header.isAudioOnly)
             val streamLabels = LabelInbox()
             labelsPayload?.let { payload ->
                 // The all-zero direct-stream binding is accepted only from the direct endpoint peer

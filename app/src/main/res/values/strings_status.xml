@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status lines and short dialogs that were hard-coded English in Kotlin (cosmetics pass 2026-10-21). Plain words; the
+     technical reason, where there is one, goes to the log instead. Debug/benchmark-only lines stay in code. -->
+<resources>
+    <string name="status_line_bluetooth_off">Bluetooth is off.</string>
+    <string name="status_search_wait">Android limits how often apps can search. Searching again in %1$d s.</string>
+    <string name="status_turn_on_bluetooth">Turn on Bluetooth to continue.</string>
+    <string name="status_no_bluetooth">This phone doesn\'t support Bluetooth.</string>
+    <string name="status_bluetooth_off_retry">Turn on Bluetooth, then try again.</string>
+    <string name="status_ready_live">Ready. Go live or find livestreams.</string>
+    <string name="status_too_hot">Your phone is too hot. Let it cool down before starting video.</string>
+
+    <!-- Going live -->
+    <string name="live_status_bluetooth_off">Bluetooth is off. Your stream comes back when Bluetooth is on.</string>
+    <string name="live_status_bluetooth_back">Bluetooth is back on. Your stream is visible again.</string>
+    <string name="live_status_paused_viewers">Paused. Viewers stay connected.</string>
+    <string name="live_status_paused_audio">Paused. The microphone is off. Listeners stay connected.</string>
+    <string name="live_status_resuming">Resuming…</string>
+    <string name="live_status_resumed">You\'re live again.</string>
+    <string name="live_status_waiting">You\'re live. Waiting for viewers.</string>
+    <string name="live_status_no_viewer">No viewer is ready yet.</string>
+    <string name="live_status_failed">Couldn\'t start the stream. Try again.</string>
+    <string name="live_camera_size">The %1$s camera can\'t match this stream\'s size. Flip the camera before going live.</string>
+    <string name="camera_failed">The camera couldn\'t start. Close other camera apps and try again.</string>
+    <string name="relay_failed">Couldn\'t start passing video on. Try again.</string>
+
+    <!-- Watching -->
+    <string name="watch_rejoining">Found another way to reach the stream. Reconnecting…</string>
+    <string name="watch_connection_lost">Connection lost. Looking for the stream again…</string>
+    <string name="watch_cannot_play">This phone can\'t play this stream.</string>
+    <string name="watch_stream_full">This stream is full right now. It shows as available when there\'s room.</string>
+    <string name="watch_joining">Joining %1$s…</string>
+    <string name="watch_reconnecting">Reconnecting to the same stream…</string>
+    <string name="watch_failed">Couldn\'t start watching. Try again.</string>
+
+    <!-- Calls -->
+    <string name="call_no_video_support">Video isn\'t supported on this phone.</string>
+    <string name="call_waiting_for_messages">Finishing a message exchange first. Tap the person again in a moment.</string>
+    <string name="call_incoming_busy">A call is coming in. Try again in a moment.</string>
+    <string name="call_choose_title">Call %1$s</string>
+    <string name="call_couldnt_start">Couldn\'t start the call. Try again.</string>
+
+    <!-- Wi-Fi advice (WifiCoexistence) -->
+    <string name="wifi_advice_title">Turn off Wi-Fi for smoother video</string>
+    <string name="wifi_advice">Your 2.4 GHz Wi-Fi connection may slow Bluetooth. Try a 5 GHz network or turn Wi-Fi off to improve video.</string>
+    <string name="wifi_advice_continue">Continue anyway</string>
+
+    <!-- "You appear as" (OwnNearbyName): the made-up name people nearby see for this phone. -->
+    <string name="appear_as">You appear as %1$s</string>
+    <string name="appear_as_rotating">You appear as %1$s · changes every 15 min</string>
+    <string name="appear_as_info_title">Your name nearby</string>
+    <string name="appear_as_info">To keep you private, your phone shows people nearby a random ID that changes every 15 minutes, and they see a made-up name made from it. Your real name, if you set one, is only sent encrypted to the people you choose (Settings › Your name).</string>
+    <string name="settings_name_not_set_rotating">Not set</string>
+
+    <!-- Chat attachments -->
+    <string name="attach_cannot_open_type">This type of file can\'t be opened here.</string>
+    <string name="attach_no_app">No app on this phone can open this file.</string>
+</resources>

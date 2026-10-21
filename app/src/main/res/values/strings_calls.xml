@@ -17,6 +17,10 @@
     <string name="feature_lock_screen_calls_description">An incoming call turns the screen on and appears over the lock screen. The caller\'s name stays hidden until you unlock, unless you allow it below.</string>
     <string name="feature_full_screen_needed">Android needs your permission to show call alerts over the lock screen.</string>
     <string name="feature_full_screen_open">Open Android settings</string>
+    <string name="fsi_banner_text">Allow full-screen incoming calls: Android shows calls from MeshLive only as a notification while your phone is locked or you are in another app.</string>
+    <string name="fsi_banner_allow">Allow</string>
+    <string name="call_busy_declined_while_dialling">%1$s called while you were calling %2$s. They were told you are busy; your call goes on.</string>
+    <string name="call_busy_declined">%1$s called while you were dialling. They were told you are busy.</string>
 
     <string name="feature_call_notifications">Call buttons in notifications</string>
     <string name="feature_call_notifications_description">Incoming and ongoing calls show Answer, Decline and Hang up buttons in the notification.</string>
@@ -24,20 +28,20 @@
     <string name="feature_lock_screen_names">Show names on lock screen</string>
     <string name="feature_lock_screen_names_description">Off: a locked phone shows only “Incoming call”. Anyone who can see your screen can read a name shown here.</string>
 
-    <string name="feature_messages">Messages (beta)</string>
-    <string name="feature_messages_description">Send text, voice notes and photos to a contact. They travel when your two phones meet, and expire after the lifetime you choose.</string>
+    <string name="feature_messages">Chats (beta)</string>
+    <string name="feature_messages_description">Send messages, voice notes and photos to a contact. They\'re delivered when your phones are near each other.</string>
 
-    <string name="feature_auto_sync">Auto-sync messages</string>
-    <string name="feature_auto_sync_description">When a contact comes into range, exchange messages without a tap. Needs Messages.</string>
+    <string name="feature_auto_sync">Send chats automatically</string>
+    <string name="feature_auto_sync_description">When a contact comes into range, send and receive waiting messages without a tap. Needs Chats.</string>
 
     <string name="feature_names">Names and stream titles</string>
-    <string name="feature_names_description">Add an optional name to your ID, a subject to calls and a title to your live video. A stream title can be seen by anyone nearby before they join.</string>
+    <string name="feature_names_description">Add an optional name to your ID, a subject to calls and a title to your livestream. A stream title can be seen by anyone nearby before they join.</string>
 
     <!-- Call screen -->
     <string name="call_peer_no_voice">%1$s\'s app does not support voice calls, so it started its camera. You can turn on your video too.</string>
     <string name="call_name_hidden_locked">Encrypted call</string>
     <string name="call_name_hidden_locked_hint">Unlock to see who is calling.</string>
-    <string name="call_incoming_lookalike">Looks like your contact %1$s. Check the ID before you answer.</string>
+    <string name="call_incoming_lookalike">The name resembles %1$s, but this phone hasn\'t been verified as that contact. Check with them in person before sharing anything private.</string>
     <!-- Hold Mute to talk (TalkBack) -->
     <string name="call_talk_action">Talk</string>
     <string name="call_muted_again">Muted</string>

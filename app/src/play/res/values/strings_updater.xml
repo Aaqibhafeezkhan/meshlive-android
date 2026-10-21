@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Google Play flavour only: what the "Newer version nearby" note says; Google Play is the only update route. -->
+<resources>
+    <string name="update_play_title">Newer version nearby</string>
+    <string name="update_play_message">A phone you connected to says it runs a newer MeshLive. That is only its claim.\n\nUpdate through Google Play when you have a connection. If Google Play shows no update yet, it can take a few days to reach every phone.\n\nMeshLive itself downloads and installs nothing.</string>
+    <string name="update_play_hide">Hide for a week</string>
+</resources>

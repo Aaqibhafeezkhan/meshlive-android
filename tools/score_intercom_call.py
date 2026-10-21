@@ -64,6 +64,14 @@ def validate_intercom_case(case, participants):
         if not isinstance(case["tunables"], dict):
             raise ValueError("Call tunables must be an object")
         tunable_extras(case["tunables"])  # Unknown names or wrong types never silently test the default.
+    if "phone_tunables" in case:
+        per_phone = case["phone_tunables"]
+        if not isinstance(per_phone, dict) or not all(isinstance(value, dict) for value in per_phone.values()):
+            raise ValueError("Per-phone call tunables must map an endpoint to an object")
+        if not set(per_phone) <= set(participants):
+            raise ValueError("Per-phone call tunables must name call endpoints")
+        for value in per_phone.values():
+            tunable_extras(value)
     tunables = case.get("tunables", {})
     if case.get("call_type", "video") not in CALL_TYPES:
         raise ValueError('call_type must be "voice" or "video"')

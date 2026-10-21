@@ -14,7 +14,7 @@ import kotlin.math.max
  * rungs to what each phone's mode list offers (an ASUS 3:2 mode after 16:9 rungs changed the aspect).
  *
  * Pattern (libwebrtc `VideoAdapter` + `HardwareVideoEncoder.encodeTextureBuffer`, Grafika
- * `ContinuousCaptureActivity`; see docs/DECISIONS.md "GPU scale ladder"): capture once at one camera
+ * `ContinuousCaptureActivity`; see docs/dev/decisions/README.md "GPU scale ladder"): capture once at one camera
  * mode, draw every frame into the encoder's input surface at the rung size through a crop/scale
  * transform. A rung change is then an encoder reset (new MediaCodec, first frame a keyframe) and the
  * camera never restarts. Each rung is an exact fraction of the capture, centre-cropped to the rung's

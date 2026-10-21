@@ -33,8 +33,8 @@ internal object DebugDialWait {
             "$name was not found nearby: this phone's Bluetooth scanner is unavailable " +
                 "(${ScanFailurePolicy.name(scannerFailureCode)}). Try again in a moment."
         } else {
-            "$name was not found nearby: their phone was not seen in ${WAIT_MS / 1000} s. " +
-                "Make sure the app is open on their phone and close by, then try again."
+            "$name is no longer reachable: their phone stopped offering calls (not heard in ${WAIT_MS / 1000} s). " +
+                "They may be in another call or have closed the app. Try again when they appear in the list."
         }
 
     /** One accepted dial that still waits for its target. */
@@ -46,8 +46,21 @@ internal object DebugDialWait {
         val waitMs: Long = WAIT_MS,
         /** Shown name of a user-started dial; null for a DEBUG dial. */
         val displayName: String? = null,
+        /**
+         * A saved contact called from Contacts, Recent or a conversation while it was not in the list (the call scan was
+         * restarting after a call, or not running on that screen): a rotating ID recognised as exactly this contact also
+         * matches ([matchesPerson]).
+         */
+        val contact: Boolean = false,
     ) {
         fun matches(key: String): Boolean = key.equals(prefix, ignoreCase = true)
+
+        /**
+         * A sighting of this dial's person: its advertised prefix ([key]), or, for a [contact] dial, the contact prefix its
+         * rotating ID was recognised as ([recognisedContactPrefix], null when not recognised as exactly one contact).
+         */
+        fun matchesPerson(key: String, recognisedContactPrefix: String?): Boolean =
+            matches(key) || (contact && recognisedContactPrefix?.equals(prefix, ignoreCase = true) == true)
         fun expired(nowMs: Long): Boolean = nowMs - startedAtMs >= waitMs
         fun remainingMs(nowMs: Long): Long = (startedAtMs + waitMs - nowMs).coerceAtLeast(0L)
         fun waitedMs(nowMs: Long): Long = (nowMs - startedAtMs).coerceAtLeast(0L)

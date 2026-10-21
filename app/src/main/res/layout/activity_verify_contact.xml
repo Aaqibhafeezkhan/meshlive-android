@@ -62,6 +62,16 @@
             android:accessibilityLiveRegion="polite"
             android:visibility="gone" />
 
+        <!-- Design QL revision 2: Call now, for 60 s after the phones started recognising each other. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/verifyCallNowButton"
+            style="@style/Widget.App.Button.Primary"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/ql_call_now"
+            android:visibility="gone" />
+
         <!-- The verified-contact store cannot be read (polled on resume). -->
         <LinearLayout
             android:id="@+id/verifyStoreBanner"
@@ -219,6 +229,15 @@
                         android:layout_height="wrap_content"
                         android:text="@string/verify_my_code"
                         android:textAppearance="@style/TextAppearance.App.Title" />
+
+                    <!-- "You appear as Gold Fox": the name the other person sees for you nearby (OwnNearbyName). -->
+                    <TextView
+                        android:id="@+id/verifyAppearAs"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:textAppearance="@style/TextAppearance.App.Body"
+                        android:visibility="gone" />
 
                     <!-- White tile so the code scans in dark mode too. -->
                     <ImageView

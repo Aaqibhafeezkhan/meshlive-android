@@ -24,8 +24,8 @@ internal class ReleaseVersion private constructor(
         for (index in 0 until minOf(preRelease.size, other.preRelease.size)) {
             val a = preRelease[index]
             val b = other.preRelease[index]
-            val an = a.toIntOrNull()
-            val bn = b.toIntOrNull()
+            val an = a.takeIf { it.all(Char::isDigit) }?.toBigInteger()
+            val bn = b.takeIf { it.all(Char::isDigit) }?.toBigInteger()
             val order = when {
                 an != null && bn != null -> an.compareTo(bn)
                 an != null -> -1
@@ -55,18 +55,21 @@ internal class ReleaseVersion private constructor(
             if (text.length > 80) return null
             val match = PATTERN.matchEntire(text.trim()) ?: return null
             val (major, minor, patch, pre) = match.destructured
+            if (listOf(major, minor, patch).any { it.length > 1 && it.startsWith('0') }) return null
+            val parts = if (pre.isEmpty()) emptyList() else pre.split('.')
+            if (parts.any { it.all(Char::isDigit) && it.length > 1 && it.startsWith('0') }) return null
             return ReleaseVersion(
                 major.toInt(),
                 minor.toInt(),
                 patch.toInt(),
-                if (pre.isEmpty()) emptyList() else pre.split('.'),
+                parts,
             )
         }
     }
 }
 
 /**
- * The release number of a build: its base `versionCode` (docs/ARCHITECTURE.md "Distribution and releases": a split release APK has
+ * The release number of a build: its base `versionCode` (docs/dev/architecture.md "Distribution and releases": a split release APK has
  * `versionCode = base * 10 + ABI digit`, universal 0, armeabi-v7a 1, arm64-v8a 2). It is what the link
  * hello's build tag carries (PROTOCOL "Build tag in the link hello"), without the ABI digit.
  */

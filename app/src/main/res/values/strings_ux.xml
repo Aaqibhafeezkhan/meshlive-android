@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- User-perspective audit quick wins (2026-10-21): call end lines, Go live, missed calls, Recent accessibility. -->
+<resources>
+    <!-- Call end (CallEndText): what people read; the technical reason stays in the log. -->
+    <string name="call_end_ended">Call ended</string>
+    <string name="call_end_dropped">Call dropped: the connection was lost</string>
+    <string name="call_end_other_phone">The other phone ended the call</string>
+    <string name="call_end_incoming_failed">The incoming call couldn\'t connect</string>
+    <string name="call_end_messages_failed">Couldn\'t exchange messages. Try again.</string>
+    <string name="call_end_connect_failed">Couldn\'t connect the call. Try again.</string>
+    <string name="call_end_declined">Call declined</string>
+    <string name="call_end_cancelled">Call cancelled</string>
+    <string name="call_end_no_answer">No answer</string>
+    <string name="call_end_missed">Missed call</string>
+    <string name="call_end_caller_cancelled">The caller hung up</string>
+    <string name="call_end_busy">Busy: they\'re in another call. Try again in a moment.</string>
+    <string name="call_end_reachable">%1$s. You can get calls again.</string>
+    <string name="call_end_available">%1$s. You can make another call.</string>
+    <string name="call_cannot_accept_hot">Can\'t answer: your phone is too hot.</string>
+    <string name="call_status_ringing">Ringing…</string>
+    <string name="call_status_starting_video">Starting video and sound…</string>
+    <string name="call_status_starting_voice">Starting the voice call…</string>
+
+    <!-- Go live -->
+    <plurals name="live_end_confirm_title">
+        <item quantity="one">End live for %d viewer?</item>
+        <item quantity="other">End live for %d viewers?</item>
+    </plurals>
+    <string name="live_end_confirm_action">End live</string>
+    <string name="go_live_with_title">Go live</string>
+    <string name="go_live_without_title">Go live without a title</string>
+    <string name="video_live_disclosure_message">Your livestream is public. Anyone nearby with MeshLive can watch, and it can be passed on to people further away.</string>
+    <string name="video_live_disclosure_confirm">Go live</string>
+
+    <!-- Missed calls (MissedCallNotification) -->
+    <string name="missed_call_title">Missed call</string>
+    <string name="missed_call_from">Missed call from %1$s</string>
+    <plurals name="missed_calls_from">
+        <item quantity="one">%2$d missed call from %1$s</item>
+        <item quantity="other">%2$d missed calls from %1$s</item>
+    </plurals>
+    <plurals name="missed_calls">
+        <item quantity="one">%1$d missed call</item>
+        <item quantity="other">%1$d missed calls</item>
+    </plurals>
+    <string name="missed_call_back">Call back</string>
+    <string name="missed_call_channel">Missed calls</string>
+
+    <!-- Decline a one-time-ID caller -->
+    <string name="declined_offer_block_unknown">Declined. Block all unknown callers?</string>
+
+    <!-- Recent rows (TalkBack) -->
+    <string name="recent_row_description">%1$s, %2$s. Tap to call again. Touch and hold to block.</string>
+    <string name="recent_stranger_row_description">%1$s, %2$s. Not saved, so they can\'t be called back.</string>
+</resources>

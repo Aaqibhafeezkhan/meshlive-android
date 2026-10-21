@@ -8,6 +8,12 @@
         android:id="@+id/navCalls"
         android:icon="@drawable/ic_call"
         android:title="@string/nav_calls" />
+    <!-- Chats: present only with the Experimental messages switch on (MainActivity hides it otherwise). -->
+    <item
+        android:id="@+id/navChats"
+        android:icon="@drawable/ic_chat"
+        android:title="@string/nav_chats"
+        android:visible="false" />
     <item
         android:id="@+id/navContacts"
         android:icon="@drawable/ic_group"

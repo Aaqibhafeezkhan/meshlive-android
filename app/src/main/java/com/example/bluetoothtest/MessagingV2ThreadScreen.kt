@@ -207,6 +207,7 @@ internal class ThreadScreen(
     // ---- lifecycle -----------------------------------------------------------------------------------------------------------
 
     fun open(nodeIdHex: String) {
+        if (LocalReporting.hidden(context, nodeIdHex)) return
         val id = runCatching { NodeId.fromBytes(hexToBytes(nodeIdHex)) }.getOrNull() ?: return
         if (isOpen) saveDraft()
         peerHex = nodeIdHex
@@ -354,7 +355,7 @@ internal class ThreadScreen(
     }
 
     private fun updateActionIcon() {
-        val hasText = input.text?.isNotBlank() == true
+        val hasText = ComposerAction.forText(input.text) == ComposerAction.Action.SEND
         action.setImageResource(if (hasText) R.drawable.ic_send else R.drawable.ic_mic)
         action.contentDescription = text.get(if (hasText) "mv2_ui_send" else "mv2_ui_voice_hold")
     }
@@ -364,6 +365,7 @@ internal class ThreadScreen(
     private class Snapshot(val items: List<ThreadItem>, val link: ConversationLinkState, val nearby: Boolean, val firstUnread: String?)
 
     private fun refresh() {
+        if (LocalReporting.hidden(context, peerHex)) { close(); return }
         val id = peer ?: return
         if (!busy.compareAndSet(false, true)) return
         val prefixes = host.nearbyPrefixes()
@@ -810,6 +812,14 @@ internal class ThreadScreen(
             SettingsInfo.show(activity, text.get("mv2_ui_info_read_receipts"), text.get("mv2_ui_info_read_receipts_info"))
         }
         val entry = host.contactEntry(peerHex)
+        view.findViewById<View>(R.id.infoBlockRow).apply {
+            visibility = if (DebugTunables.localReporting && entry != null) View.VISIBLE else View.GONE
+            setOnClickListener { dialog.dismiss(); entry?.let { CallBlockingUi.confirmBlock(activity, IdentityFingerprint.fromHex(it.fingerprintHex), title) } }
+        }
+        view.findViewById<View>(R.id.infoReportRow).apply {
+            visibility = if (entry != null && DebugTunables.localReporting) View.VISIBLE else View.GONE
+            setOnClickListener { dialog.dismiss(); entry?.let { CallBlockingUi.report(activity, IdentityFingerprint.fromHex(it.fingerprintHex), onDone = ::close) } }
+        }
         view.findViewById<View>(R.id.infoContactRow).apply {
             visibility = if (entry != null) View.VISIBLE else View.GONE
             setOnClickListener { dialog.dismiss(); entry?.let(host::showContactActions) }

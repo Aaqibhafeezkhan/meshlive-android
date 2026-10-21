@@ -65,10 +65,16 @@ internal class UpdatesHome(
     fun onResume() {
         refreshNotice()
         val b = build ?: return
-        if (!Updater.backend.available || !UpdateRuntime.onlineCheckOffered(b) || !homeIdle()) return
-        val state = checkStore.load()
-        if (UpdatePrompt.shouldAsk(true, true, state.askedAtMs, DebugTunables.benchmarkLaunch, true)) {
-            Updater.backend.askOnce(activity) { yes ->
+        val action = UpdateResume.action(
+            updaterAvailable = Updater.backend.available,
+            onlineOffered = UpdateRuntime.onlineCheckOffered(b),
+            homeIdle = homeIdle(),
+            askedAtMs = checkStore.load().askedAtMs,
+            benchmarkLaunch = DebugTunables.benchmarkLaunch,
+            checkEnabled = FeatureCatalog.isEnabled(UpdateFeatures.checkForUpdates.id),
+        )
+        when (action) {
+            UpdateResumeAction.ASK -> Updater.backend.askOnce(activity) { yes ->
                 UpdateConsent.set(activity, prefs, yes)
                 FeatureCatalog.refresh(
                     DebugTunables.benchmarkLaunch,
@@ -77,21 +83,15 @@ internal class UpdatesHome(
                 )
                 apply()
             }
-            return
-        }
-        if (FeatureCatalog.isEnabled(UpdateFeatures.checkForUpdates.id)) {
-            Updater.backend.maybeCheckNow(activity) { activity.runOnUiThread { refreshNotice() } }
+            UpdateResumeAction.CHECK_NOW -> Updater.backend.maybeCheckNow(activity) { activity.runOnUiThread { refreshNotice() } }
+            UpdateResumeAction.NOTHING -> Unit
         }
     }
 
     /** A user choice in Settings > Features counts as the answer to the question. */
     fun onSettingChanged(spec: FeatureSpec) {
-        if (spec == UpdateFeatures.checkForUpdates) {
-            val yes = prefs.getBoolean(UpdateSettings.PREF_CHECK_FOR_UPDATES, false)
-            UpdateConsent.set(activity, prefs, yes)
-            // Turning the check off also forgets what it learned, so no "Update available" lingers.
-            if (!yes) prefs.edit().remove(UpdateCheckStore.LATEST).apply()
-        }
+        // Turning the check off also forgets what it learned, so no "Update available" lingers.
+        if (spec == UpdateFeatures.checkForUpdates) UpdateConsent.onSwitchChanged(activity, prefs)
         apply()
     }
 
@@ -149,7 +149,7 @@ internal class UpdatesHome(
         if (shown == null) {
             hideNotice()
         } else {
-            notice.text = activity.getString(R.string.update_nearby_notice, shown)
+            notice.text = activity.getString(R.string.update_nearby_notice) // no release number (audit 2026-10-21)
             notice.visibility = View.VISIBLE
             notice.setOnClickListener { Updater.backend.open(activity, shown) }
         }

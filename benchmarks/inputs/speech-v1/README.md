@@ -41,7 +41,7 @@ voices and sexes are in `speech-v1.provenance.json` (`variants.*.segments`).
 python -B tools/build_speech_reference.py verify --sources benchmarks/inputs/speech-v1/sources --build benchmarks/inputs/speech-v1
 # re-download the sources (streams the 347 MB archive once; run only to refresh provenance)
 python -B tools/build_speech_reference.py fetch --output benchmarks/inputs/speech-v1-sources-NEW
-# pair with a generator fixture manifest (fresh output directory), then bind per docs/TESTING.md
+# pair with a generator fixture manifest (fresh output directory), then bind per docs/dev/testing.md
 python -B tools/build_speech_reference.py attach --fixtures benchmarks/inputs/GENERATOR_OUTPUT/raw-fixtures.json --speech benchmarks/inputs/speech-v1 --output benchmarks/inputs/GENERATOR_OUTPUT-speech
 python -B tools/bind_benchmark_inputs.py --suite $benchmarkBundle --case EXACT_CAMERA2_CASE --fixtures benchmarks/inputs/GENERATOR_OUTPUT-speech/raw-fixtures.json --devices $benchmarkRegistry --output benchmarks/catalog/SPEECH_BOUND_NEW --with-reference-audio
 # score a finalized receiver trace pulled from a run

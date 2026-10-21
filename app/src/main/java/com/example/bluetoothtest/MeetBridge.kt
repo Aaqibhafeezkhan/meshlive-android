@@ -2,7 +2,7 @@ package com.example.bluetoothtest
 
 /**
  * The seam between the Add contact screen ([VerifyContactActivity]) and the call endpoint that MainActivity owns, for BVMID2
- * (Naming v2, `bvmid2`, off). The screen never touches Bluetooth: it asks the host to keep this phone call-ready while the
+ * (Naming v2, `bvmid2`, on by default). The screen never touches Bluetooth: it asks the host to keep this phone call-ready while the
  * screen is open (so a scanner can reach the code's role-0 ID), reads the ID currently on air to draw a code, and asks the
  * host to scan someone else's code. MainActivity registers the host in `onCreate` and clears it in `onDestroy`; with no host
  * (or the switch off, or rotating IDs off) [available] is false and the screen keeps the earlier BVMID1 flow.
@@ -39,7 +39,19 @@ internal object MeetBridge {
 
         fun scan(payload: Bvmid2Payload, listener: ScanListener)
 
+        /**
+         * Design QL: the user answered "Is this X's screen you scanned?" for [peer] (yes only after the shield was stored).
+         * The scanning session then starts or skips the presence-lease exchange.
+         */
+        fun scanConfirmed(peer: IdentityFingerprint, yes: Boolean)
+
         fun cancelScan()
+
+        /** Design QL revision 2, Call now: an ordinary Contacts call to [peer] (a new connection, never the verification link). */
+        fun callContact(peer: IdentityFingerprint) {}
+
+        /** F11: a live code is now on screen (the call listener should advertise at low latency while it lasts). */
+        fun codeShown() {}
     }
 
     @Volatile var host: Host? = null
@@ -50,4 +62,9 @@ internal object MeetBridge {
     /** Search window for the code's advert and the overall limit of one scan (every address is tried within it). */
     const val SEARCH_MS = QrScanPolicy.SEARCH_MS
     const val SCAN_LIMIT_MS = 30_000L
+
+    /** F11: the search window ([WeakPairReach]) and the overall limit, which leaves 20 s to connect after the search. */
+    fun searchMs(): Long = WeakPairReach.meetSearchMs(DebugTunables.weakPairReach)
+
+    fun scanLimitMs(): Long = maxOf(SCAN_LIMIT_MS, searchMs() + 20_000L)
 }

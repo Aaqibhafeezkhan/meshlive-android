@@ -3,14 +3,16 @@
      update screen (github flavour: UpdateActivity). Wording rule: say what contacts whom and what stays on the phone. -->
 <resources>
     <string name="feat_check_for_updates">Check for updates</string>
-    <string name="feat_check_for_updates_description">When online, ask GitHub once a day whether a newer MeshLive has been published. GitHub sees your IP address; nothing else about you is sent. Nothing is downloaded or installed until you tap.</string>
+    <string name="feat_check_for_updates_description">Checks GitHub once a day when you\'re online. GitHub receives your IP address and the update request. Updates download only when you choose.</string>
     <string name="feat_newer_versions_nearby">Tell me about newer versions nearby</string>
     <string name="feat_newer_versions_nearby_description">When two phones connect, each tells the other which MeshLive release it runs, in the signed greeting they already exchange (never in what a phone broadcasts). If a connected phone has a newer one you see a quiet note on the home screen; nothing is downloaded or installed. Turning this off also stops your phone from telling others its release.</string>
-    <string name="update_nearby_notice">Newer version nearby (release %1$d). Tap to see how to get it.</string>
+    <string name="update_nearby_notice">A friend nearby has a newer MeshLive. Tap to see how to get it.</string>
     <string name="update_available_notice">Update available: %1$s. Tap to review.</string>
     <string name="update_open_screen">Check now</string>
     <string name="update_ask_title">Check for updates when online?</string>
     <string name="update_ask_message">MeshLive can ask GitHub once a day, while you are online, whether a newer version has been published.\n\nGitHub then sees your phone\'s internet address and that it asked about MeshLive. Nothing else about you is sent.\n\nNothing is downloaded until you tap, and nothing is installed without your confirmation. You can change this any time in Settings.</string>
     <string name="update_ask_yes">Check for updates</string>
     <string name="update_ask_no">No thanks</string>
+    <string name="update_refused_sdk">This update needs a newer version of Android than this phone has.</string>
+    <string name="update_busy_media">Another update, call or live session is running. Wait for it to finish, then try again.</string>
 </resources>

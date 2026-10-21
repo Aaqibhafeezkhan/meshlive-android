@@ -28,7 +28,7 @@ import com.google.android.material.button.MaterialButton
  */
 class OnboardingActivity : AppCompatActivity() {
     /** The pages in order; Background only when Android may still stop the app in the background. */
-    private enum class Page { WELCOME, HOW, PERMISSIONS, BACKGROUND, READY }
+    private enum class Page { WELCOME, HOW, PERMISSIONS, FULL_SCREEN_CALLS, BACKGROUND, READY }
 
     private lateinit var pages: List<Page>
     private var index = 0
@@ -47,6 +47,7 @@ class OnboardingActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DebugTunables.playBatteryGuidance = intent.getBooleanExtra("test_play_battery_guidance", true)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_onboarding_flow)
         val root = findViewById<View>(R.id.onboardingRoot)
@@ -57,8 +58,9 @@ class OnboardingActivity : AppCompatActivity() {
         }
         pages = buildList {
             add(Page.WELCOME)
-            add(Page.HOW)
+            // Copy audit 2026-10-21: one idea per page; the welcome page says what the app does (HOW is kept, not shown).
             add(Page.PERMISSIONS)
+            if (FullScreenIntentAccess.showGuidance(Build.VERSION.SDK_INT, DebugTunables.fullScreenCallGuidance, FullScreenIntentAccess.canUse(this@OnboardingActivity))) add(Page.FULL_SCREEN_CALLS)
             if (BatteryExemptionPrompt.shouldOffer(this@OnboardingActivity, BatteryOfferTrigger.ONBOARDING)) add(Page.BACKGROUND)
             add(Page.READY)
         }
@@ -105,6 +107,9 @@ class OnboardingActivity : AppCompatActivity() {
                 val missing = permissions(this).filterNot(::granted)
                 if (missing.isNotEmpty() && !requested) permissionRequest.launch(missing.toTypedArray()) else next()
             }
+            Page.FULL_SCREEN_CALLS -> {
+                if (FullScreenIntentAccess.canUse(this)) next() else runCatching { FullScreenIntentAccess.openSettings(this) }
+            }
             Page.BACKGROUND -> {
                 if (!backgroundPromptLaunched && !BatteryExemptionPrompt.isExempt(this)) {
                     backgroundPromptLaunched = true
@@ -147,6 +152,7 @@ class OnboardingActivity : AppCompatActivity() {
                 hero(R.drawable.ic_stat_meshlive)
                 title(R.string.ob_welcome_title)
                 body(R.string.ob_welcome_text)
+                body(R.string.ob_welcome_mesh)
             }
             Page.HOW -> {
                 title(R.string.ob_how_title)
@@ -163,16 +169,21 @@ class OnboardingActivity : AppCompatActivity() {
                 } else {
                     permission(R.drawable.ic_bluetooth, R.string.ob_perm_location_title, R.string.ob_perm_location_text, Manifest.permission.ACCESS_FINE_LOCATION)
                 }
-                permission(R.drawable.ic_videocam, R.string.ob_perm_camera_title, R.string.ob_perm_camera_text, Manifest.permission.CAMERA)
+                if (!DebugTunables.callReadinessPermissions) permission(R.drawable.ic_videocam, R.string.ob_perm_camera_title, R.string.ob_perm_camera_text, Manifest.permission.CAMERA)
                 permission(R.drawable.ic_mic, R.string.ob_perm_mic_title, R.string.ob_perm_mic_text, Manifest.permission.RECORD_AUDIO)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     permission(R.drawable.ic_phone_in_talk, R.string.ob_perm_notif_title, R.string.ob_perm_notif_text, Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
+            Page.FULL_SCREEN_CALLS -> {
+                hero(R.drawable.ic_phone_in_talk)
+                title(R.string.ob_full_screen_title)
+                body(R.string.ob_full_screen_text)
+            }
             Page.BACKGROUND -> {
                 hero(R.drawable.ic_relay)
                 title(R.string.ob_bg_title)
-                body(R.string.ob_bg_text)
+                body(FlavourBattery.guidanceText(R.string.ob_bg_text))
                 if (backgroundPromptLaunched) {
                     body(if (BatteryExemptionPrompt.isExempt(this)) R.string.ob_bg_allowed else R.string.ob_bg_declined, primaryColour = true)
                 }
@@ -188,14 +199,17 @@ class OnboardingActivity : AppCompatActivity() {
         primary.setText(
             when (page) {
                 Page.PERMISSIONS -> if (missing.isNotEmpty() && !requested) R.string.ob_allow else R.string.ob_next
+                Page.FULL_SCREEN_CALLS -> if (FullScreenIntentAccess.canUse(this)) R.string.ob_next else R.string.ob_full_screen_settings
                 Page.BACKGROUND -> if (bgPending) R.string.ob_allow else R.string.ob_next
                 Page.READY -> R.string.ob_start
                 else -> R.string.ob_next
             },
         )
         val secondaryText = when (page) {
-            Page.WELCOME, Page.HOW -> R.string.ob_skip
+            Page.WELCOME -> 0
+            Page.HOW -> R.string.ob_skip
             Page.PERMISSIONS -> if (missing.isNotEmpty() && !requested) R.string.ob_not_now else 0
+            Page.FULL_SCREEN_CALLS -> R.string.ob_not_now
             Page.BACKGROUND -> if (bgPending) R.string.ob_not_now else 0
             Page.READY -> 0
         }
@@ -306,39 +320,21 @@ class OnboardingActivity : AppCompatActivity() {
     }
 
     companion object {
-        private const val PREF_ONBOARDING_DONE = "onboarding_done_v1"
         private const val STATE_PAGE = "onboarding_page"
         private const val STATE_REQUESTED = "onboarding_requested"
         private const val STATE_BG_LAUNCHED = "onboarding_bg_launched"
         /** UI-only preferences file; listed in EmergencyWipe.KNOWN_PREFERENCES. */
-        const val PREFERENCES = "bluetooth_video_ui"
+        const val PREFERENCES = OnboardingState.PREFERENCES
 
-        fun isDone(context: Context): Boolean = prefs(context).getBoolean(PREF_ONBOARDING_DONE, false)
+        fun isDone(context: Context): Boolean = OnboardingState.isDone(context)
 
-        fun markDone(context: Context) {
-            prefs(context).edit().putBoolean(PREF_ONBOARDING_DONE, true).apply()
-        }
+        fun markDone(context: Context) = OnboardingState.markDone(context)
 
         /** After an emergency wipe the app starts from onboarding again. */
-        fun reset(context: Context) {
-            prefs(context).edit().clear().commit()
-        }
-
-        private fun prefs(context: Context) =
-            context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        fun reset(context: Context) = OnboardingState.reset(context)
 
         /** Everything the app's features use; MainActivity still asks per feature as before. */
-        fun permissions(context: Context): List<String> = buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                add(Manifest.permission.BLUETOOTH_CONNECT)
-                add(Manifest.permission.BLUETOOTH_SCAN)
-                add(Manifest.permission.BLUETOOTH_ADVERTISE)
-            } else {
-                add(Manifest.permission.ACCESS_FINE_LOCATION)
-            }
-            add(Manifest.permission.CAMERA)
-            add(Manifest.permission.RECORD_AUDIO)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
-        }
+        @Suppress("UNUSED_PARAMETER")
+        fun permissions(context: Context): List<String> = RuntimePermissionPlan.onboarding(Build.VERSION.SDK_INT, DebugTunables.callReadinessPermissions)
     }
 }

@@ -33,7 +33,9 @@ class GattLinkPolicyTest {
             assertTrue(entry.id, entry.evidence.isNotEmpty())
             assertEquals("test_device_policy_off=${entry.id}", entry.offSwitch)
             assertEquals(entry.id, PolicyArea.BLUETOOTH_TRANSPORT, entry.area)
-            assertEquals(entry.id, "2026-10-14", entry.reviewed)
+            // A real review date, never in the future (entries are reviewed on different days).
+            val reviewed = java.time.LocalDate.parse(entry.reviewed)
+            assertTrue(entry.id, !reviewed.isBefore(java.time.LocalDate.of(2026, 1, 1)) && !reviewed.isAfter(java.time.LocalDate.now()))
             if (entry.proposed) assertTrue(entry.id, entry.effects.isEmpty()) else assertTrue(entry.id, entry.effects.isNotEmpty())
         }
     }
@@ -80,7 +82,12 @@ class GattLinkPolicyTest {
     @Test
     fun theOffSwitchTurnsEachActiveEntryOff() {
         for (entry in GattLinkPolicy.entries.filterNot { it.proposed }) {
-            val off = DeviceFamilyPolicy.resolve(traits(33), setOf(entry.id))
+            // A phone on which the entry applies (some entries match only the Android 10/11 stack).
+            val phone = listOf(traits(33), traits(30), traits(29)).firstOrNull {
+                DeviceFamilyPolicy.resolve(it, emptySet()).isActive(entry.id)
+            }
+            assertNotNull("${entry.id} applies to no test phone", phone)
+            val off = DeviceFamilyPolicy.resolve(phone!!, setOf(entry.id))
             assertFalse(entry.id, off.isActive(entry.id))
             assertTrue(entry.id, off.switchedOff.any { it.id == entry.id })
         }

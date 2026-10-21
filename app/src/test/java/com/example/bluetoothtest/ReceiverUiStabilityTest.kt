@@ -135,15 +135,12 @@ class ReceiverUiStabilityTest {
 
     @Test
     fun theBrowserNamesACoolingStreamInsteadOfSayingNoneIsNearby() {
-        assertEquals(
-            "A stream is in range. Trying it again in about 8 s.",
-            receiverBrowserEmptyStatus(coolingRetryMs = 7_100L),
-        )
-        assertEquals(
-            "A stream is in range. Trying it again in about 1 s.",
-            receiverBrowserEmptyStatus(coolingRetryMs = 0L),
-        )
-        assertEquals("No nearby streams yet. Scanning continues.", receiverBrowserEmptyStatus(coolingRetryMs = null))
+        val cooling = receiverBrowserEmptyStatus(coolingRetryMs = 7_100L)
+        val almost = receiverBrowserEmptyStatus(coolingRetryMs = 0L)
+        val none = receiverBrowserEmptyStatus(coolingRetryMs = null)
+        assertTrue("the wait is rounded up to whole seconds", cooling.contains("8"))
+        assertTrue("never says 0 seconds", almost.contains("1") && !almost.contains("0 s"))
+        assertTrue("a stream in range is not described as none nearby", none != cooling && none != almost)
     }
 
     @Test

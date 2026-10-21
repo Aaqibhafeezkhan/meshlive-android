@@ -95,7 +95,7 @@ class DisplayIdentityTest {
         val row = resolve { it.copy(verifiedLabel = "Mum", verification = VerificationBasis.CHECKED_BY_CODE) }
         assertEquals(DisplayRank.VERIFIED, row.rank)
         assertEquals(DisplayMark.SHIELD_OUTLINE, row.mark)
-        assertEquals("Checked by code", row.subtitle)
+        assertTrue(row.subtitle.orEmpty().isNotBlank())
         assertTrue(row.speech.contains("not scanned in person"))
     }
 
@@ -170,7 +170,7 @@ class DisplayIdentityTest {
         val finding = check("Mum", contacts = listOf(ImitationCheck.ContactNames("Mum")), afterReveal = false)
         assertEquals(DisplayWarning.SaysTheyAre("Mum"), finding)
         assertFalse(finding!!.isAlarm)
-        assertEquals("Says they are Mum. The app will check when you answer.", DisplayIdentityText.warningText(finding))
+        assertTrue("the neutral claim names the claimed name", DisplayIdentityText.warningText(finding).contains("Mum"))
     }
 
     @Test

@@ -1,11 +1,14 @@
-MeshLive connects nearby phones directly over encrypted Bluetooth, with no internet, SIM card, account or server. It is made for blackouts, disasters, censorship, remote places and crowded events.
+MeshLive lets you call, chat and livestream with people nearby, directly over encrypted Bluetooth. No internet, SIM card or account needed.
+
+Phones watching a livestream can pass it on when sharing is enabled, helping it reach beyond the broadcaster's Bluetooth range.
 
 <b>What you can do</b>
 <ul>
 <li>Call people nearby: voice or video, end-to-end encrypted from phone to phone.</li>
-<li>Go live: share your camera with everyone around you, or go audio only, like a local radio that keeps playing with the screen off.</li>
-<li>Reach further: phones in between pass calls and streams along, beyond your own Bluetooth range (about 10 to 30 metres per phone).</li>
-<li>Stay private: your broadcast ID is random and changes every 15 minutes; strangers see a random name; your name, if you set one, is never broadcast.</li>
+<li>Livestream: share your camera with everyone around you, or go audio only, like a local radio that keeps playing with the screen off.</li>
+<li>Reach further: phones in between pass livestreams along, beyond your own Bluetooth range. Passing calls along is in beta.</li>
+<li>Chat: send messages, photos and voice notes to your contacts; they are delivered when your phones are near each other.</li>
+<li>Choose who sees your name. Nearby phones normally see a generated name and a temporary ID. Livestreams are public.</li>
 <li>No tracking, no ads, no analytics.</li>
 </ul>
 
@@ -13,7 +16,7 @@ MeshLive connects nearby phones directly over encrypted Bluetooth, with no inter
 Nearby devices (to find and connect to phones), Camera and Microphone (for calls and going live), Notifications and foreground services (so calls ring and streams keep going with the screen off). An optional "Share app nearby" screen uses a local Wi-Fi Direct link, which is why the internet and Wi-Fi state permissions are declared; the app never contacts the internet for calls or streams.
 
 <b>Status</b>
-Beta. Quality and range depend on the phones and their Bluetooth, and some phone pairs still struggle; the project tracks them openly. Please do not rely on it where your safety depends on it.
+MeshLive is in beta. Call quality and range vary by phone and surroundings, and connections may drop. It isn't a replacement for emergency calling.
 
 <b>Licence</b>
 Free software, GNU GPL version 3 or later.

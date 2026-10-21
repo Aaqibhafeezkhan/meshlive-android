@@ -130,7 +130,7 @@ internal const val ACTIVE_CALL_STATUS = "Encrypted private call"
 internal const val PREF_PANIC_GESTURE = "panic_wipe_gesture"
 
 /** What the user types to confirm an emergency wipe from Settings (EmergencyWipe.CONFIRMATION_TEXT). */
-internal const val WIPE_CONFIRMATION_TEXT = "WIPE"
+internal const val WIPE_CONFIRMATION_TEXT = "DELETE"
 
 /** "Help relay" default (design decision): on for normal use, off for benchmark launches. */
 internal fun relayDefaultOn(benchmarkLaunch: Boolean): Boolean = !benchmarkLaunch

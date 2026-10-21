@@ -1,6 +1,5 @@
 package com.example.bluetoothtest
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
@@ -63,7 +62,7 @@ class OfflineAppShareActivity : AppCompatActivity() {
     private var manager: WifiP2pManager? = null
     private var channel: WifiP2pManager.Channel? = null
     private var server: OfflineAppShareServer? = null
-    private var groupCreated = false
+    private val groupLifecycle = NearbyGroupLifecycle()
     private var stopped = false
     private var sharingSinceMs = 0L
     private var attempts: List<GroupBandAttempt> = emptyList()
@@ -78,8 +77,8 @@ class OfflineAppShareActivity : AppCompatActivity() {
 
     private val permissionRequest = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { results ->
-        if (results.values.all { it }) checkAndStart() else showStopped(getString(R.string.share_nearby_permission_denied))
+    ) { _ ->
+        if (requiredPermissions().all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) checkAndStart() else showStopped(getString(R.string.share_nearby_permission_denied))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -120,12 +119,7 @@ class OfflineAppShareActivity : AppCompatActivity() {
 
     // --- Preconditions -----------------------------------------------------------------------------
 
-    private fun requiredPermissions(): List<String> =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            listOf(Manifest.permission.NEARBY_WIFI_DEVICES)
-        } else {
-            listOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
+    private fun requiredPermissions(): List<String> = OfflineAppSharePolicy.permissionsFor(Build.VERSION.SDK_INT)
 
     private fun checkAndStart() {
         if (stopped) return
@@ -170,6 +164,14 @@ class OfflineAppShareActivity : AppCompatActivity() {
             }
         }
         statusText.setText(R.string.share_nearby_checking)
+        val setupDeadline = SystemClock.elapsedRealtime() + 60_000L
+        fun watchSetup() {
+            if (stopped || server != null) return
+            if (OfflineAppShareGate.liveSessionActive()) stopSharing("live_session", OfflineAppSharePolicy.BUSY_MESSAGE)
+            else if (SystemClock.elapsedRealtime() >= setupDeadline) stopSharing("setup_timeout", getString(R.string.share_nearby_no_group))
+            else handler.postDelayed({ watchSetup() }, OfflineAppSharePolicy.BUSY_CHECK_INTERVAL_MS)
+        }
+        watchSetup()
         val context = applicationContext
         worker.execute {
             val info = runCatching { AppShare.apkInfo(context) }.getOrNull()
@@ -197,42 +199,54 @@ class OfflineAppShareActivity : AppCompatActivity() {
             return
         }
         manager = p2p
-        channel = p2p.initialize(this, mainLooper) {
-            if (!stopped) stopSharing("channel_lost", getString(R.string.share_nearby_channel_lost))
+        channel = runCatching {
+            p2p.initialize(this, mainLooper) {
+                if (!stopped) stopSharing("channel_lost", getString(R.string.share_nearby_channel_lost))
+            }
+        }.getOrNull()
+        if (channel == null) {
+            stopSharing("channel_failed", getString(R.string.share_nearby_channel_lost))
+            return
         }
         attempts = OfflineAppSharePolicy.bandAttempts(supports5Ghz)
         attemptIndex = 0
         busyRetries = 0
         statusText.setText(R.string.share_nearby_starting)
         log("starting | supports5ghz=$supports5Ghz | attempts=${attempts.joinToString(",") { it.name.lowercase() }}")
-        // A group left by an earlier run (or another app) makes createGroup fail with BUSY; clear it.
+        // An existing group may belong to another app. Never tear it down to make room.
         val ch = channel ?: return
         try {
-            p2p.removeGroup(ch, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() = createGroup()
-                override fun onFailure(reason: Int) = createGroup()
-            })
+            p2p.requestGroupInfo(ch) { group ->
+                if (stopped) return@requestGroupInfo
+                if (group != null) stopSharing("existing_group", "Wi-Fi Direct is already in use. Stop the existing sharing session, then try again.")
+                else createGroup()
+            }
         } catch (error: SecurityException) {
-            showStopped(getString(R.string.share_nearby_permission_denied))
+            stopSharing("security", getString(R.string.share_nearby_permission_denied))
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun createGroup() {
         if (stopped) return
+        if (OfflineAppShareGate.liveSessionActive()) {
+            stopSharing("live_session", OfflineAppSharePolicy.BUSY_MESSAGE)
+            return
+        }
         val p2p = manager ?: return
         val ch = channel ?: return
         val attempt = attempts[attemptIndex]
         val listener = object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
+                cleanGroup(groupLifecycle.created(), p2p, ch)
                 if (stopped) return
-                groupCreated = true
                 log("group_created | attempt=${attempt.name.lowercase()}")
                 groupInfoTries = 0
                 handler.postDelayed({ readGroupInfo() }, 300L)
             }
 
             override fun onFailure(reason: Int) {
+                cleanGroup(groupLifecycle.failed(), p2p, ch)
                 if (stopped) return
                 log("group_failed | attempt=${attempt.name.lowercase()} | reason=$reason")
                 when (val step = OfflineAppSharePolicy.onCreateGroupFailure(reason, attemptIndex, attempts.size, busyRetries)) {
@@ -249,6 +263,7 @@ class OfflineAppShareActivity : AppCompatActivity() {
                 }
             }
         }
+        groupLifecycle.creating()
         try {
             when (attempt) {
                 GroupBandAttempt.LEGACY -> p2p.createGroup(ch, listener)
@@ -268,9 +283,12 @@ class OfflineAppShareActivity : AppCompatActivity() {
                 }
             }
         } catch (error: SecurityException) {
+            cleanGroup(groupLifecycle.failed(), p2p, ch)
             stopSharing("security", getString(R.string.share_nearby_permission_denied))
         } catch (error: IllegalArgumentException) {
             // A builder rejection (name/passphrase/band) moves on to the next attempt.
+            listener.onFailure(OfflineAppSharePolicy.P2P_ERROR)
+        } catch (error: UnsupportedOperationException) {
             listener.onFailure(OfflineAppSharePolicy.P2P_ERROR)
         }
     }
@@ -446,22 +464,38 @@ class OfflineAppShareActivity : AppCompatActivity() {
         server = null
         val p2p = manager
         val ch = channel
-        if (p2p != null && ch != null) {
-            runCatching {
-                if (groupCreated) {
-                    p2p.removeGroup(ch, object : WifiP2pManager.ActionListener {
-                        override fun onSuccess() { runCatching { ch.close() } }
-                        override fun onFailure(reason: Int) { runCatching { ch.close() } }
-                    })
-                } else {
-                    ch.close()
-                }
-            }
-        }
+        val cleanup = groupLifecycle.stop()
+        if (p2p != null && ch != null) cleanGroup(cleanup, p2p, ch)
         manager = null
         channel = null
         log("stopped | reason=$reason | apk_requests=$downloads")
         if (message != null && !isDestroyed) showStopped(message)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun cleanGroup(cleanup: NearbyGroupLifecycle.Cleanup, p2p: WifiP2pManager, ch: WifiP2pManager.Channel) {
+        when (cleanup) {
+            NearbyGroupLifecycle.Cleanup.NONE -> Unit
+            NearbyGroupLifecycle.Cleanup.CLOSE_CHANNEL -> runCatching { ch.close() }
+            NearbyGroupLifecycle.Cleanup.REMOVE_GROUP -> runCatching {
+                p2p.removeGroup(ch, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() { runCatching { ch.close() } }
+                    override fun onFailure(reason: Int) {
+                        log("group_remove_failed | reason=$reason")
+                        runCatching { ch.close() }
+                        if (!isDestroyed && !isFinishing) {
+                            showStopped("Sharing stopped, but Android could not confirm Wi-Fi Direct closed. Check Wi-Fi Settings.")
+                        }
+                    }
+                })
+            }.onFailure {
+                log("group_remove_failed | error=${it.javaClass.simpleName}")
+                runCatching { ch.close() }
+                if (!isDestroyed && !isFinishing) {
+                    showStopped("Sharing stopped, but Android could not confirm Wi-Fi Direct closed. Check Wi-Fi Settings.")
+                }
+            }
+        }
     }
 
     private fun showStopped(message: String) {
@@ -523,6 +557,7 @@ class OfflineAppShareActivity : AppCompatActivity() {
 
         /** Toast shown by the caller when the feature is off or a live session runs. */
         fun startOrExplain(context: Context) {
+            if (!OfflineAppShareFeature.availableInThisBuild) return
             if (OfflineAppShareGate.liveSessionActive()) {
                 Toast.makeText(context, OfflineAppSharePolicy.BUSY_MESSAGE, Toast.LENGTH_LONG).show()
                 return

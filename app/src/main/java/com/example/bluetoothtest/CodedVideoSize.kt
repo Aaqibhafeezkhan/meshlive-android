@@ -2,7 +2,7 @@ package com.example.bluetoothtest
 
 /**
  * The coded picture size a keyframe carries, read from the compressed bitstream itself so no wire change
- * is needed (docs/PROTOCOL.md "Mid-stream size changes"):
+ * is needed (docs/dev/protocol/README.md "Mid-stream size changes"):
  *
  * - VP9: every keyframe's uncompressed header has frame_width/height_minus_1.
  * - AV1: the sequence header OBU (max_frame_width/height_minus_1), in the keyframe's temporal unit or,

@@ -423,6 +423,39 @@ class Bmh3PseudonymTest {
 
     private val entry = OpeningEntry(ByteArray(6) { (it + 1).toByte() }, 1_990_656L, RotatingDiscoveryIds.ROLE_CALL_OFFER, ByteArray(32) { 3 })
 
+    /**
+     * Phone bug 2026-10-19 (userflow-a58be974, S24 log 19:26:52): in a Nearby call between mutual contacts, a pseudonym call,
+     * the receiver judged the peer's PRESENCE_LEASE against the throwaway key and rejected it ("peer is not a verified
+     * contact"). The lease is judged against the revealed person: stored after the reveal, rejected before it.
+     */
+    @Test
+    fun aRevealedVerifiedContactsLeaseIsStoredAndAnUnrevealedOnesIsRejected() {
+        val realI = newIdentity()
+        val realR = newIdentity()
+        val s = strangerCall(realI, realR)
+        val contactR = IdentityFingerprint.fromPublicKey(realR.publicKeyEncoded)
+        // The caller's store: realR is a verified contact; the throwaway is nobody.
+        val store: (NodeId, IdentityFingerprint) -> VerificationState? = { node, fingerprint ->
+            if (node == realR.nodeId && fingerprint == contactR) VerificationState.VERIFIED else VerificationState.UNVERIFIED
+        }
+        val lease = DiscoveryExchange.PresenceLease(1, 1_990_656L, 2962, listOf(ByteArray(32) { 1 }, ByteArray(32) { 2 }))
+        // Before the reveal: the peer is a throwaway, never a contact, so its lease is rejected.
+        assertFalse(s.caller.peerVerifiedIn(store))
+        val early = PresenceSession(localEligible = true)
+        early.start()
+        early.onRecord(DiscoveryExchange.RecognitionOffer, s.caller.peerVerifiedIn(store))
+        assertTrue(early.onRecord(lease, s.caller.peerVerifiedIn(store)).single() is PresenceSession.Action.Reject)
+        // The callee reveals realR: the same call now judges the lease against realR and stores it.
+        val calleeRecord = DiscoveryExchange.decode(requireNotNull(s.callee.reveal).sendOwn(realR, listOf(entry))) as DiscoveryExchange.IdentityReveal
+        requireNotNull(s.caller.reveal).onPeerReveal(calleeRecord)
+        assertTrue(s.caller.peerVerifiedIn(store))
+        assertFalse("the throwaway itself is still nobody", store(s.caller.peerNodeId, s.caller.peerFingerprint) == VerificationState.VERIFIED)
+        val session = PresenceSession(localEligible = true)
+        session.start()
+        session.onRecord(DiscoveryExchange.RecognitionOffer, s.caller.peerVerifiedIn(store))
+        assertTrue(session.onRecord(lease, s.caller.peerVerifiedIn(store)).single() is PresenceSession.Action.StoreLease)
+    }
+
     @Test
     fun theRealIdentityAppearsOnlyAfterTheCalleeRevealedAndTheCallerVerifiedIt() {
         val realI = newIdentity()

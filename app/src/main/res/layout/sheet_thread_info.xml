@@ -108,6 +108,24 @@
                 app:tint="@color/text_secondary" />
         </LinearLayout>
 
+        <TextView
+            android:id="@+id/infoBlockRow"
+            style="@style/Widget.App.RowTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:gravity="center_vertical"
+            android:text="@string/block_action" />
+
+        <TextView
+            android:id="@+id/infoReportRow"
+            style="@style/Widget.App.RowTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:gravity="center_vertical"
+            android:text="@string/report_action" />
+
         <LinearLayout
             android:id="@+id/infoDeleteRow"
             style="@style/Widget.App.Row">

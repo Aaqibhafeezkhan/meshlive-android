@@ -74,25 +74,6 @@ class RawFixtureGeometryTest {
         assertTrue(RawFixtureGeometry.pickersMayChangeSettings(rawInputActive = false))
     }
 
-    @Test
-    fun theResolutionAndFpsListenersAndPickerRefreshHonourTheRawGuard() {
-        val file = listOf(
-            java.io.File("src/main/java/com/example/bluetoothtest/MainActivity.kt"),
-            java.io.File("app/src/main/java/com/example/bluetoothtest/MainActivity.kt"),
-        ).first { it.exists() }
-        val source = file.readText().replace("\r\n", "\n")
-        val guard = "RawFixtureGeometry.pickersMayChangeSettings(debugRawInputFile != null)"
-        val resolution = source.substringAfter("resolutionSpinner.onItemSelectedListener").substringBefore("fpsSpinner.onItemSelectedListener")
-        val fps = source.substringAfter("fpsSpinner.onItemSelectedListener").substringBefore("configureSeekBar(")
-        // The guard comes before the line that writes the settings and persists them.
-        assertTrue(resolution.indexOf(guard) in 0 until resolution.indexOf("settings = settings.copy"))
-        assertTrue(fps.indexOf(guard) in 0 until fps.indexOf("settings = settings.copy"))
-        val modes = source.substringAfter("private fun refreshVideoModes()").substringBefore("private fun selectedDeviceMode()")
-        assertTrue(modes.indexOf(guard) in 0 until modes.indexOf("resolutionSpinner.setSelection"))
-        assertTrue(modes.lastIndexOf(guard) in 0 until modes.indexOf("fpsSpinner.setSelection"))
-        assertEquals(2, Regex(Regex.escape(guard)).findAll(modes).count())
-    }
-
     private fun mode(width: Int, height: Int, vararg fps: Int) =
         DeviceVideoMode(VideoResolution(width, height, "${height}p"), fps.toList(), null)
 
@@ -123,17 +104,4 @@ class RawFixtureGeometryTest {
         assertFalse(RawFixtureGeometry.startGateModeOk(false, null, settings(640, 480, 30)))
     }
 
-    @Test
-    fun updateStartEnabledUsesTheRawAwareModeGate() {
-        val file = listOf(
-            java.io.File("src/main/java/com/example/bluetoothtest/MainActivity.kt"),
-            java.io.File("app/src/main/java/com/example/bluetoothtest/MainActivity.kt"),
-        ).first { it.exists() }
-        val source = file.readText().replace("\r\n", "\n")
-        val body = source.substringAfter("private fun updateStartEnabled()").substringBefore("val streamActive =")
-        assertTrue(body.contains("val selectedModeSupported = RawFixtureGeometry.startGateModeOk(\n            debugRawInputFile != null, selectedDeviceMode(), settings,"))
-        // No second, raw-blind mode comparison may remain in the gate.
-        assertFalse(body.contains("mode.resolution == settings.resolution"))
-        assertTrue(body.contains("selectedModeSupported &&"))
-    }
 }

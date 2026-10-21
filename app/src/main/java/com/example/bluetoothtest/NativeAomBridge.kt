@@ -37,9 +37,22 @@ data class NativeAomTuning(
 }
 
 internal object NativeAomBridge {
-    init {
+    /**
+     * Why the native library did not load, or null when it did. 2026-10-21 Android 16 / HyperOS desk check, risk #2: an
+     * unguarded load in this initializer turned a load failure into ExceptionInInitializerError, then NoClassDefFoundError
+     * on every later use, including the YUV copy that hardware encoders also use. Now a failed load only removes the
+     * libaom encoder ([versionOrNull] is null, so the hardware codecs are offered) and the copies use the Kotlin path.
+     */
+    val loadError: Throwable? = try {
         System.loadLibrary("bluetooth_video_native")
+        null
+    } catch (error: UnsatisfiedLinkError) {
+        error
+    } catch (error: SecurityException) {
+        error
     }
+
+    val available: Boolean get() = loadError == null
 
     external fun nativeVersion(): String
 
@@ -115,7 +128,7 @@ internal object NativeAomBridge {
 
     external fun nativeClose(handle: Long)
 
-    fun versionOrNull(): String? = runCatching(::nativeVersion).getOrNull()
+    fun versionOrNull(): String? = if (!available) null else runCatching(::nativeVersion).getOrNull()
 }
 
 /**

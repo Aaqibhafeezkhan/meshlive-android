@@ -323,6 +323,6 @@ internal object CallBlocking {
         hideBlockedStreams(
             peers,
             BleL2capPeer::announcement,
-            BlockedPeople.cachedPrefixes(context),
+            BlockedPeople.cachedPrefixes(context) + LocalReporting.prefixes(context),
         ) { RotatingDiscovery.recognize(it).singleOrNull()?.contact?.toString()?.take(12) }
 }

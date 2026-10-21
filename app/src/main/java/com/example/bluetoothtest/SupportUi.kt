@@ -60,7 +60,7 @@ internal fun bluetoothStackHealthIssues(context: Context): List<ReliabilityCardI
 
 /**
  * The battery-optimisation card entry, shared with whatever maps BackgroundReliability.status later. Its button opens the
- * system's one-tap exemption prompt (user decision Q38: offered again from Settings), falling back to the battery list
+ * system's one-tap exemption prompt (design decision Q38: offered again from Settings), falling back to the battery list
  * screen on phones whose maker removed the prompt. Null when the app is already exempt.
  */
 internal fun batteryExemptionIssue(context: Context): ReliabilityCardIssue? {
@@ -68,13 +68,13 @@ internal fun batteryExemptionIssue(context: Context): ReliabilityCardIssue? {
     if (power.isIgnoringBatteryOptimizations(context.packageName)) return null
     return ReliabilityCardIssue(
         title = context.getString(R.string.reliability_battery_title),
-        guidance = context.getString(R.string.reliability_battery_text),
+        guidance = context.getString(FlavourBattery.guidanceText(R.string.reliability_battery_text)),
         settingsIntent = BatteryExemptionPrompt.intent(context),
     )
 }
 
 /**
- * Adapter for "Export diagnostics". The field contract (docs/ARCHITECTURE.md "Diagnostics block") is owned by the
+ * Adapter for "Export diagnostics". The field contract (docs/dev/architecture.md "Diagnostics block") is owned by the
  * release work; wire its builder in [CoreDiagnosticsUi]. The fallback lists only non-identifying
  * facts: no media, messages, contact names, node IDs or keys.
  */
@@ -87,10 +87,13 @@ internal object DiagnosticsUiBackend {
 }
 
 internal object CoreDiagnosticsUi : DiagnosticsUi {
+    /** The first line of the exported block (and of the shared text): the app's current name. */
+    const val TITLE = "MeshLive diagnostics"
+
     override fun build(context: Context): String = buildString {
-        // TODO(root): replace with the release patch's diagnostics builder (device_policy rules,
+        // TODO: replace with the release patch's diagnostics builder (device_policy rules,
         // recent connection outcomes and codec choices).
-        appendLine("Bluetooth Video diagnostics")
+        appendLine(TITLE)
         appendLine("app_version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}, ${BuildConfig.BUILD_TYPE})")
         appendLine("signing_sha256: ${signingFingerprint(context) ?: "unknown"}")
         appendLine("device: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
@@ -100,7 +103,8 @@ internal object CoreDiagnosticsUi : DiagnosticsUi {
             appendLine("soc: ${Build.HARDWARE}")
         }
         appendLine("android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-        val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
+        // A Bluetooth service that is missing or throws (a restart in progress, a SecurityException) must not cost the report.
+        val adapter = runCatching { context.getSystemService(BluetoothManager::class.java)?.adapter }.getOrNull()
         if (adapter == null) {
             appendLine("bluetooth: none")
         } else runCatching {
@@ -113,6 +117,15 @@ internal object CoreDiagnosticsUi : DiagnosticsUi {
         }.onFailure { appendLine("bluetooth_capabilities: unavailable (${it.javaClass.simpleName})") }
         appendLine("device_policy: (not included in this build)")
         appendLine("recent_connections: (not included in this build)")
+        // The newest crash report of the last 7 days (CrashReports): already scrubbed when it was written.
+        val crash = runCatching { CrashReports.latest(CrashReports.dir(context)) }.getOrNull()
+        if (crash != null) {
+            appendLine()
+            appendLine("last_crash:")
+            append(crash)
+        } else {
+            appendLine("last_crash: none")
+        }
     }
 
     private fun signingFingerprint(context: Context): String? = runCatching {
@@ -140,9 +153,9 @@ internal object DistributionUiBackend {
 }
 
 internal object CoreDistributionUi : DistributionUi {
-    override val shareAvailable: Boolean = false // TODO(root): true once AppShare is merged
-    override fun shareApk(activity: android.app.Activity) = Unit // TODO(root): AppShare.shareApk(activity)
-    override fun apkInfo(context: Context): String? = null // TODO(root): AppShare.apkInfo()
+    override val shareAvailable: Boolean = false // TODO: true once AppShare is merged
+    override fun shareApk(activity: android.app.Activity) = Unit // TODO: AppShare.shareApk(activity)
+    override fun apkInfo(context: Context): String? = null // TODO: AppShare.apkInfo()
     override fun deepSleepBanner(context: Context): String? = runCatching { DozeWatchdog.message() }.getOrNull()
 }
 

@@ -27,10 +27,5 @@ object WifiCoexistence {
     fun sharesBluetoothBand(): Boolean = wifiSharesBluetoothBand(connectedFrequencyMhz())
 
     /** Plain-language advice when Wi-Fi is slowing Bluetooth, or null. */
-    fun advice(): String? = if (sharesBluetoothBand()) {
-        "Wi-Fi is on 2.4 GHz and shares the radio with Bluetooth, roughly halving Bluetooth speed. " +
-            "Switch Wi-Fi to a 5 GHz network or turn it off for smoother, sharper video."
-    } else {
-        null
-    }
+    fun advice(): String? = if (sharesBluetoothBand()) appContext?.getString(R.string.wifi_advice) else null
 }

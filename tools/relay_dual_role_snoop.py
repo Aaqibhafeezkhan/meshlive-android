@@ -22,7 +22,7 @@ link's longest completed-packet gap while the child lived (parent_max_ncp_gap_s,
 the question there is whether a bad child phase starves the PARENT link.
 
 usage: python -B tools/relay_dual_role_snoop.py LOG [LOG ...] [--json OUT] [--gap-ms 3.3] [--swapped]
-Evidence: docs/DECISIONS.md "Relay dual-role scheduling (2026-10-11)"."""
+Evidence: docs/dev/decisions/README.md "Relay dual-role scheduling (2026-10-11)"."""
 import argparse
 import datetime as dt
 import json

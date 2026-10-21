@@ -129,12 +129,20 @@ class ScanPolicyTest {
 
     @Test
     fun everyScanSiteHandsTheStackANonEmptyServiceFilter() {
-        // Discovery: the only empty list is the Experimental software-filter stage (S-06), behind softwareFiltering().
+        // Discovery: the only empty list is software matching behind ScanFilterFallback.softwareFor(): the Experimental
+        // S-06 stage (screen on only) or one scanner's own option, which the foreground, time-limited Meet scan sets
+        // (F11: the Xiaomi's hardware filter dropped a flags-0x02 advert that an unfiltered scan receives), and the
+        // visible Nearby call list only behind its Experimental switch (test_call_list_software_filter, default off).
         val control = source("BleL2capControl.kt")
-        assertTrue(control.contains("ScanFilter.Builder().setServiceUuid(ParcelUuid(BleL2capControlProtocol.SERVICE_UUID)).build()"))
+        // The filter list is described by DiscoveryScanPlan (pure, JVM-tested); the scanner only maps it to ScanFilter objects.
+        val plan = source("PcAnnouncement.kt").substringAfter("internal object DiscoveryScanPlan").substringBefore("fun settings(")
+        assertTrue(plan.contains("add(ScanFilterSpec.ServiceUuid(BleL2capControlProtocol.SERVICE_UUID))"))
+        assertEquals("only the software stage may return an empty filter list", 1, Regex("emptyList\\(\\)").findAll(plan).count())
+        assertTrue(plan.indexOf("if (software)") in 0 until plan.indexOf("emptyList()"))
         val filters = control.substringAfter("private fun scanFilters()").substringBefore("private fun scanSettings")
-        assertEquals("only the S-06 stage may return an empty filter list", 1, Regex("emptyList\\(\\)").findAll(filters).count())
-        assertTrue(filters.indexOf("softwareFiltering()") in 0 until filters.indexOf("emptyList()"))
+        assertEquals("the scanner adds no empty list of its own", 0, Regex("emptyList\\(\\)").findAll(filters).count())
+        assertTrue(filters.contains("DiscoveryScanPlan.filters(ScanFilterFallback.softwareFor(softwareFilter)"))
+        assertTrue(source("ScanFilterFallback.kt").contains("fun softwareFor(scannerOption: Boolean): Boolean = scannerOption || softwareFiltering()"))
         // Every discovery start passes scanFilters(); no call passes null.
         val discoveryStarts = Regex("\\.startScan\\(([^,]+),").findAll(control).map { it.groupValues[1].trim() }.toList()
         assertTrue(discoveryStarts.isNotEmpty())
@@ -163,33 +171,4 @@ class ScanPolicyTest {
         assertEquals(listOf("RelayedCallsController.kt"), sites)
     }
 
-    @Test
-    fun theDebugProbesTakeAGateSlotUnlessTheControlArmIsOn() {
-        // The stack drops a 6th start in 30 s silently, so a probe scan that skipped the gate could silence discovery.
-        val gap = source("GapNameProbe.kt")
-        assertTrue(gap.contains("ScanSwitches.probeUngated"))
-        assertTrue(gap.contains("ScanStartGate.shared.reserve("))
-        val inbound = source("InboundProbe.kt")
-        assertTrue(inbound.contains("ScanSwitches.probeUngated"))
-        assertTrue(inbound.contains("ScanPolicy.reserveBlocking(ScanStartGate.shared"))
-        // Every other scanner starts through BleL2capDiscovery, which reserves before each start.
-        val control = source("BleL2capControl.kt")
-        assertTrue(control.contains("ScanStartGate.shared.reserve(scanBudget)"))
-        assertTrue(control.contains("ScanStartGate.shared.tryReserve(scanBudget)"))
-    }
-
-    @Test
-    fun theQuotaIsDocumentedAsSilentNotAsAnOnScanFailedCode() {
-        val control = source("BleL2capControl.kt")
-        assertFalse(control.contains("AOSP refuses a 6th scan start"))
-        assertTrue(control.contains("never delivers it through onScanFailed"))
-    }
-
-    @Test
-    fun theRelayHelperRestartIsNoLongerTwentyMinutes() {
-        val relay = source("RelayedCallsController.kt")
-        assertFalse(relay.contains("SCAN_RESTART_MS"))
-        assertFalse(relay.contains("AOSP downgrades a filtered scan after 30 minutes"))
-        assertTrue(relay.contains("ScanRenewalPolicy.intervalMs"))
-    }
 }

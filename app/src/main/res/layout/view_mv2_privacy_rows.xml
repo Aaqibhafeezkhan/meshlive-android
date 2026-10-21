@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Settings > Privacy rows of Messaging v2 (phase 1c, shown only with the feature on): Read receipts, Download files automatically.
-     The label says what it does; the longer explanation is behind the (i) button. -->
+     Same pattern as the generated feature rows (cosmetics pass 2026-10-21): the label opens the explanation (small info
+     mark after the text), the control sits at the right edge, 56 dp rows, a divider between the two rows. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/mv2PrivacyRows"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:divider="@drawable/settings_divider"
     android:orientation="vertical"
+    android:showDividers="middle"
     android:visibility="gone">
 
     <LinearLayout
@@ -15,40 +18,51 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <com.google.android.material.materialswitch.MaterialSwitch
-            android:id="@+id/mv2PrivacyReceipts"
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:minHeight="64dp"
-            android:text="@string/mv2_ui_settings_read_receipts" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <ImageButton
-            android:id="@+id/mv2PrivacyReceiptsInfo"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/info_more"
-            android:padding="10dp"
-            android:src="@drawable/ic_info"
-            app:tint="@color/text_secondary" />
+            <com.example.bluetoothtest.InfoLabelView
+                android:id="@+id/mv2PrivacyReceiptsInfo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:gravity="center_vertical"
+                android:minHeight="56dp"
+                android:text="@string/mv2_ui_settings_read_receipts"
+                android:textAppearance="@style/TextAppearance.App.RowLabel"
+                android:paddingTop="16dp"
+                android:paddingBottom="16dp"/>
+        </LinearLayout>
+
+        <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/mv2PrivacyReceipts"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/mv2_ui_settings_read_receipts"
+            android:minHeight="56dp" />
     </LinearLayout>
 
     <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
+        android:id="@+id/mv2PrivacyAutoRow"
+        style="@style/Widget.App.Row">
 
-        <LinearLayout
-            android:id="@+id/mv2PrivacyAutoRow"
-            style="@style/Widget.App.Row"
+        <com.example.bluetoothtest.TitleValueLayout
             android:layout_width="0dp"
+            android:layout_height="wrap_content"
             android:layout_weight="1">
 
-            <TextView
-                style="@style/Widget.App.RowTitle"
-                android:text="@string/mv2_ui_settings_autodl" />
+            <com.example.bluetoothtest.InfoLabelView
+                android:id="@+id/mv2PrivacyAutoInfo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:gravity="center_vertical"
+                android:text="@string/mv2_ui_settings_autodl"
+                android:textAppearance="@style/TextAppearance.App.RowLabel"/>
 
             <TextView
                 android:id="@+id/mv2PrivacyAutoValue"
@@ -57,23 +71,13 @@
                 android:layout_marginEnd="4dp"
                 android:importantForAccessibility="no"
                 android:textAppearance="@style/TextAppearance.App.Body" />
+        </com.example.bluetoothtest.TitleValueLayout>
 
-            <ImageView
-                android:layout_width="24dp"
-                android:layout_height="24dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/ic_chevron_right"
-                app:tint="@color/text_secondary" />
-        </LinearLayout>
-
-        <ImageButton
-            android:id="@+id/mv2PrivacyAutoInfo"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/info_more"
-            android:padding="10dp"
-            android:src="@drawable/ic_info"
+        <ImageView
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_chevron_right"
             app:tint="@color/text_secondary" />
     </LinearLayout>
 </LinearLayout>

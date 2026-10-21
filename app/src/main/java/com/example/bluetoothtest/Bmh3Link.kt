@@ -332,7 +332,7 @@ internal object Bmh3EndpointHandshake {
             wrapped,
             layer = "endpoint",
         )
-        return session(result, requireNotNull(fingerprint) { "Peer fingerprint missing" }, identity, Bmh3Reveal.ROLE_CALLER, options.strangerIdentity)
+        return session(result, requireNotNull(fingerprint) { "Peer fingerprint missing" }, identity, Bmh3Reveal.ROLE_CALLER, options.strangerIdentity, capabilities)
     }
 
     /** The peer's fingerprint; [PeerIdentityGate.admit] (verified-contact check, authenticated-peer memory) only for a real key. */
@@ -372,7 +372,7 @@ internal object Bmh3EndpointHandshake {
             wrapped,
             layer = "endpoint",
         )
-        return session(result, requireNotNull(fingerprint) { "Peer fingerprint missing" }, identity, Bmh3Reveal.ROLE_CALLEE, options.strangerIdentity)
+        return session(result, requireNotNull(fingerprint) { "Peer fingerprint missing" }, identity, Bmh3Reveal.ROLE_CALLEE, options.strangerIdentity, capabilities)
     }
 
     private fun session(
@@ -381,6 +381,7 @@ internal object Bmh3EndpointHandshake {
         real: SigningIdentity,
         localRole: Int,
         stranger: SigningIdentity?,
+        localCapabilities: NodeCapabilities,
     ): EndToEndVideoSession {
         // The reveal exchange exists only when a pseudonym was involved; it keeps a copy of the exporter (wiped below).
         val reveal = if (result.ownPseudonymous || result.peer.pseudonymous) {
@@ -404,6 +405,12 @@ internal object Bmh3EndpointHandshake {
             peerFingerprint = fingerprint,
             reveal = reveal,
             qrTagMatched = result.qrTagMatched,
+            // Experimental in-call link renewal (Design SR): derived from the two content keys, nothing on the wire.
+            renewalKey = if (CallRenewalWire.bothSigned(localCapabilities, result.peer.capabilities)) {
+                CallRenewalCrypto.renewalKey(result.sendKey, result.receiveKey)
+            } else {
+                null
+            },
         ).also { result.wipe() }
     }
 }

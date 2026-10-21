@@ -13,6 +13,7 @@
     <string name="mv2_ui_preview_voice">Voice note</string>
     <string name="mv2_ui_preview_file">File</string>
     <string name="mv2_ui_preview_message">Message</string>
+    <string name="mv2_ui_preview_you">You: %1$s</string>
     <string name="mv2_ui_row_keys_changed">Keys changed. Compare again.</string>
     <string name="mv2_ui_open_thread">Open messages with %1$s</string>
 
@@ -55,7 +56,7 @@
 
     <!-- Banners and composer -->
     <string name="mv2_ui_banner_not_contact">%1$s is not a contact yet. Add them to send messages.</string>
-    <string name="mv2_ui_banner_card_pending">Compare safety numbers with %1$s to start messaging.</string>
+    <string name="mv2_ui_banner_card_pending">Compare chat safety codes with %1$s to start messaging.</string>
     <string name="mv2_ui_banner_keys_changed">%1$s\'s keys changed. Nothing is sent until you compare again.</string>
     <string name="mv2_ui_banner_peer_older">%1$s\'s app is older. They need to update to receive.</string>
     <string name="mv2_ui_action_add_contact">Add contact</string>
@@ -63,10 +64,10 @@
     <string name="mv2_ui_action_accept_keys">Accept new keys</string>
     <string name="mv2_ui_action_dismiss">Dismiss</string>
     <string name="mv2_ui_accept_keys_title">Accept new keys?</string>
-    <string name="mv2_ui_accept_keys_message">Accept only if you compared the new safety number with this person in person. Messages that were waiting are sent again with the new keys.</string>
+    <string name="mv2_ui_accept_keys_message">Accept only if you compared the new chat safety code with this person in person. Messages that were waiting are sent again with the new keys.</string>
     <string name="mv2_ui_composer_hint">Message</string>
     <string name="mv2_ui_composer_off_not_contact">Add this contact to send messages</string>
-    <string name="mv2_ui_composer_off_card_pending">Compare safety numbers first</string>
+    <string name="mv2_ui_composer_off_card_pending">Compare chat safety codes first</string>
     <string name="mv2_ui_composer_off_keys_changed">Compare keys to send messages</string>
     <string name="mv2_ui_send">Send</string>
     <string name="mv2_ui_attach">Attach</string>
@@ -107,7 +108,7 @@
     <string name="mv2_ui_info_read_receipts">Read receipts</string>
     <string name="mv2_ui_info_read_receipts_info">Both of you need them on. Off by default.</string>
     <string name="mv2_ui_info_contact">Contact details</string>
-    <string name="mv2_ui_info_compare">Compare safety numbers</string>
+    <string name="mv2_ui_info_compare">Compare chat safety codes</string>
     <string name="mv2_ui_info_delete">Delete conversation</string>
     <string name="mv2_ui_delete_title">Delete this conversation?</string>
     <string name="mv2_ui_delete_message">Every message and file with %1$s is removed from this phone. They keep their own copy.</string>

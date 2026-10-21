@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Design QL revision 2: consent at the scan, a plain result and Call now (VerifyContactActivity, ql_consent_ui). -->
+<resources>
+    <string name="ql_consent_checkbox">Let %1$s\'s phone recognise yours nearby</string>
+    <string name="ql_consent_line">You can then call each other from Contacts. Turn off to stay unrecognised; you can still call from Nearby.</string>
+    <string name="ql_result_recognised">%1$s added. You can call them from Contacts when they\'re nearby.</string>
+    <string name="ql_result_declined">%1$s added. Nearby recognition is off. To call, find each other in Nearby.</string>
+    <string name="ql_result_not_finished">%1$s added, but your phones didn\'t finish recognising each other. Scan each other\'s codes again, or call once from Nearby.</string>
+    <string name="ql_result_one_scan">Show them your code so you can call each other from Contacts.</string>
+    <string name="ql_call_now">Call now</string>
+    <string name="ql_visibility_off_warning">Contacts will need to call you or scan your code again to find you nearby.</string>
+</resources>

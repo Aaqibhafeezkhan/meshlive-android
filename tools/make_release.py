@@ -336,7 +336,7 @@ If `adb shell getprop ro.product.cpu.abilist` lists `arm64-v8a`, use the arm64-v
 
 ## Measured on
 
-TODO: benchmark build ids, phones and cases this release was measured on (docs/TESTING.md "Release checklist").
+TODO: benchmark build ids, phones and cases this release was measured on (docs/dev/testing.md "Release checklist").
 Untested combinations are not claimed to work.
 
 ## Known limits

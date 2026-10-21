@@ -31,7 +31,9 @@ internal data object AudioEffectStateLogging : DevicePolicyEffect {
 /** Capture start retry, silence notice and dead-object rebuild. */
 internal data class AudioCaptureSilenceWatchdog(val startAttempts: Int, val silenceMs: Long) : DevicePolicyEffect {
     override fun describe(): String =
-        "retry AudioRecord start up to $startAttempts times; notice after ${silenceMs} ms of digital silence; rebuild on ERROR_DEAD_OBJECT"
+        "retry AudioRecord start up to $startAttempts times; silence episode after ${silenceMs} ms of digital silence " +
+            "(blank-capture notice only after ${BlankCaptureEvidence.NEVER_SIGNAL_MS} ms with no signal since start or a " +
+            "${BlankCaptureEvidence.PERSISTENT_MS} ms zero run); rebuild on ERROR_DEAD_OBJECT"
 }
 
 /** setCommunicationDevice result check with re-pick, watch filter and rate-limited re-assert. */
@@ -209,8 +211,11 @@ internal object AudioPolicyEntries {
             matcher = ALL,
             effects = listOf(AudioCaptureSilenceWatchdog(CaptureStartRetry.ATTEMPTS, CaptureSilenceDetector.THRESHOLD_MS)),
             behaviour = "A failed AudioRecord start is retried twice (250 ms apart) on the capture thread before the call " +
-                "ends. Two seconds of digital silence produce one notice: a different one when the platform reports the " +
-                "client silenced (another app, or the microphone privacy switch) than for a blank capture. ERROR_DEAD_OBJECT " +
+                "ends. Two seconds of digital silence are an episode: when the platform reports the client silenced " +
+                "(another app, or the microphone privacy switch) it is told at once; a blank capture is told only when the " +
+                "stream carried no signal since the recorder started (8 s) or one zero run lasts 30 s, because noise " +
+                "suppression outputs exact zeros in a quiet room (test_capture_silence_evidence=false: the old 2 s notice). " +
+                "ERROR_DEAD_OBJECT " +
                 "rebuilds the recorder and effects up to three times. Changing the capture source is a separate " +
                 "Experimental arm (test_capture_source_fallback, default off).",
             sources = listOf(SHARING_INPUT, CLIENT_SILENCED, SENSOR_PRIVACY, OBOE_START),
@@ -220,8 +225,9 @@ internal object AudioPolicyEntries {
             reviewed = REVIEWED,
             origin = "MicrophoneOpusEncoder threw at the first failed start and at any read error, ending the call",
             confidenceNote = "The platform behaviour is official; which owned phones show a blocked start or blank capture is " +
-                "unknown (Redmi with an assistant, Galaxy A15 VOICE_COMMUNICATION are third-party reports). The 2 s threshold " +
-                "is ours; it can misfire on a fully gated quiet room, which only shows a notice.",
+                "unknown (Redmi with an assistant, Galaxy A15 VOICE_COMMUNICATION are third-party reports). The thresholds " +
+                "are ours. The 2 s one alone misfired: Samsung S24 and M31 VOICE_COMMUNICATION in a quiet room gave 16-34 " +
+                "zero episodes per 4-minute call, each ending by itself, and 6-8 false notices (2026-10-20).",
             area = AUDIO_POLICY_AREA,
             validation = PolicyValidation.UPSTREAM_DOCUMENTED,
             fallback = "The former behaviour: an immediate error ends the call; no silence detection",
@@ -294,8 +300,9 @@ internal object AudioPolicyEntries {
             id = "audio-capture-source-fallback-chain",
             title = "Relax the capture source VOICE_COMMUNICATION -> MIC -> CAMCORDER after confirmed silence",
             matcher = ALL,
-            behaviour = "Switch test_capture_source_fallback (default off). After 2 s of digital silence that the platform does " +
-                "not attribute to silencing, the recorder is rebuilt on the next source; the platform AEC is lost " +
+            behaviour = "Switch test_capture_source_fallback (default off). After a confirmed blank capture (no signal since " +
+                "start for 8 s or a 30 s zero run; 2 s of zeros with test_capture_silence_evidence=false) that the platform " +
+                "does not attribute to silencing, the recorder is rebuilt on the next source; the platform AEC is lost " +
                 "(requested != effective is logged). Never used in benchmarks.",
             sources = listOf(SHARING_INPUT, OBOE_START),
             confidenceNote = "Linphone and Oboe reports show the chain helps some phones; none of the six owned phones is known " +

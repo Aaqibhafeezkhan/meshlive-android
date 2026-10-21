@@ -8,7 +8,7 @@
 
     <!-- Dual listening (DualListening.kt, phone test T12) -->
     <string name="feat_dual_listening">Listen on both links</string>
-    <string name="feat_dual_listening_description">Lets phones that can only use the slower, more compatible Bluetooth LE (GATT) link call this phone, and retries a call over GATT when the fast L2CAP link will not connect. While this phone is available for calls it also keeps a second Bluetooth service ready, and its announcement carries one more capability bit that anyone nearby can read. Every call is still encrypted and checked the same way. It only matters if you chose the L2CAP link under Advanced.</string>
+    <string name="feat_dual_listening_description">Accept calls over both Bluetooth LE connection types, and retry with the more compatible connection if needed. Applies when L2CAP is selected under Advanced.</string>
 
     <!-- Classic without pairing (ClassicBondFree.kt, phone test T7) -->
     <string name="feat_classic_bond_free">Classic Bluetooth without pairing</string>
@@ -21,6 +21,10 @@
     <string name="feat_iphone_discovery">Find iPhones</string>
     <string name="feat_iphone_discovery_description">Also look for the short announcement an iPhone sends while its MeshLive app is open, so iPhone callers, viewers and streams appear in the lists. Searching uses one more scan filter. An iPhone whose app is in the background cannot be found. Your own announcement and every security check stay the same.</string>
 
+    <!-- Find PCs (PcAnnouncement.kt, Design QW; Experimental) -->
+    <string name="feat_find_pcs">Find PCs (experimental)</string>
+    <string name="feat_find_pcs_description">Also look for the short announcement a Windows PC sends, so a PC that runs MeshLive can appear in the call list. Searching uses one more scan filter and also listens for longer adverts, and works only on a phone whose Bluetooth supports them. Needs rotating call IDs to be on. Your own announcement and every security check stay the same.</string>
+
     <!-- Share app nearby (OfflineAppShare.kt, phone test T9) -->
     <string name="feat_share_app_nearby">Show Share app nearby in Help</string>
     <string name="feat_share_app_nearby_description">Adds Share app nearby to Help. This phone starts its own Wi-Fi Direct network and a download page, and shows two codes another phone scans to join it and download the app without internet. It stops after 10 minutes, and it cannot start during a stream or call because Wi-Fi Direct slows Bluetooth.</string>
@@ -30,9 +34,9 @@
     <string name="feat_native_opus_description">Calls use the Opus speech codec built into the app, set for voice, with error correction and concealment when packets are lost. The other phone needs nothing new. It uses a little more processor time, and calls fall back to the phone\'s own codec if the library cannot start. Applies to calls started after you change it.</string>
     <!-- Hidden identities, the BMH3 handshake (Bmh3.kt, phone test T14). On by default since 0.2.0-beta. -->
     <string name="feat_bmh3">Hide my ID from strangers</string>
-    <string name="feat_bmh3_description">Calls and message exchanges with a phone that also has this turned on hide both phones\' identity keys from anyone listening to the Bluetooth link, and the caller reveals itself only after it has checked who answered. On by default. A phone without it (an older version, or with this turned off) is reached by the old handshake, which shows both identity keys to a listener; with rotating discovery IDs on, this phone does not speak the old handshake to such a phone, so they cannot call each other. A phone that accepts calls from anyone still shows its identity to someone who connects to it on purpose. Your announcement carries one more capability bit that anyone nearby can read.</string>
+    <string name="feat_bmh3_description">Adds privacy protection when connecting to other phones. Older versions or phones with this protection turned off may not connect. Accepting a call can still let the other person recognise your phone.</string>
     <!-- Pseudonymous stranger identities on top of the BMH3 handshake (Bmh3Pseudonyms.kt, phone test T15). On by default since 0.2.0-beta. -->
     <string name="feat_bmh3_pseudonyms">New identity for each stranger</string>
-    <string name="feat_bmh3_pseudonyms_description">On by default; needs Hidden identities and rotating discovery IDs. A phone that is not one of your verified contacts meets a throwaway identity that changes every 15 minutes instead of your real one, and you meet theirs the same way. Your real identity goes only to verified contacts, or to the person whose call you accept. Both phones need this turned on; a call from a phone that has Hidden identities but not this will not connect to you while it is on. Calls relayed through other phones, message exchanges and relay requests work only with verified contacts while this is on. Live streams still show a stream source\'s identity to every viewer. Accepting a call from someone you have not verified tells them who you are; declining tells them nothing.</string>
+    <string name="feat_bmh3_pseudonyms_description">Uses a temporary ID with people you haven\'t verified. Verified contacts, and people whose calls you accept, receive your usual ID. Both phones need compatible settings. Some relayed calls and message exchanges require verified contacts; livestream viewers can still recognise the broadcaster\'s phone.</string>
     <string name="call_verify_after_reveal">You can verify this person once they have answered and their identity is confirmed.</string>
 </resources>

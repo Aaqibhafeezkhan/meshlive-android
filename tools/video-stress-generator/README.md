@@ -1,6 +1,6 @@
 # VideoStressGenerator (MeshLive test-video generator)
 
-Generate original, deterministic SDR video stress inputs at their final native size, with exact RGB/I420 references, frame IDs, events, optional PCM audio and measurements. This project verifies source media. Android encoding, Bluetooth transport, phone orchestration, capture analysis and streaming acceptance belong to the MeshLive app and its harness in the parent repository (see `../../docs/TESTING.md`).
+Generate original, deterministic SDR video stress inputs at their final native size, with exact RGB/I420 references, frame IDs, events, optional PCM audio and measurements. This project verifies source media. Android encoding, Bluetooth transport, phone orchestration, capture analysis and streaming acceptance belong to the MeshLive app and its harness in the parent repository (see `../../docs/dev/testing.md`).
 
 Python 3.11+ is required. NumPy and Pillow provide the native renderer; FFmpeg/ffprobe provide the optional FFV1 reference container and diagnostic H.264 encode. No downloaded clips, installed fonts or network services are used by generation.
 

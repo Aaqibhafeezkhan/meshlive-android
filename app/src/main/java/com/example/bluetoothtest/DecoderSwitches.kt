@@ -5,7 +5,7 @@ import android.content.Intent
 /**
  * Experimental decoder-robustness switches (family backlog batch D). Every arm is DEBUG-only (a launch
  * extra from another app must not change a release build's behaviour) and default off; the shipped
- * behaviour is the control arm. Listed in docs/SWITCHES.md "Experimental, alternative and optional
+ * behaviour is the control arm. Listed in docs/dev/switches.md "Experimental, alternative and optional
  * behaviour". The registry arms of the same names are in [DecoderPolicyEntries].
  */
 object DecoderSwitches {

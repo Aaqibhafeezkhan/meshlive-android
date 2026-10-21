@@ -249,6 +249,11 @@ internal object ConversationNotifier {
         val node = StoreForwardRuntime.nodeIfOpen() ?: return
         val engine = node.v2 ?: return
         val peer = runCatching { NodeId.fromBytes(hexToBytes(peerHex)) }.getOrNull() ?: return
+        // A muted chat (ChatMute, the chat list's long-press) keeps its unread count but shows no notification.
+        if (ChatMute.isMuted(context, peerHex) || LocalReporting.hidden(context, peerHex)) {
+            cancelPeer(context, peerHex)
+            return
+        }
         val conversation = ConversationRoute.conversationHex(node.nodeId, peer)
         val tag = ConversationRoute.tag(conversation)
         val contact = node.contacts.get(peer)?.takeIf { it.state == ContactState.ACCEPTED }
