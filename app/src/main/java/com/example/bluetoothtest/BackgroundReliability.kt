@@ -276,12 +276,12 @@ object BackgroundReliability {
                 } else {
                     "With the screen off Android may delay or stop relaying and incoming calls."
                 },
-                steps = listOf(
+                steps = if (!FlavourBattery.directRequest) emptyList() else listOf(
                     "Tap the button and choose Allow in Android's prompt.",
                     "Or: battery optimisation list > All apps > (this app) > Don't optimise (or Unrestricted).",
                 ),
-                actions = listOf(
-                    SettingsIntentSpec("Allow background running", action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, withPackageUri = true),
+                actions = listOfNotNull(
+                    if (FlavourBattery.directRequest) SettingsIntentSpec("Allow background running", action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, withPackageUri = true) else null,
                     SettingsIntentSpec("Open battery optimisation", action = Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
                     APP_DETAILS,
                 ),
@@ -617,6 +617,9 @@ object BackgroundReliability {
 
     /** Android intents for [spec], or null when the spec cannot be built. */
     fun intentFor(context: Context, spec: SettingsIntentSpec): Intent? = runCatching {
+        val spec = if (!FlavourBattery.directRequest && spec.action == Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS) {
+            spec.copy(action = Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS, withPackageUri = false)
+        } else spec
         val intent = when {
             spec.className != null && spec.packageName != null -> Intent().setClassName(spec.packageName, spec.className)
             // A documented deep link names the package that owns it (setPackage keeps the intent inside that app).
@@ -636,6 +639,7 @@ object BackgroundReliability {
      */
     fun openSettings(context: Context, issue: ReliabilityIssue): Boolean {
         for (spec in issue.actions + APP_DETAILS) {
+            if (spec.action == Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS) FlavourBattery.explain(context)
             val intent = intentFor(context, spec) ?: continue
             val opened = try {
                 context.startActivity(intent)
@@ -663,7 +667,13 @@ data class ForegroundStartRequest(val requestedTypes: Int, val refused: String?)
  * What the session service asked for and what it holds. Any difference (or a refusal) means the
  * session runs without some of what it requested, e.g. no camera/microphone while backgrounded.
  */
-data class ForegroundServiceOutcome(val requestedTypes: Int, val effectiveTypes: Int, val refused: String?) {
+data class ForegroundServiceOutcome(
+    val requestedTypes: Int,
+    val effectiveTypes: Int,
+    val refused: String?,
+    /** Camera/microphone types not asked for because their runtime permission is off (Android 14+ pre-check). */
+    val permissionOffTypes: Int = 0,
+) {
     val mismatch: Boolean get() = refused != null || requestedTypes != effectiveTypes
 
     /** Scorer contract (tools/score_device_run.py): `refused=` other than none is an unexpected event. */
@@ -676,6 +686,12 @@ data class ForegroundServiceOutcome(val requestedTypes: Int, val effectiveTypes:
 
     /** Plain-language notice for the visible activity. */
     fun userNotice(): String = when {
+        permissionOffTypes and FGS_CAMERA != 0 && permissionOffTypes and FGS_MICROPHONE != 0 ->
+            "Camera and microphone permissions are off. Turn them on in Settings > Apps > MeshLive > Permissions."
+        permissionOffTypes and FGS_CAMERA != 0 ->
+            "Camera permission is off. Turn it on in Settings > Apps > MeshLive > Permissions to use the camera."
+        permissionOffTypes and FGS_MICROPHONE != 0 ->
+            "Microphone permission is off. Turn it on in Settings > Apps > MeshLive > Permissions to be heard."
         effectiveTypes == 0 ->
             "Android did not let this session keep running in the background. Open the app and start again."
         requestedTypes and (FGS_CAMERA or FGS_MICROPHONE) != effectiveTypes and (FGS_CAMERA or FGS_MICROPHONE) ->
@@ -716,6 +732,15 @@ internal fun foregroundTypeLabels(types: Int): String {
  * access the foreground only permission"). Manifest bugs (Invalid/MissingForegroundServiceType,
  * any other SecurityException) propagate.
  */
+/**
+ * Android 14+ (AOSP ForegroundServiceTypePolicy): a foreground-service type whose permission is missing is refused with
+ * SecurityException "Starting FGS with type <type> ... requires permissions: ...". Seen as a runtime permission that is
+ * off (camera or microphone, "Ask every time" or an expired one-time grant); treated as a refusal of that type, never a
+ * crash ([ForegroundStartSequence]).
+ */
+internal fun isForegroundTypePermissionMissing(error: Throwable): Boolean =
+    error is SecurityException && error.message?.let { it.contains("Starting FGS with type") && it.contains("requires permissions") } == true
+
 internal fun isForegroundServiceRefusal(error: Throwable): Boolean =
     // By simple name: the class is API 31+ and cannot be referenced on older phones.
     error.javaClass.simpleName == "ForegroundServiceStartNotAllowedException" ||

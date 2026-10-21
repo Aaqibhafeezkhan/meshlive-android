@@ -8,15 +8,75 @@ class RecentCallsTest {
     private val b = "9c8d7e6f5a40"
 
     @Test
-    fun newestFirstOnePerPersonCapped() {
+    fun everyCallIsKeptNewestFirstAndOldestEntriesAreEvicted() {
         var calls = emptyList<RecentCall>()
         calls = RecentCalls.add(calls, RecentCall(a, video = true, atMs = 1))
         calls = RecentCalls.add(calls, RecentCall(b, video = false, atMs = 2))
         calls = RecentCalls.add(calls, RecentCall(a, video = false, atMs = 3))
-        assertEquals(listOf(a, b), calls.map { it.nodePrefixHex })
+        assertEquals(listOf(a, b, a), calls.map { it.nodePrefixHex })
         assertEquals(false, calls.first().video)
-        repeat(10) { calls = RecentCalls.add(calls, RecentCall("%012x".format(it), true, 10L + it)) }
-        assertEquals(RecentCalls.MAX_ENTRIES, calls.size)
+        repeat(60) { calls = RecentCalls.add(calls, RecentCall("%012x".format(it), true, 10L + it)) }
+        assertEquals((69L downTo 20L).toList(), calls.map { it.atMs })
+    }
+
+    @Test
+    fun controlArmStillDeduplicatesAndKeepsFivePeople() {
+        var calls = emptyList<RecentCall>()
+        repeat(10) { calls = RecentCalls.add(calls, RecentCall("%012x".format(it), true, it.toLong()), complete = false) }
+        calls = RecentCalls.add(calls, RecentCall("%012x".format(9), false, 20), complete = false)
+        assertEquals(listOf(20L, 8L, 7L, 6L, 5L), calls.map { it.atMs })
+    }
+
+    @Test
+    fun controlProjectionAtReloadKeepsTheOldPeopleWithoutDestroyingFullHistory() {
+        var history = emptyList<RecentCall>()
+        repeat(50) { index ->
+            val direction = if (index % 2 == 0) CallDirection.OUTGOING else CallDirection.INCOMING
+            history = RecentCalls.add(history, RecentCall("%012x".format(index % 9), true, index.toLong(),
+                direction = direction, result = if (index % 3 == 0) CallResult.MISSED else CallResult.ANSWERED))
+        }
+        val stored = RecentCalls.encode(history)
+        val loaded = RecentCalls.decode(stored)
+        val control = RecentCalls.project(loaded, complete = false)
+        assertEquals(listOf(49L, 47L, 46L, 44L, 43L), control.map { it.atMs })
+        assertEquals(5, control.map { it.nodePrefixHex }.toSet().size)
+        assertEquals(setOf(CallDirection.INCOMING, CallDirection.OUTGOING), control.map { it.direction }.toSet())
+        assertEquals(50, RecentCalls.project(loaded, complete = true).size)
+        assertEquals(stored, RecentCalls.encode(loaded))
+    }
+
+    @Test
+    fun controlKeepsLatestStrangerAndBlockedRowsAlongsideAnsweredPeople() {
+        val calls = listOf(
+            RecentCall(a, true, 8, direction = CallDirection.OUTGOING, result = CallResult.NO_ANSWER),
+            RecentCall(a, true, 7, result = CallResult.MISSED),
+            RecentCall("", true, 6, strangerName = "gold fox"),
+            RecentCall("", false, 5, blocked = true, result = CallResult.DECLINED),
+            RecentCall("", false, 4, strangerName = "gold fox"),
+            RecentCall("", false, 3, blocked = true),
+            RecentCall(a, false, 2), RecentCall(a, true, 1), RecentCall(b, true, 0),
+        )
+        assertEquals(listOf(6L, 5L, 2L, 0L), RecentCalls.project(calls, false).map { it.atMs })
+    }
+
+    @Test
+    fun endReasonsDistinguishAnsweredMissedDeclinedNoAnswerAndFailure() {
+        assertEquals(CallResult.ANSWERED, recentCallResult(CallDirection.OUTGOING, true, false, "Call link lost"))
+        assertEquals(CallResult.MISSED, recentCallResult(CallDirection.INCOMING, false, false, CallRingTimeout.CALLER_CANCELLED_MESSAGE))
+        assertEquals(CallResult.MISSED, recentCallResult(CallDirection.INCOMING, false, true, CallRingTimeout.MISSED_MESSAGE))
+        assertEquals(CallResult.DECLINED, recentCallResult(CallDirection.INCOMING, false, true, "Call ended"))
+        assertEquals(CallResult.DECLINED, recentCallResult(CallDirection.OUTGOING, false, false, "Call declined"))
+        assertEquals(CallResult.NO_ANSWER, recentCallResult(CallDirection.OUTGOING, false, false, CallRingTimeout.NO_ANSWER_MESSAGE))
+        assertEquals(CallResult.FAILED, recentCallResult(CallDirection.OUTGOING, false, false, "Call could not connect: timeout"))
+    }
+
+    @Test
+    fun migrationDoesNotInventDirectionAndNewMetadataSurvivesReload() {
+        val old = RecentCalls.decode("$a,v,1\n,v,2,,s,gold fox")
+        assertEquals(listOf(CallDirection.UNKNOWN, CallDirection.UNKNOWN), old.map { it.direction })
+        val missed = RecentCall("", true, 3, strangerName = "blue otter", direction = CallDirection.INCOMING, result = CallResult.MISSED)
+        val updated = RecentCalls.add(old, missed)
+        assertEquals(updated, RecentCalls.decode(RecentCalls.encode(updated)))
     }
 
     private val fingerprint = a + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".substring(12)
@@ -32,16 +92,16 @@ class RecentCallsTest {
     }
 
     @Test
-    fun aBlockedCallIsOneAnonymousRowAndNeverReplacesAPerson() {
+    fun blockedCallsStayAnonymousAndNeverReplaceAPerson() {
         var calls = listOf(RecentCall(a, true, 1, fingerprintHex = fingerprint))
         calls = RecentCalls.add(calls, RecentCall("", false, 2, blocked = true))
         calls = RecentCalls.add(calls, RecentCall("", false, 3, blocked = true))
-        assertEquals(listOf(true, false), calls.map { it.blocked })
+        assertEquals(listOf(true, true, false), calls.map { it.blocked })
         assertEquals(3L, calls.first().atMs)
         assertEquals(calls, RecentCalls.decode(RecentCalls.encode(calls)))
         // A person calling again does not remove the blocked row either.
         calls = RecentCalls.add(calls, RecentCall(a, false, 4, fingerprintHex = fingerprint))
-        assertEquals(listOf(false, true), calls.map { it.blocked })
+        assertEquals(listOf(false, true, true, false), calls.map { it.blocked })
         assertEquals(emptyList<RecentCall>(), RecentCalls.decode("$a,v,9,,b"))
     }
 
@@ -58,7 +118,7 @@ class RecentCallsTest {
     fun aStrangerIsRememberedByTheGeneratedNameAndTheTimeOnly() {
         val stranger = RecentCall("", true, 7, strangerName = "gold fox")
         val encoded = RecentCalls.encode(listOf(stranger))
-        assertEquals(",v,7,,s,gold fox", encoded)
+        assertEquals(",v,7,,s,gold fox|UNKNOWN|ANSWERED", encoded)
         assertEquals(listOf(stranger), RecentCalls.decode(encoded))
         // No keys, prefix or fingerprint can ride along, and junk names are dropped.
         assertEquals(emptyList<RecentCall>(), RecentCalls.decode("$a,v,7,,s,gold fox"))
@@ -69,13 +129,13 @@ class RecentCallsTest {
     }
 
     @Test
-    fun strangersDedupeByNameAndNeverReplacePeopleOrBlockedRows() {
+    fun repeatedStrangerCallsNeverReplacePreviousCalls() {
         var calls = listOf(RecentCall(a, true, 1, fingerprintHex = fingerprint), RecentCall("", false, 2, blocked = true))
         calls = RecentCalls.add(calls, RecentCall("", true, 3, strangerName = "gold fox"))
         calls = RecentCalls.add(calls, RecentCall("", true, 4, strangerName = "blue otter"))
         calls = RecentCalls.add(calls, RecentCall("", false, 5, strangerName = "gold fox"))
-        assertEquals(listOf("gold fox", "blue otter", "", ""), calls.map { it.strangerName })
-        assertEquals(listOf(5L, 4L, 1L, 2L), calls.map { it.atMs })
+        assertEquals(listOf("gold fox", "blue otter", "gold fox", "", ""), calls.map { it.strangerName })
+        assertEquals(listOf(5L, 4L, 3L, 1L, 2L), calls.map { it.atMs })
         assertEquals(calls, RecentCalls.decode(RecentCalls.encode(calls)))
     }
 }

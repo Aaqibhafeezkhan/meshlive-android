@@ -83,12 +83,23 @@ class UpdateFeaturesTest {
 
     @Test
     fun theDocumentsListBothFeaturesAndTheirPhoneTest() {
-        val readme = File("../docs/SWITCHES.md").takeIf { it.isFile } ?: File("docs/SWITCHES.md")
+        val readme = File("../docs/dev/switches.md").takeIf { it.isFile } ?: File("docs/dev/switches.md")
         val text = readme.readText()
         for (needle in listOf("check_for_updates", "newer_versions_nearby", "test_check_for_updates", "test_newer_versions_nearby")) {
             assertTrue("SWITCHES register must mention $needle", text.contains(needle))
         }
         assertEquals("T13", UpdateFeatures.checkForUpdates.phoneTest)
         assertEquals("T13", UpdateFeatures.newerVersionsNearby.phoneTest)
+    }
+
+    @Test
+    fun theGithubManifestDeclaresTheNetworkStatePermissionTheDailyJobNeeds() {
+        // Android 14+ throws SecurityException from JobScheduler.schedule for a network-constrained job without
+        // ACCESS_NETWORK_STATE; that crashed "Check for updates" and then every start (user report 2026-10-21).
+        // That a refused job cannot crash the app is tested by behaviour in UpdateScreenFlowTest (a scheduler that refuses);
+        // this keeps the declaration the system checks.
+        val manifest = File("src/github/AndroidManifest.xml").takeIf { it.isFile } ?: File("app/src/github/AndroidManifest.xml")
+        val declared = Regex("<uses-permission\\s+android:name=\"([^\"]+)\"").findAll(manifest.readText()).map { it.groupValues[1] }.toSet()
+        assertTrue("ACCESS_NETWORK_STATE is declared: $declared", "android.permission.ACCESS_NETWORK_STATE" in declared)
     }
 }

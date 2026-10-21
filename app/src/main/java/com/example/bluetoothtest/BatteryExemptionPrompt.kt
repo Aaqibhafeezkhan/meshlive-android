@@ -60,7 +60,9 @@ internal object BatteryExemptionPrompt {
     private const val KEY_OFFERS = "battery_exemption_offers"
     private const val KEY_LAST_OFFER = "battery_exemption_last_offer_ms"
 
-    fun requestSpec(packageName: String): BatteryIntentSpec =
+    fun requestSpec(packageName: String): BatteryIntentSpec = FlavourBattery.requestSpec(packageName)
+
+    fun directSpec(packageName: String): BatteryIntentSpec =
         BatteryIntentSpec(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "package:$packageName")
 
     val listSpec: BatteryIntentSpec = BatteryIntentSpec(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS, null)
@@ -96,6 +98,7 @@ internal object BatteryExemptionPrompt {
     /** Opens the system prompt directly (the onboarding page and the Settings card button call this). */
     fun launch(activity: Activity): Boolean {
         markOffered(activity)
+        FlavourBattery.explain(activity)
         if (runCatching { activity.startActivity(intent(activity)) }.isSuccess) return true
         // Some makers remove the prompt activity: the list screen is the documented fallback.
         return runCatching { activity.startActivity(toIntent(listSpec)) }.isSuccess
@@ -110,7 +113,7 @@ internal object BatteryExemptionPrompt {
         if (!shouldOffer(activity, trigger)) return false
         MaterialAlertDialogBuilder(activity)
             .setTitle(R.string.battery_exemption_dialog_title)
-            .setMessage(R.string.battery_exemption_dialog_text)
+            .setMessage(FlavourBattery.guidanceText(R.string.battery_exemption_dialog_text))
             .setPositiveButton(R.string.battery_exemption_dialog_allow) { _, _ -> launch(activity) }
             .setNegativeButton(R.string.battery_exemption_dialog_skip) { _, _ -> markOffered(activity) }
             .show()

@@ -18,7 +18,7 @@ import com.google.android.material.materialswitch.MaterialSwitch
  * Features; neither depends on the "Manual settings" toggle or on BuildConfig.DEBUG.
  *
  * Shipping a feature ON is a one-line change here, made only after the phone test named beside it
- * has passed (docs/SWITCHES.md register). A user who has touched a switch keeps that explicit choice; an
+ * has passed (docs/dev/switches.md register). A user who has touched a switch keeps that explicit choice; an
  * untouched switch follows the constant, so flipping it reaches everyone who never decided.
  *
  * DEBUG benchmark launches (any `test_` extra) are unchanged: they read only their own extras,
@@ -127,8 +127,31 @@ internal object CallFeatureResolver {
  * Android 14+ full-screen call alerts need the "full screen notifications" special access
  * (NotificationManager.canUseFullScreenIntent, USE_FULL_SCREEN_INTENT). Without it the incoming-call
  * notification only heads-up pops and the call screen does not appear over the lock screen.
+ *
+ * Sources: Android 14 behaviour changes, "Full-screen intent notifications"
+ * (https://developer.android.com/about/versions/14/behavior-changes-14): from API 34 the permission is granted by
+ * default only to apps whose core function is calling or alarms, and the user can revoke it; the app checks
+ * NotificationManager.canUseFullScreenIntent()
+ * (https://developer.android.com/reference/android/app/NotificationManager#canUseFullScreenIntent()) and sends the user
+ * to Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT
+ * (https://developer.android.com/reference/android/provider/Settings#ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).
+ * Phone evidence 2026-10-19: Redmi 12 (HyperOS, API 35) `appops USE_FULL_SCREEN_INTENT = ignore`, so an incoming call
+ * while locked or in another app was only a notification; the S24 (API 36) had it granted.
  */
 internal object FullScreenIntentAccess {
+    /** Set once the one-time prompt in the calls area was shown (whatever the answer): it never shows again. */
+    const val PREF_PROMPTED = "full_screen_intent_prompted"
+
+    /**
+     * The one-time prompt in the calls area: the access is needed and the user was never asked. Settings keeps its
+     * permanent link ([needsPrompt]) for later; nothing nags.
+     */
+    fun offerOnce(sdkInt: Int, featureOn: Boolean, canUse: Boolean, alreadyPrompted: Boolean): Boolean =
+        needsPrompt(sdkInt, featureOn, canUse) && !alreadyPrompted
+
+    /** `call_fsi: allowed= | prompted=`, logged when it changes (on resume and when the calls area opens). */
+    fun logLine(allowed: Boolean, prompted: Boolean): String = "call_fsi: allowed=$allowed | prompted=$prompted"
+
     /** True when Settings should offer the access link: the feature is on and Android has it off. */
     fun needsPrompt(sdkInt: Int, featureOn: Boolean, canUse: Boolean): Boolean =
         featureOn && sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !canUse
@@ -137,6 +160,9 @@ internal object FullScreenIntentAccess {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return true
         return context.getSystemService(NotificationManager::class.java)?.canUseFullScreenIntent() ?: true
     }
+
+    fun showGuidance(sdkInt: Int, enabled: Boolean, canUse: Boolean): Boolean =
+        enabled && sdkInt >= 34 && !canUse
 
     /** Opens the system page for this app's access, else the app's notification settings. */
     fun openSettings(context: Context) {

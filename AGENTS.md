@@ -134,11 +134,13 @@ plans for finished features.
 | [README.md](README.md) | Short overview and entry links |
 | [AGENTS.md](AGENTS.md) | These working rules |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design and build/distribution notes |
+| [docs/BUILDING.md](docs/BUILDING.md) | Building the app from source |
 | [docs/SWITCHES.md](docs/SWITCHES.md) | Register of experimental, alternative and optional behaviour |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | Wire format and security rules |
 | [docs/TESTING.md](docs/TESTING.md) | Scope, gates, workflow, result locations, release checklist |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Measured reasons and comparisons |
 | [docs/PLAN.md](docs/PLAN.md) | Unfinished work |
+| User documents (user guide, privacy, devices) | Install and use, what is exposed, which phones work |
 | Local handoff note | Current build, ownership, open issues and next actions (not committed) |
 
 When a plan is implemented, move its content into the owner above and delete the plan. Retire a requirement
