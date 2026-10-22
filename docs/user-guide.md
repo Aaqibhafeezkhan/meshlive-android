@@ -61,7 +61,7 @@ A release is a set of per-ABI APKs signed with the project's release key, publis
 source it was built from. Signing happens only on the maintainer's machine: CI
 (`.github/workflows/release-attest.yml`) holds no signing key and builds no APK.
 
-Quick check with the [GitHub CLI](https://cli.github.com/) (replace the file name with the one you downloaded):
+These verification commands run on a computer, not on the Android phone. Download the APK and the verification files (`SHA256SUMS` and `SOURCE-MANIFEST.txt`) from the same [release](https://github.com/MeshLive/meshlive-android/releases/latest) to that computer first. The certificate check needs Android SDK Build-Tools (`apksigner`); the digest check uses `sha256sum`; and the attestation check needs the [GitHub CLI](https://cli.github.com/). If you cannot install these tools, do not treat skipping a check as a pass.\n\nQuick check with the [GitHub CLI](https://cli.github.com/) (replace the file name with the one you downloaded):
 
 ```bash
 gh attestation verify MeshLive-<version>-universal.apk --repo MeshLive/meshlive-android
@@ -264,7 +264,7 @@ that). LE CoC is experimental because some phone stacks have serious bugs with i
 
 **Can I give the app to a friend with no internet?** Yes; see [No internet at all](#no-internet-at-all).
 
-## Contact us
+## Glossary\n\n- **GATT (Generic Attribute Profile):** Bluetooth Low Energy communication used by MeshLive by default. It works without pairing on most phones, but has lower throughput than Bluetooth Classic.\n- **CoC (Credit-Based Flow Control):** Bluetooth Low Energy L2CAP connection-oriented channels, an experimental transport in MeshLive. Support varies across phone Bluetooth stacks.\n- **Relay:** A phone that receives a call or stream and forwards it to another nearby phone.\n- **Hop:** One Bluetooth link from one phone to the next. A relay chain adds a hop each time the stream passes to another phone.\n- **Attestation:** A signed record tying a file digest to a build workflow and source revision. It provides build provenance; it does not replace checking the APK signing certificate.\n\n## Contact us
 
 For questions, problems or safety concerns, tap **Settings > Contact us** to draft an email to
 **meshlive.dev@gmail.com**, with subject **MeshLive** and an empty body. After reporting someone locally,
