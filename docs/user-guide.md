@@ -269,7 +269,7 @@ that). LE CoC is experimental because some phone stacks have serious bugs with i
 ## Glossary
 
 - **GATT (Generic Attribute Profile):** Bluetooth Low Energy communication used by MeshLive by default. It works without pairing on most phones, but has lower throughput than Bluetooth Classic.
-- **CoC (Credit-Based Flow Control):** Bluetooth Low Energy L2CAP connection-oriented channels, an experimental transport in MeshLive. Support varies across phone Bluetooth stacks.
+- **CoC (L2CAP connection-oriented channel):** a direct Bluetooth Low Energy data channel, an experimental transport in MeshLive. Support varies across phone Bluetooth stacks.
 - **Relay:** A phone that receives a call or stream and forwards it to another nearby phone.
 - **Hop:** One Bluetooth link from one phone to the next. A relay chain adds a hop each time the stream passes to another phone.
 - **Attestation:** A signed record tying a file digest to a build workflow and source revision. It provides build provenance; it does not replace checking the APK signing certificate.
