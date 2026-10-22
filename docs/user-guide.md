@@ -61,6 +61,8 @@ A release is a set of per-ABI APKs signed with the project's release key, publis
 source it was built from. Signing happens only on the maintainer's machine: CI
 (`.github/workflows/release-attest.yml`) holds no signing key and builds no APK.
 
+These verification commands run on a computer, not on the Android phone. Download the APK and the verification files (`SHA256SUMS` and `SOURCE-MANIFEST.txt`) from the same [release](https://github.com/MeshLive/meshlive-android/releases/latest) to that computer first. The certificate check needs Android SDK Build-Tools (`apksigner`); the digest check uses `sha256sum`; and the attestation check needs the [GitHub CLI](https://cli.github.com/). If you cannot install these tools, do not treat skipping a check as a pass.
+
 Quick check with the [GitHub CLI](https://cli.github.com/) (replace the file name with the one you downloaded):
 
 ```bash
@@ -263,6 +265,14 @@ is the slowest. Classic has the highest throughput but needs a one-time mutual p
 that). LE CoC is experimental because some phone stacks have serious bugs with it.
 
 **Can I give the app to a friend with no internet?** Yes; see [No internet at all](#no-internet-at-all).
+
+## Glossary
+
+- **GATT (Generic Attribute Profile):** Bluetooth Low Energy communication used by MeshLive by default. It works without pairing on most phones, but has lower throughput than Bluetooth Classic.
+- **CoC (Credit-Based Flow Control):** Bluetooth Low Energy L2CAP connection-oriented channels, an experimental transport in MeshLive. Support varies across phone Bluetooth stacks.
+- **Relay:** A phone that receives a call or stream and forwards it to another nearby phone.
+- **Hop:** One Bluetooth link from one phone to the next. A relay chain adds a hop each time the stream passes to another phone.
+- **Attestation:** A signed record tying a file digest to a build workflow and source revision. It provides build provenance; it does not replace checking the APK signing certificate.
 
 ## Contact us
 
