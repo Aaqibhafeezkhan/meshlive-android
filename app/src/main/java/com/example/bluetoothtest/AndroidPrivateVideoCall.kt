@@ -3158,6 +3158,9 @@ class AndroidPrivateVideoCall(
                     // is dropped unopened, and none is opened after an accepted BIND moved the generation.
                     synchronized(recordLock) {
                         if (gen != linkGeneration.get()) return@thread
+                        if (videoReassembler.enterLinkGeneration(gen)) {
+                            Log.i("BluetoothVideo", "BENCHMARK call_video_fragments: renewal_dropped_partial_frame | gen=$gen")
+                        }
                         lastHeartbeatNs = System.nanoTime()
                         noteRenewedLinkHeard()
                         when (record.type) {

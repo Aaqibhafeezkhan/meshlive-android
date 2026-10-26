@@ -1,0 +1,2 @@
+Fixed: other apps could make MeshLive skip safety confirmations.
+Fixed: a call could end right after reconnecting.

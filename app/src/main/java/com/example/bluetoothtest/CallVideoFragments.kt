@@ -4,8 +4,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Experimental call video fragments (default off; DEBUG `test_call_video_fragments`, benchmark
- * tunable `call_video_fragments`).
+ * Call video fragments: on by default for direct BLE GATT calls (promoted 2026-10-11), decided per endpoint by
+ * [CallHeadOfLine]; DEBUG `test_call_head_of_line` or the separate arm `test_call_video_fragments` (benchmark tunables
+ * `call_head_of_line`, `call_video_fragments`).
  *
  * Problem (calls-noloss-m31asus-51cc8028, GATT): one encrypted record carries one whole video
  * frame, and a GATT write blocks for the frame's air time, so call audio queued behind a large
@@ -130,6 +131,26 @@ internal class CallVideoReassembler(private val maxPacketBytes: Int = CallVideoF
         buffer = null
         received = 0
         return target
+    }
+
+    /** The link generation whose records this reassembler holds (null before the first link). */
+    private var generation: Int? = null
+
+    /**
+     * Call link renewal moved the call to a new link ([gen] changed): a frame left unfinished on the old link can never
+     * complete, so it is dropped and the new link starts at a whole frame. Returns true when a partial frame was dropped.
+     * Without this, the first video record after a renewal that cut a fragmented frame failed the call as "Call link lost"
+     * (switch audit 2026-10-27, A3; the renewal re-asks the peer for a keyframe, which covers the dropped frame). The
+     * sender needs no counterpart: a frame's fragments are written on one link, and the next frame starts at offset 0.
+     */
+    fun enterLinkGeneration(gen: Int): Boolean {
+        if (generation == gen) return false
+        val dropped = inProgress
+        generation = gen
+        buffer = null
+        received = 0
+        flags = 0
+        return dropped
     }
 
     /** Fails closed when anything other than audio interrupts an unfinished fragmented frame. */

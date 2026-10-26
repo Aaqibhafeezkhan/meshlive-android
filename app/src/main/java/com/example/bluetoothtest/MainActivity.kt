@@ -1575,13 +1575,7 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.setupRetryAclWait = intent.getBooleanExtra("test_setup_retry_acl_wait", true)
         DebugTunables.stallRetryDials = intent.getBooleanExtra("test_stall_retry_dials", true)
         DebugTunables.phyMemoryContactKey = intent.getBooleanExtra("test_phy_memory_contact_key", true)
-        DebugTunables.experimentalPhySplit = GattPhySplit.fromDebugValue(intent.getStringExtra("test_gatt_phy_split"))
-        DebugTunables.adaptivePhySplit = if (intent.getBooleanExtra("test_adaptive_phy_split", false)) {
-            GattPhySplit.fromDebugValue(intent.getStringExtra("test_adaptive_phy_split_dir")) ?: GattPhySplit.TX_2M_RX_1M
-        } else {
-            null
-        }
-        DebugTunables.phyAfterAuth = intent.getBooleanExtra("test_phy_after_auth", false)
+        PhySwitches.applyRadioArms(intent) // DEBUG-only GATT PHY split and PHY-after-auth arms
         DebugTunables.stalledTwoMMove = intent.getBooleanExtra("test_stalled_2m_move", true)
         // null (extra absent) follows the default policy: on for fixed-rate streams (PhyMoveSkip.enabled).
         DebugTunables.phyMoveSkipBacklog = if (intent.hasExtra("test_phy_move_skip_backlog")) intent.getBooleanExtra("test_phy_move_skip_backlog", false) else null
@@ -2217,7 +2211,7 @@ class MainActivity : AppCompatActivity() {
             val onboarding = shouldShowOnboarding(
                 OnboardingActivity.isDone(this),
                 // Only our own test/automation extras skip onboarding: launchers (e.g. Samsung One UI) add their own.
-                launchHasExtras = benchmarkExtrasPresent() || intent.hasExtra("offline_benchmark"),
+                launchHasExtras = launchSkipsOnboarding(),
                 recreated = savedInstanceState != null,
             )
             // The Live tab (the stream browser) is the landing screen; its scan and the permission
@@ -2229,7 +2223,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         // A launch with benchmark/control extras is automation: do not show onboarding later.
-        if (benchmarkExtrasPresent() || intent.hasExtra("offline_benchmark")) {
+        if (launchSkipsOnboarding()) {
             OnboardingActivity.markDone(this)
         }
         window.decorView.post { debugAudioLiveAutoStart(intent) } // AUDIO-LIVE hook (DEBUG)
@@ -4762,8 +4756,7 @@ class MainActivity : AppCompatActivity() {
      * are off. Read when forwarding starts.
      */
     private fun applyRelayChildMediaAge() {
-        val benchmarkLaunch = BuildConfig.DEBUG &&
-            benchmarkExtrasPresent()
+        val benchmarkLaunch = benchmarkExtrasPresent()
         DebugTunables.experimentalRelayChildMediaAge = relayChildMediaAgeSetting(
             benchmarkLaunch = benchmarkLaunch,
             benchmarkExtra = intent.getBooleanExtra("test_relay_child_media_age", true),
@@ -4773,8 +4766,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyExperimentalTemporalLayersOnly() {
-        val benchmarkLaunch = BuildConfig.DEBUG &&
-            benchmarkExtrasPresent()
+        val benchmarkLaunch = benchmarkExtrasPresent()
         DebugTunables.experimentalTemporalLayers = if (benchmarkLaunch) {
             intent.getBooleanExtra("test_temporal_layers", false)
         } else {
@@ -4807,8 +4799,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** A DEBUG build launched with any `test_` extra: features read only their extras (default off). */
-    private fun callFeatureBenchmarkLaunch(): Boolean =
-        BuildConfig.DEBUG && benchmarkExtrasPresent()
+    private fun callFeatureBenchmarkLaunch(): Boolean = benchmarkExtrasPresent()
 
     /** The user's explicit choice for a promoted feature switch, or null when never touched. */
     private fun storedCallFeatureChoice(key: String): Boolean? = CallFeatureResolver.storedChoice(appPreferences, key)
@@ -5264,8 +5255,7 @@ class MainActivity : AppCompatActivity() {
      * it off restores the user's name (NeutralBluetoothNameController).
      */
     private fun applyRotatingIds() {
-        val benchmarkLaunch = BuildConfig.DEBUG &&
-            benchmarkExtrasPresent()
+        val benchmarkLaunch = benchmarkExtrasPresent()
         val enabled = RotatingDiscoveryFeature.resolve(
             benchmarkLaunch,
             { intent.getBooleanExtra(it, false) },
@@ -5296,8 +5286,7 @@ class MainActivity : AppCompatActivity() {
      * With the option off a name left by a build before 2026-10-11 (automatic rename) is restored once.
      */
     private fun applyNeutralName() {
-        val benchmarkLaunch = BuildConfig.DEBUG &&
-            benchmarkExtrasPresent()
+        val benchmarkLaunch = benchmarkExtrasPresent()
         // Builds before 2026-10-11 renamed the phone automatically with the rotating switch. A normal launch keeps
         // that name by turning the option on (nothing changes on the radio) and tells the user once; a DEBUG
         // benchmark launch restores the test phone's own name instead (the option is off there).
@@ -5400,7 +5389,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun applyCallResolutionLadder() {
         val extras = intent.extras?.keySet().orEmpty()
-        val benchmarkLaunch = BuildConfig.DEBUG && benchmarkExtrasPresent()
+        val benchmarkLaunch = benchmarkExtrasPresent()
         val ladderExtra = BuildConfig.DEBUG && CallResolutionLadderFeature.EXTRA in extras
         val ladderExtraValue = intent.getBooleanExtra(CallResolutionLadderFeature.EXTRA, false)
         // The measured Auto ladder needs the call resolution ladder to move along its rungs; an explicit
@@ -5417,8 +5406,7 @@ class MainActivity : AppCompatActivity() {
      * Advanced setting applies. The controller (reach table, idle scan, reach pages) exists only while on.
      */
     private fun applyRelayedCalls() {
-        val benchmarkLaunch = BuildConfig.DEBUG &&
-            benchmarkExtrasPresent()
+        val benchmarkLaunch = benchmarkExtrasPresent()
         val enabled = RelayedCallsFeature.resolve(
             benchmarkLaunch,
             { intent.getBooleanExtra(it, false) },
@@ -5820,8 +5808,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyCallReachability() {
-        val benchmarkLaunch = BuildConfig.DEBUG &&
-            benchmarkExtrasPresent()
+        val benchmarkLaunch = benchmarkExtrasPresent()
         val enabled = CallReachabilityFeature.resolve(
             benchmarkLaunch,
             stored = { appPreferences.getBoolean(PREF_REACHABLE_FOR_CALLS, true) },
@@ -7637,8 +7624,8 @@ class MainActivity : AppCompatActivity() {
             currentReachabilityPlan().endpoint
         if (onCallScreen && !hasRequiredPermissions()) return
         if (!onCallScreen && !homeStart) return
-        if (onCallScreen && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && callLockScreenNeedsNotificationPermission(
-                DebugTunables.callLockScreen || CallUx.settings.callStyleNotifications,
+        if (onCallScreen && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && callAlertNeedsNotificationPermission(
+                CallUx.settings,
                 Build.VERSION.SDK_INT,
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
                     PackageManager.PERMISSION_GRANTED,
@@ -8868,10 +8855,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun isBenchmarkLaunch(): Boolean = benchmarkExtrasPresent()
 
-    /** Any `test_` extra, unless DEBUG `test_user_launch=true` asks for a person's launch ([BenchmarkLaunch]). */
+    /**
+     * A DEBUG build launched with any `test_` extra, unless `test_user_launch=true` asks for a person's launch
+     * ([BenchmarkLaunch], which holds the DEBUG guard: release builds never see a benchmark launch).
+     */
     private fun benchmarkExtrasPresent(): Boolean = BenchmarkLaunch.fromExtras(
         intent.extras?.keySet().orEmpty(),
-        userLaunch = BuildConfig.DEBUG && intent.getBooleanExtra(BenchmarkLaunch.EXTRA_USER_LAUNCH, false),
+        userLaunch = intent.getBooleanExtra(BenchmarkLaunch.EXTRA_USER_LAUNCH, false),
+    )
+
+    /** Automation that must not show onboarding later ([BenchmarkLaunch.skipsOnboarding]). */
+    private fun launchSkipsOnboarding(): Boolean = BenchmarkLaunch.skipsOnboarding(
+        intent.extras?.keySet().orEmpty(),
+        userLaunch = intent.getBooleanExtra(BenchmarkLaunch.EXTRA_USER_LAUNCH, false),
     )
 
     /**

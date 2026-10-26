@@ -13,6 +13,49 @@ class CallVideoFragmentsTest {
         EndToEndStreamProtocol.encodePacket(flags, ptsUs, ByteArray(size) { (it * 31 + 7).toByte() })
 
     @Test
+    fun aRenewalThatCutsAFragmentedFrameLetsTheNewLinkStartAtAWholeFrame() {
+        val flags = 0
+        val cut = CallVideoFragments.split(packetPlaintext(9_000, flags, ptsUs = 1L))
+        val next = packetPlaintext(9_000, flags, ptsUs = 2L)
+        val reassembler = CallVideoReassembler()
+        assertFalse(reassembler.enterLinkGeneration(1))
+        assertNull(reassembler.accept(flags, cut[0])) // the old link dies after the first fragment
+        // Before the fix the reassembler kept the partial frame, and the new link's first records failed the call.
+        val stale = CallVideoReassembler().apply { accept(flags, cut[0]) }
+        refused { stale.requireIdleFor("A whole call video packet") }
+        refused { CallVideoFragments.split(next).forEach { stale.accept(flags, it) } }
+
+        assertTrue(reassembler.enterLinkGeneration(2)) // renewal: the reader of the new generation starts
+        reassembler.requireIdleFor("A whole call video packet")
+        var complete: ByteArray? = null
+        CallVideoFragments.split(next).forEach { complete = reassembler.accept(flags, it) }
+        assertArrayEquals(next, complete)
+    }
+
+    @Test
+    fun theSameLinkGenerationKeepsAFrameInProgress() {
+        val flags = 0
+        val plaintext = packetPlaintext(9_000, flags)
+        val fragments = CallVideoFragments.split(plaintext)
+        val reassembler = CallVideoReassembler()
+        reassembler.enterLinkGeneration(5)
+        assertNull(reassembler.accept(flags, fragments[0]))
+        assertFalse(reassembler.enterLinkGeneration(5))
+        var complete: ByteArray? = null
+        fragments.drop(1).forEach { complete = reassembler.accept(flags, it) }
+        assertArrayEquals(plaintext, complete)
+    }
+
+    private fun refused(block: () -> Unit) {
+        try {
+            block()
+        } catch (expected: IllegalArgumentException) {
+            return
+        }
+        fail("Expected the record to be refused")
+    }
+
+    @Test
     fun largeFrameRoundTripsThroughFragmentsAndDecodesLikeAWholePacket() {
         val flags = StreamProtocol.FLAG_KEY_FRAME
         val plaintext = packetPlaintext(30_000, flags)

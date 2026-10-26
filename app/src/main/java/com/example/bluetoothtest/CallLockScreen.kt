@@ -212,3 +212,11 @@ internal class CallLockScreen(private val activity: Activity) {
 /** POST_NOTIFICATIONS is needed for the alert on Android 13+; asked when a call alert feature is on. */
 internal fun callLockScreenNeedsNotificationPermission(enabled: Boolean, sdkInt: Int, granted: Boolean): Boolean =
     enabled && sdkInt >= 33 && !granted
+
+/**
+ * The same check from the effective call settings: the lock-screen call presentation or CallStyle notifications. Reads
+ * [CallUxSettings.lockScreen], the real setting (switch audit 2026-10-27, A7: the caller read the DEBUG-only mirror
+ * `DebugTunables.callLockScreen`, always false in release, so release asked only because of call notifications).
+ */
+internal fun callAlertNeedsNotificationPermission(settings: CallUxSettings, sdkInt: Int, granted: Boolean): Boolean =
+    callLockScreenNeedsNotificationPermission(settings.lockScreen || settings.callStyleNotifications, sdkInt, granted)

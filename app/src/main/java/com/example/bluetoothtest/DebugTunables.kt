@@ -1201,6 +1201,9 @@ object DebugTunables {
      * moves the peripheral -> central direction, the one that went silent, to 1M. DEBUG launch extra `test_gatt_phy_split`.
      */
     @Volatile var experimentalPhySplit: GattPhySplit? = null
+        set(value) {
+            field = value.takeIf { BuildConfig.DEBUG }
+        }
 
     /**
      * Experimental, default off (A/B for the ASUS <-> A15s pair, which the static [experimentalPhySplit] fixes at a cost on healthy
@@ -1210,6 +1213,9 @@ object DebugTunables {
      * `test_adaptive_phy_split_dir=tx1m-rx2m` the mirror. Needs `test_adaptive_phy`.
      */
     @Volatile var adaptivePhySplit: GattPhySplit? = null
+        set(value) {
+            field = value.takeIf { BuildConfig.DEBUG }
+        }
 
     /**
      * Experimental, default off (A/B for the A15s-central to ASUS-peripheral pair and for rotating discovery IDs): the stream
@@ -1218,6 +1224,9 @@ object DebugTunables {
      * authenticated node, which a rotating advertised prefix cannot be matched to. DEBUG launch extra `test_phy_after_auth`.
      */
     @Volatile var phyAfterAuth: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
 
     /**
      * Default on: a single GATT link whose backlogged writer carries under a quarter of one PDU per event on 2M while the peer is

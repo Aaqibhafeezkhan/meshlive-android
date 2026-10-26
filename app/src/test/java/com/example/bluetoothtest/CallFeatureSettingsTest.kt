@@ -145,6 +145,18 @@ class CallFeatureSettingsTest {
     }
 
     @Test
+    fun aUserWithOnlyTheLockScreenCallOnIsAskedForTheNotificationPermission() {
+        // A release user session: lock-screen calls on, CallStyle notifications turned off.
+        val settings = CallUxSettings.resolve(debugBuild = false, benchmarkLaunch = false, stored = { key ->
+            if (key == CallFeature.CALL_NOTIFICATIONS.prefKey) false else null
+        }) { false }
+        assertTrue(settings.lockScreen)
+        assertFalse(settings.callStyleNotifications)
+        assertTrue(callAlertNeedsNotificationPermission(settings, sdkInt = 33, granted = false))
+        assertFalse(callAlertNeedsNotificationPermission(CallUxSettings(), sdkInt = 33, granted = false))
+    }
+
+    @Test
     fun theLockScreenPolicyShowsTheCallOnlyWhileACallExists() {
         assertTrue(CallLockScreenPolicy.showOverLockScreen(true, PrivateCallPhase.INCOMING_RINGING))
         assertTrue(CallLockScreenPolicy.showOverLockScreen(true, PrivateCallPhase.ACTIVE))

@@ -52,4 +52,44 @@ internal object PhySwitches {
     }
 
     fun applyLaunchExtras(intent: Intent) = applyFlags { name -> intent.getBooleanExtra(name, false) }
+
+    /** Launch extras of the three GATT PHY arms [radioArms] reads; every one is DEBUG-only. */
+    val RADIO_ARM_EXTRAS = listOf(
+        "test_gatt_phy_split",
+        "test_adaptive_phy_split",
+        "test_adaptive_phy_split_dir",
+        "test_phy_after_auth",
+    )
+
+    /**
+     * The GATT PHY split and PHY-after-auth arms of one launch (switch audit 2026-10-27, A2: MainActivity read them outside
+     * any DEBUG block and the [DebugTunables] fields had no setter guard, so a release build obeyed another app's extras with
+     * no log). A release build ([debug] false) always gets [RadioArms] defaults, whatever the extras say.
+     */
+    fun radioArms(debug: Boolean, string: (String) -> String?, flag: (String) -> Boolean): RadioArms {
+        if (!debug) return RadioArms()
+        return RadioArms(
+            gattPhySplit = GattPhySplit.fromDebugValue(string("test_gatt_phy_split")),
+            adaptivePhySplit = if (flag("test_adaptive_phy_split")) {
+                GattPhySplit.fromDebugValue(string("test_adaptive_phy_split_dir")) ?: GattPhySplit.TX_2M_RX_1M
+            } else {
+                null
+            },
+            phyAfterAuth = flag("test_phy_after_auth"),
+        )
+    }
+
+    /** Writes [radioArms] into [DebugTunables] (whose setters guard them again). */
+    fun applyRadioArms(intent: Intent) {
+        val arms = radioArms(BuildConfig.DEBUG, intent::getStringExtra) { intent.getBooleanExtra(it, false) }
+        DebugTunables.experimentalPhySplit = arms.gattPhySplit
+        DebugTunables.adaptivePhySplit = arms.adaptivePhySplit
+        DebugTunables.phyAfterAuth = arms.phyAfterAuth
+    }
+
+    data class RadioArms(
+        val gattPhySplit: GattPhySplit? = null,
+        val adaptivePhySplit: GattPhySplit? = null,
+        val phyAfterAuth: Boolean = false,
+    )
 }
