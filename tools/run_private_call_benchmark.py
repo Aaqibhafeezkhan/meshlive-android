@@ -720,7 +720,8 @@ class CallRunner(Runner):
         voice = intercom.is_voice(self.case)
         # voice_call:PREFIX is the experimental voice invite (Invite then Camera off); call:PREFIX is a video call.
         event = self.control(caller, ("voice_call:" if voice else "call:") + self.devices[callee]["node_prefix"])
-        outgoing = self.wait_for(caller, r"BENCHMARK call phase (?:OUTGOING_INVITE|OUTGOING_RINGING)", event["ack_time"])
+        # From the control request, not its ack: a relayed call logs the phase 30-70 ms before the ack.
+        outgoing = self.wait_for(caller, r"BENCHMARK call phase (?:OUTGOING_INVITE|OUTGOING_RINGING)", event["time"])
         event["outgoing_phase"] = {"time": outgoing["time"], "message": outgoing["message"]}
         ringing = self.wait_for(callee, r"BENCHMARK call phase INCOMING_RINGING")
         event["remote_ack"] = {"device": callee, "time": ringing["time"], "message": ringing["message"]}

@@ -568,7 +568,8 @@ class PrivateCallBenchmarkTest(unittest.TestCase):
 
     def test_applied_invite_without_outgoing_phase_stops_before_remote_ringing_wait(self):
         instance = runner.CallRunner("adb", self.devices, self.case, Path("unused"))
-        instance.control = Mock(return_value={"acknowledged": True, "ack_time": "10-03 00:00:10.100"})
+        instance.control = Mock(return_value={"acknowledged": True, "time": "10-03 00:00:10.000",
+                                             "ack_time": "10-03 00:00:10.100"})
         instance.wait_for = Mock(side_effect=RuntimeError("No outgoing phase after applied selection"))
         with self.assertRaisesRegex(RuntimeError, "No outgoing phase"):
             instance.invite()
@@ -631,12 +632,15 @@ class PrivateCallBenchmarkTest(unittest.TestCase):
 
     def test_invite_retains_actual_outgoing_and_incoming_phase_evidence(self):
         instance = runner.CallRunner("adb", self.devices, self.case, Path("unused"))
-        instance.control = Mock(return_value={"acknowledged": True, "ack_time": "10-03 00:00:10.100"})
+        instance.control = Mock(return_value={"acknowledged": True, "time": "10-03 00:00:10.000",
+                                             "ack_time": "10-03 00:00:10.100"})
         instance.wait_for = Mock(side_effect=[{"time": "10-03 00:00:10.300", "message": "BENCHMARK call phase OUTGOING_INVITE"},
                                              {"time": "10-03 00:00:10.500", "message": "BENCHMARK call phase INCOMING_RINGING"}])
         event = instance.invite()
         self.assertEqual([call.args[0] for call in instance.wait_for.call_args_list], ["a", "b"])
         self.assertEqual(event["outgoing_phase"]["time"], "10-03 00:00:10.300")
+        # A relayed call logs its phase just before the control ack, so the search starts at the request.
+        self.assertEqual(instance.wait_for.call_args_list[0].args[2], "10-03 00:00:10.000")
         self.assertEqual(event["remote_ack"]["device"], "b")
         self.assertEqual(event["remote_ack"]["time"], "10-03 00:00:10.500")
 

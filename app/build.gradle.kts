@@ -77,8 +77,8 @@ android {
         applicationId = appId
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0-beta"
+        versionCode = 4
+        versionName = "0.3.1-beta"
         // versionCode/versionName are literals: no date, git hash or counter, so a rebuild of a commit gets
         // the same version (the make_release.py and fastlane changelog readers parse these two lines).
 
