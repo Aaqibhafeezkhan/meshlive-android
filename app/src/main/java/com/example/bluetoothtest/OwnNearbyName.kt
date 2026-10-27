@@ -31,6 +31,13 @@ internal object OwnNearbyName {
         else -> derive(ownRdi)?.let { Shown(it, rotates = true) }
     }
 
+    /**
+     * Review 2026-10-27 (finding 16): the role 0 ID this phone actually advertises (the newest entry the opening pins
+     * hold, [OpeningPins]), not one computed from the epoch clock: those differ around a boundary and while no call offer
+     * is on air, so the screen could name an ID nobody nearby sees. Null when nothing was on air in the last minute.
+     */
+    internal fun onAir(pinned: List<OpeningEntry>): ByteArray? = pinned.firstOrNull()?.rdi
+
     /** The current value for this phone (null when it is not call-ready or no ID is on air yet). */
     fun current(context: Context): Shown? {
         val prefs = context.getSharedPreferences(CallFeatureDefaults.APP_SETTINGS_PREFERENCES, Context.MODE_PRIVATE)
@@ -38,7 +45,7 @@ internal object OwnNearbyName {
         return shown(
             rotatingOn = RotatingDiscoveryFeature.enabled,
             generatedNamesOn = NamingFeatures.generatedNamesOn(),
-            ownRdi = runCatching { RotatingDiscovery.ownRdis(RotatingDiscoveryIds.ROLE_CALL_OFFER).firstOrNull() }.getOrNull(),
+            ownRdi = runCatching { onAir(RotatingDiscovery.pinned(RotatingDiscoveryIds.ROLE_CALL_OFFER)) }.getOrNull(),
             derive = { rdi -> StrangerNames.derive(StrangerNames.Input.rdi(rdi))?.text },
             nearbyPhone = context.getString(R.string.people_rotating_phone),
             someoneNearby = context.getString(R.string.people_someone_nearby),

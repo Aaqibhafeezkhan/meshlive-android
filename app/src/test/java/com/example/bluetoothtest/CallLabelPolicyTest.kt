@@ -184,7 +184,9 @@ class CallLabelPolicyTest {
     fun theTitlePagesSwitchIsItsOwnAndOnByDefault() {
         assertTrue(NamingFeatureDefaults.TITLE_PAGES)
         assertTrue(NamingFeatures.resolveTitlePages(false, { false }, { null }))
-        assertTrue(NamingFeatures.resolveTitlePages(false, { false }, { if (it == NamingFeatures.TITLE_PAGES.prefKey) true else null }))
+        // A constant: no stored choice reaches it (its key was never written by any build).
+        assertTrue(NamingFeatures.TITLE_PAGES.constant)
+        assertTrue(NamingFeatures.resolveTitlePages(false, { false }, { false }))
         // The old combined extra of benchmark launches still switches the pages, so measured title-page cases stay valid.
         assertTrue(NamingFeatures.resolveTitlePages(true, { it == PeerLabelFeature.EXTRA }, { null }))
         assertTrue(NamingFeatures.resolveTitlePages(true, { it == NamingFeatures.TITLE_PAGES.benchmarkExtra }, { null }))
@@ -192,16 +194,8 @@ class CallLabelPolicyTest {
     }
 
     @Test
-    fun anExplicitOldChoiceCarriesOverOnceAndAnExplicitNewChoiceWins() {
-        assertEquals(true, NamingMigration.titlePagesFromLegacy(hasNewChoice = false, legacyNamesChoice = true))
-        assertEquals(false, NamingMigration.titlePagesFromLegacy(hasNewChoice = false, legacyNamesChoice = false))
-        assertNull(NamingMigration.titlePagesFromLegacy(hasNewChoice = true, legacyNamesChoice = true))
-        assertNull(NamingMigration.titlePagesFromLegacy(hasNewChoice = false, legacyNamesChoice = null))
-    }
-
-    @Test
-    fun theInSessionNamesSwitchKeepsItsOldKeyAndDefaultOff() {
-        assertEquals("experimental_peer_labels_v2", CallFeature.NAMES_AND_TITLES.prefKey)
+    fun theInSessionNamesAreAConstantOnWithTheOldExtra() {
+        assertNull("a constant since 2026-10-17", CallFeature.NAMES_AND_TITLES.prefKey)
         assertEquals("test_peer_labels", CallFeature.NAMES_AND_TITLES.benchmarkExtra)
         assertTrue(CallFeatureDefaults.NAMES_AND_TITLES)
     }

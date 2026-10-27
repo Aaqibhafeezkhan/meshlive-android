@@ -576,17 +576,8 @@ internal object CameraPolicy {
      * the same whether or not DevicePolicyRegistry already aggregates [entries]; the registry lists them for the
      * device_policy line and the exported JSON.
      */
-    fun resolve(traits: DeviceTraits, disabled: Set<String> = DeviceFamilyPolicy.switchedOff): ResolvedDevicePolicy {
-        val off = disabled + traits.policyOff
-        val allOff = "all" in off
-        val matching = entries.filter { it.matcher.matches(traits) }
-        val implemented = matching.filterNot { it.proposed }
-        val proposals = matching.filter { entry ->
-            entry.proposed && (entry.component?.let { rule -> traits.codecComponents.any { rule.matches(it) } } ?: true)
-        }
-        val switchedOff = implemented.filter { allOff || it.id in off }
-        return ResolvedDevicePolicy(traits, disabled, implemented - switchedOff.toSet(), switchedOff, proposals)
-    }
+    fun resolve(traits: DeviceTraits, disabled: Set<String> = DeviceFamilyPolicy.switchedOff): ResolvedDevicePolicy =
+        DevicePolicyOff.resolve(entries, traits, disabled)
 
     /** True when one of the device-reopen proposals matches this phone and is not switched off. */
     fun reopenProposalMatches(resolved: ResolvedDevicePolicy, disabled: Set<String>): Boolean {

@@ -52,7 +52,9 @@ internal object NamingFeatures {
      */
     val TITLE_PAGES = FeatureSpec(
         id = "stream_title_pages",
-        prefKey = "feature_stream_title_pages_v2",
+        // A constant: its `feature_stream_title_pages_v2` key was written only by a migration whose source key was never
+        // written (switch audit 2026-10-27), so no build ever stored a choice.
+        prefKey = null,
         defaultEnabled = NamingFeatureDefaults.TITLE_PAGES,
         benchmarkExtra = "test_title_pages",
         group = GROUP,
@@ -69,7 +71,7 @@ internal object NamingFeatures {
         descriptionRes = R.string.feature_names_before_answer_description,
         iconRes = R.drawable.ic_call,
         group = GROUP,
-        dependsOn = "names_and_titles",
+        dependsOn = listOf("names_and_titles"),
         phoneTest = "N2",
     )
 
@@ -95,7 +97,7 @@ internal object NamingFeatures {
         descriptionRes = R.string.feature_bvmid1_compat_description,
         iconRes = R.drawable.ic_verified_user,
         group = GROUP,
-        dependsOn = "bvmid2",
+        dependsOn = listOf("bvmid2"),
         phoneTest = "N5",
     )
 
@@ -138,14 +140,4 @@ internal object NamingFeatures {
     fun resolveTitlePages(benchmarkLaunch: Boolean, extra: (String) -> Boolean, stored: (String) -> Boolean?): Boolean =
         FeatureCatalog.resolve(TITLE_PAGES, benchmarkLaunch, extra, stored) ||
             (benchmarkLaunch && extra(PeerLabelFeature.EXTRA))
-}
-
-/** One-time carry-over of a choice made before Naming v2 split names and subjects from the public title pages. */
-internal object NamingMigration {
-    /**
-     * The value to store for the new title-pages switch, or null to store nothing. A user who explicitly decided the old
-     * combined "Names and titles" switch (on or off) and never touched the new one keeps that decision for the pages.
-     */
-    fun titlePagesFromLegacy(hasNewChoice: Boolean, legacyNamesChoice: Boolean?): Boolean? =
-        if (!hasNewChoice && legacyNamesChoice != null) legacyNamesChoice else null
 }

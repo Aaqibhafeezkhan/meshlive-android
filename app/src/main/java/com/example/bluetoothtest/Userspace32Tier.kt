@@ -27,8 +27,6 @@ internal object Userspace32Tier {
     fun nativeThreadCap(requested: Int, switchOn: Boolean, process64: Boolean): Int =
         if (active(switchOn, process64)) requested.coerceIn(1, MAX_NATIVE_THREADS) else requested
 
-    /** True when the app should choose a MediaCodec encoder over libaom if one is available. */
-    fun preferMediaCodecOverNativeAv1(switchOn: Boolean, process64: Boolean): Boolean = active(switchOn, process64)
 
     fun logLine(switchOn: Boolean, process64: Boolean = android.os.Process.is64Bit(), abis: List<String> = Build.SUPPORTED_ABIS.toList()): String =
         "BENCHMARK userspace: process64=$process64 | supportedAbis=${abis.joinToString(",")} | tierSwitch=$switchOn | " +

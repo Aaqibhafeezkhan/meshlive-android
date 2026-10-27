@@ -191,25 +191,25 @@ class CocAutoGattTest {
         // Benchmark launch: only its own extras, never the stored choice, and the threshold always counts.
         assertEquals(
             CocAutoGattSettings(false, 12),
-            CocAutoGattSettings.resolve(true, false, 12, true, 5, leakyStack = false),
+            CocAutoGattSettings.resolve(true, false, 12, true, leakyStack = false),
         )
         assertEquals(
             CocAutoGattSettings(true, 8),
-            CocAutoGattSettings.resolve(true, true, 8, false, 12, leakyStack = false),
+            CocAutoGattSettings.resolve(true, true, 8, false, leakyStack = false),
         )
         // Normal launch: the user's explicit choice, no Manual-settings toggle involved.
         assertEquals(
-            CocAutoGattSettings(true, 5, thresholdActive = true),
-            CocAutoGattSettings.resolve(false, false, 12, true, 5, leakyStack = true),
+            CocAutoGattSettings(true, CocAutoGattSettings.DEFAULT_THRESHOLD, thresholdActive = true),
+            CocAutoGattSettings.resolve(false, false, 5, true, leakyStack = true),
         )
         assertEquals(
-            CocAutoGattSettings(false, 5, thresholdActive = true),
-            CocAutoGattSettings.resolve(false, true, 12, false, 5, leakyStack = true),
+            CocAutoGattSettings(false, CocAutoGattSettings.DEFAULT_THRESHOLD, thresholdActive = true),
+            CocAutoGattSettings.resolve(false, true, 5, false, leakyStack = true),
         )
         // Never decided: the shipped default (off until phone test T6), whatever the launch extras say.
         assertEquals(
             ConnectivityFeatureDefaults.COC_AUTO_GATT,
-            CocAutoGattSettings.resolve(false, true, 12, null, 12, leakyStack = true).enabled,
+            CocAutoGattSettings.resolve(false, true, 12, null, leakyStack = true).enabled,
         )
         assertFalse(CocAutoGattSettings().enabled)
     }

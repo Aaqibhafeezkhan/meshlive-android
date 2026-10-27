@@ -48,12 +48,21 @@ class SecureRecordWriter internal constructor(
 ) : Closeable {
     private val key = key.copyOf()
     private var nextSequence = 0L
+    /** Experimental AEAD reuse (MeshAead.Context), null when off. */
+    private val aead = if (DebugTunables.aeadCipherReuse) MeshAead.Context() else null
 
     @Synchronized
     fun write(type: SecureRecordType, payload: ByteArray): Int {
         require(payload.size <= MAX_PLAINTEXT_BYTES) { "Secure record is too large" }
         val ciphertextBytes = payload.size + MeshAead.TAG_BYTES
         val header = SecureRecordProtocol.encodeHeader(type, nextSequence, ciphertextBytes)
+        if (aead != null) {
+            // One array and one write: the same bytes as the header and ciphertext written one after the other.
+            val record = aead.sealAfter(key, nextSequence, header, payload)
+            output.write(record)
+            nextSequence++
+            return record.size
+        }
         val ciphertext = MeshAead.encrypt(key, nextSequence, payload, header)
         output.write(header)
         output.write(ciphertext)
@@ -64,7 +73,10 @@ class SecureRecordWriter internal constructor(
     @Synchronized
     fun flush() = output.flush()
 
-    override fun close() = key.fill(0)
+    override fun close() {
+        key.fill(0)
+        aead?.release()
+    }
 
     companion object {
         const val MAX_PLAINTEXT_BYTES = StreamProtocol.MAX_PAYLOAD_BYTES + 128
@@ -79,6 +91,8 @@ class SecureRecordReader internal constructor(
     private val input = DataInputStream(ArrivalTimedInputStream(input, arrival))
     private val key = key.copyOf()
     private var nextSequence = 0L
+    /** Experimental AEAD reuse (MeshAead.Context), null when off. */
+    private val aead = if (DebugTunables.aeadCipherReuse) MeshAead.Context() else null
 
     /**
      * Set only by the experimental store-and-forward path on a link it owns. False (default):
@@ -129,7 +143,8 @@ class SecureRecordReader internal constructor(
         val ciphertext = ByteArray(decoded.ciphertextBytes).also(input::readFully)
         arrival.endRecord()
         val plaintext = try {
-            MeshAead.decrypt(key, decoded.sequence, ciphertext, header)
+            aead?.decrypt(key, decoded.sequence, ciphertext, header)
+                ?: MeshAead.decrypt(key, decoded.sequence, ciphertext, header)
         } catch (error: GeneralSecurityException) {
             throw GeneralSecurityException(
                 "Secure link decrypt failed: type=${decoded.type} sequence=${decoded.sequence} " +
@@ -141,7 +156,10 @@ class SecureRecordReader internal constructor(
         return SecureRecord(decoded.type, plaintext)
     }
 
-    override fun close() = key.fill(0)
+    override fun close() {
+        key.fill(0)
+        aead?.release()
+    }
 }
 
 private data class SecureRecordHeader(
@@ -204,6 +222,8 @@ data class SecureBluetoothSession(
     val ownPseudonymous: Boolean = false,
     /** BVMID2 (responder): msg1's tag was the displayed verification code's, so this link is verify-only ([QrSessionScope]). */
     val qrTagMatched: Boolean = false,
+    /** Design OR (DEBUG prototype): the `RELAY_SEEK` bits the peer signed in its BMH3 responder block; 0 = none or BMH2. */
+    val peerRelaySeek: Int = 0,
 ) : Closeable {
     override fun close() {
         reader.close()

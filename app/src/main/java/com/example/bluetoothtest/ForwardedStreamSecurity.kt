@@ -168,6 +168,11 @@ class ReceiverNodeForwardingCore(
     fun thinnedFrames(child: NodeId): Long =
         if (childNodeId == child) childQueue?.thinnedFrameCount() ?: 0 else 0
 
+    /** Media records [child]'s queue has dropped so far (shed or thinned; see [RelayChildQueue.droppedMediaCount]). */
+    @Synchronized
+    fun droppedMedia(child: NodeId): Long =
+        if (childNodeId == child) childQueue?.droppedMediaCount() ?: 0 else 0
+
     /** Relay child thinning: moves [child] to [level]; false when nothing changed (or thinning is off). */
     fun setChildLayerLevel(child: NodeId, level: RelayChildLevel): Boolean =
         synchronized(this) { childQueue.takeIf { childNodeId == child } }?.setLayerLevel(level) ?: false

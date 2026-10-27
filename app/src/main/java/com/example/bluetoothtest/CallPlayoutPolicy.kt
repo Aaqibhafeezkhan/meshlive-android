@@ -3,7 +3,8 @@ package com.example.bluetoothtest
 /**
  * Call playout decisions that are not family-specific, kept in one place.
  *
- * Experimental speech-led call playout (off by default, DEBUG `test_call_speech_led_playout`):
+ * Speech-led call playout (on by default for direct BLE GATT calls whose video fragments were negotiated, see
+ * [CallHeadOfLine]; DEBUG arm `test_call_speech_led_playout`):
  * calls share one audio/video playout clock, so a large late video frame grows the delay of
  * speech as well. In calls-noloss-m31asus-51cc8028 and calls-noloss-s24a15s-51cc8028 every GATT call
  * direction pinned the call delay at its 600 ms maximum (`BENCHMARK media_age role=call_rx

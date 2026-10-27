@@ -109,6 +109,7 @@ internal object ServiceFamilyPolicy {
         area = PolicyArea.BACKGROUND,
         validation = PolicyValidation.EXPERIMENTAL,
         fallback = "No wake lock is held (the shipped behaviour).",
+        arm = PolicyArm("test_session_wake_lock=true") { ServiceSwitches.sessionWakeLock },
     )
 
     val BOOT_RESUME = DevicePolicyEntry(
@@ -139,13 +140,15 @@ internal object ServiceFamilyPolicy {
         area = PolicyArea.BACKGROUND,
         validation = PolicyValidation.EXPERIMENTAL,
         fallback = "Nothing starts at boot (the shipped behaviour).",
+        // The release opt-in setting is not built (PLAN, Q-N2), so the DEBUG switch is the only arm.
+        arm = PolicyArm("test_boot_resume=true") { ServiceSwitches.bootResume },
     )
 
     val entries: List<DevicePolicyEntry> = listOf(LOCATION_FGS, SESSION_WAKE_LOCK, BOOT_RESUME)
 
     /** True when [entry] applies to [traits] and neither "all" nor its id is switched off. Pure, for tests. */
     fun isActive(entry: DevicePolicyEntry, traits: DeviceTraits, disabled: Set<String>): Boolean =
-        entry.matcher.matches(traits) && "all" !in disabled && entry.id !in disabled && entry.id !in traits.policyOff
+        entry.matcher.matches(traits) && !DevicePolicyOff.isOff(entry.id, disabled, traits.policyOff)
 
     private fun activeHere(entry: DevicePolicyEntry): Boolean =
         runCatching { isActive(entry, DeviceTraits.current(), DeviceFamilyPolicy.switchedOff) }.getOrDefault(false)

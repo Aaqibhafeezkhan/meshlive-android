@@ -1,0 +1,56 @@
+import importlib.util
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parents[1]))
+
+import switch_inert
+
+spec = importlib.util.spec_from_file_location("runner", Path(__file__).parents[1] / "run_device_benchmark.py")
+runner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runner)
+
+
+class SwitchInertTest(unittest.TestCase):
+    def test_a_masked_arm_is_named_with_its_parent(self):
+        extras = runner.tunable_extras({"link_pacing": False, "join_probe_seed": True})
+        self.assertEqual([("join_probe_seed", "link_pacing=false")], switch_inert.inert_arms(extras))
+
+    def test_an_arm_at_its_default_or_with_its_parent_on_is_no_arm(self):
+        self.assertEqual([], switch_inert.inert_arms({"test_link_pacing": False, "test_link_pacer_seed": True}))
+        self.assertEqual([], switch_inert.inert_arms({"test_relay_time_queue": True, "test_relay_drain_sustained": True}))
+        self.assertEqual([], switch_inert.inert_arms({"test_call_fragment_airtime_ms": 40, "test_call_head_of_line": "on"}))
+
+    def test_the_runner_refuses_a_case_whose_requested_arm_is_inert(self):
+        with self.assertRaisesRegex(ValueError, "relay_drain_sustained because relay_time_queue=false"):
+            runner.refuse_inert_arms({"tunables": {"relay_drain_sustained": True}})
+        # A deliberate regression control, and a user-launch case (user defaults), are not refused.
+        runner.refuse_inert_arms({"tunables": {"relay_drain_sustained": True}, "allow_inert_arms": True})
+        runner.refuse_inert_arms({"tunables": {"relay_drain_sustained": True, "user_launch": True}})
+        runner.refuse_inert_arms({"tunables": {"relay_drain_sustained": True, "relay_time_queue": True}})
+
+    def test_child_side_relay_arms_follow_relay_child_reanchor_unless_set_apart(self):
+        extras = runner.tunable_extras({"relay_child_reanchor": False, "relay_parent_trickle": False})
+        self.assertEqual([("relay_parent_trickle", "relay_parent_watch=false")], switch_inert.inert_arms(extras))
+        extras = runner.tunable_extras({"relay_child_reanchor": False, "relay_parent_watch": True,
+                                        "relay_parent_trickle": False, "relay_prefer_parent": True,
+                                        "relay_recovery_grace": False})
+        self.assertEqual([], switch_inert.inert_arms(extras))
+        # The same-parent preference is off by default (build 4): a grace arm alone is inert until it is turned on.
+        extras = runner.tunable_extras({"relay_recovery_grace": False})
+        self.assertEqual([("relay_recovery_grace", "relay_prefer_parent=false")], switch_inert.inert_arms(extras))
+        extras = runner.tunable_extras({"playout_time_budget_ms": 3000})
+        self.assertEqual([("playout_time_budget_ms", "playout_time_target=false")], switch_inert.inert_arms(extras))
+
+    def test_register_names_and_shipped_default_features_are_tunables(self):
+        extras = runner.tunable_extras({"relay_stall_holdoff": False, "phy_after_auth": True, "user_launch": True,
+                                        "rotating_ids": True, "iphone_discovery": True, "messaging_v2": True,
+                                        "call_head_of_line": "gatt_default", "stall_rediscover_ms": 20000})
+        self.assertEqual(False, extras["test_relay_stall_holdoff"])
+        self.assertEqual(True, extras["test_ios_compact_discovery"])
+        self.assertEqual("gatt_default", extras["test_call_head_of_line"])
+
+
+if __name__ == "__main__":
+    unittest.main()

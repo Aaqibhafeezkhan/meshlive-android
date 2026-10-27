@@ -56,8 +56,15 @@ internal object MeetBridge {
 
     @Volatile var host: Host? = null
 
-    /** True when the BVMID2 flow can run: switch on, rotating IDs on and an endpoint host registered. */
-    fun available(): Boolean = NamingFeatures.bvmid2On() && RotatingDiscoveryFeature.enabled && host != null
+    /**
+     * True when the BVMID2 flow can run: switch on, rotating IDs on, BMH3 on and an endpoint host registered. The code's
+     * tag, the single reservation and "accept only the code" live in the BMH3 handshake (review 2026-10-27, finding 7):
+     * with BMH3 off the screen keeps the earlier BVMID1 flow.
+     */
+    fun available(): Boolean = available(NamingFeatures.bvmid2On(), RotatingDiscoveryFeature.enabled, Bmh3Feature.enabled, host != null)
+
+    internal fun available(bvmid2: Boolean, rotatingIds: Boolean, bmh3: Boolean, hostRegistered: Boolean): Boolean =
+        bvmid2 && rotatingIds && bmh3 && hostRegistered
 
     /** Search window for the code's advert and the overall limit of one scan (every address is tried within it). */
     const val SEARCH_MS = QrScanPolicy.SEARCH_MS

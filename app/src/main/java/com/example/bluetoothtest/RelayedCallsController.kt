@@ -23,6 +23,15 @@ internal data class HelperDeviceState(
     val rotatingIdsOn: Boolean,
 )
 
+/** Design OR (DEBUG prototype): the phone-wide search budgets and the FAIL replay cache of this process. */
+internal object RelaySeekHelperState {
+    val budgets = RelaySeekBudgets(SystemClock::elapsedRealtime)
+    val failCache = RelaySeekFailCache(SystemClock::elapsedRealtime)
+
+    /** Advertiser addresses whose link failed the opening of a sought ID, by epoch: not dialled again in that epoch. */
+    val badAddresses = RelaySeekBadAddresses()
+}
+
 /**
  * The runtime of experimental relayed calls (DECISIONS Design C) for one activity: the reach table, the idle
  * scan, the reach pages, SETUP admission and the helper state shown in Settings. It exists only while the
@@ -155,7 +164,11 @@ internal class RelayedCallsController(
             advertised = null
             onOfferStale()
         }
-        if (plan.helping) {
+        if (plan.helping && RelaySeekFeature.tablesOff()) {
+            // Design OR arm O: no reach-table scan and no reach pages; searches arrive over the call listener.
+            stopScanner()
+            stopAdvertiser()
+        } else if (plan.helping) {
             ensureScanner(plan.scan)
             if (!relaying) ensureAdvertiser(state.transport) else stopAdvertiser()
         } else {
@@ -181,6 +194,7 @@ internal class RelayedCallsController(
         rotatingIdsOn = state?.rotatingIdsOn ?: RotatingDiscoveryFeature.enabled,
         rotatingCompat = RelayedCallsFeature.rotatingCompat,
         leTransport = state?.transport?.let { it != BluetoothTransportOption.CLASSIC_RFCOMM } ?: false,
+        gattHelperBlocked = RelayedCalls.gattHelperDutyBlocked(state?.transport),
         bluetoothReady = state?.bluetoothReady ?: false,
         callReady = state?.callReady ?: false,
         batteryPercent = state?.batteryPercent ?: -1,
@@ -189,6 +203,10 @@ internal class RelayedCallsController(
         thermalSevere = state?.thermalSevere ?: false,
         ownActivity = state?.ownActivity ?: false,
         screenOn = state?.screenOn ?: true,
+        seekScopeBlocked = RelaySeekFeature.active() && run {
+            val rotatingIds = state?.rotatingIdsOn ?: RotatingDiscoveryFeature.enabled
+            !RelaySeekFeature.helperScope(rotatingIds, Bmh3Feature.enabled, Bmh3PseudonymFeature.active(rotatingIds))
+        },
     )
 
     // ----- scan and reach pages -----
@@ -287,10 +305,16 @@ internal class RelayedCallsController(
      * call-ready here: the periodic plan only turns "running" once the endpoint is available, which is too late
      * for the first offer.
      */
-    override fun helperActive(): Boolean = !relaying && liveHelping(snapshot)
+    override fun helperActive(): Boolean =
+        !relaying && liveHelping(snapshot) && !(RelaySeekFeature.active() && RelayDutyReservation.shared.held)
 
+    /**
+     * Design OR: a helper whose search budgets have been exhausted for 60 s drops `FLAG_RELAY_CAPABLE` at its next offer
+     * restart, until they recover.
+     */
     private fun liveHelping(state: HelperDeviceState?): Boolean =
-        RelayHelperPolicy.plan(inputsFor(state).copy(callReady = true)).helping
+        RelayHelperPolicy.plan(inputsFor(state).copy(callReady = true)).helping &&
+            !(RelaySeekFeature.active() && RelaySeekHelperState.budgets.exhaustedFor(RelaySeekBudgets.FLAG_WITHDRAW_AFTER_MS))
 
     override fun offerOpened(helperActive: Boolean, consent: Boolean) {
         advertised = helperActive to consent
@@ -302,19 +326,21 @@ internal class RelayedCallsController(
         budget: Int,
         transport: BluetoothTransportOption,
         rotating: Boolean,
+        parentKey: String?,
     ): RelayAdmission {
         val activeTable = if (rotating) rotatingTable else table
         val state = snapshot ?: deviceState()
         val live = RelayHelperPolicy.plan(inputsFor(state))
         val featureOn = RelayedCallsFeature.enabled
-        val allowed = RelayedCallsFeature.helperAllowed(state.rotatingIdsOn)
+        // A SETUP over a GATT link (a dual-listening secondary) is refused where the family policy keeps helping on CoC.
+        val allowed = RelayedCallsFeature.helperAllowed(state.rotatingIdsOn) && !RelayedCalls.gattHelperDutyBlocked(transport)
         val paused = live.paused
         val busy = relaying || state.ownActivity
         // The rate limit counts only requests that could have been served, so a paused phone costs nothing.
         val limited = if (!featureOn || !allowed || paused || busy) {
             false
         } else {
-            !limiter.tryAdmit(parentNodeId.toByteArray().prefixHex())
+            !limiter.tryAdmit(parentKey ?: parentNodeId.toByteArray().prefixHex())
         }
         val accept = { offer: DiscoveryAnnouncement -> offer.transportOption() == transport }
         val route = if (featureOn && !paused && budget in 1..RelayedCallsFeature.maxRelays) {
@@ -344,6 +370,10 @@ internal class RelayedCallsController(
                 routeAvailable = route != null,
             ),
         )
+        if (refusal == RelaySetupFailure.NO_ROUTE && rotating && RelaySeekFeature.active()) {
+            // Design OR: a plain SETUP without a table route is handled as a search for its one ID (budget clamped to 2).
+            return RelayAdmission.Search(target.copyOf(), budget.coerceAtMost(RelaySeek.MAX_BUDGET))
+        }
         if (refusal != null) return RelayAdmission.Refuse(refusal)
         val chosen = requireNotNull(route)
         val nextHopPrefix = chosen.nextHop
@@ -386,7 +416,121 @@ internal class RelayedCallsController(
         handler.post { onChanged() }
     }
 
+    // ----- Design OR: on-demand route search (DEBUG prototype) -----
+
+    override fun seekFeatures(): Int? {
+        if (!RelaySeekFeature.active()) return null
+        val state = snapshot ?: return null
+        if (!RelaySeekFeature.helperScope(state.rotatingIdsOn, Bmh3Feature.enabled, Bmh3PseudonymFeature.active(state.rotatingIdsOn))) return null
+        if (!helperActive() || RelaySeekHelperState.budgets.exhausted()) return null
+        return RelaySeek.FEATURE_SEEK_V1
+    }
+
+    override fun admitSeek(budget: Int, requestedMs: Int, transport: BluetoothTransportOption): SeekAdmission {
+        val state = snapshot ?: deviceState()
+        val live = RelayHelperPolicy.plan(inputsFor(state))
+        if (!RelaySeekFeature.active() || !RelayedCallsFeature.helperAllowed(state.rotatingIdsOn) || live.paused) {
+            return SeekAdmission.Refuse(RelaySetupFailure.REFUSED, if (live.paused) live.pause.name.lowercase() else "off")
+        }
+        if (transport == BluetoothTransportOption.CLASSIC_RFCOMM) return SeekAdmission.Refuse(RelaySetupFailure.REFUSED, "classic")
+        if (RelayedCalls.gattHelperDutyBlocked(transport)) return SeekAdmission.Refuse(RelaySetupFailure.REFUSED, "gatt_family")
+        if (relaying || state.ownActivity) return SeekAdmission.Refuse(RelaySetupFailure.BUSY, "busy")
+        if (budget !in 1..minOf(RelaySeek.MAX_BUDGET, RelayedCallsFeature.maxRelays)) {
+            return SeekAdmission.Refuse(RelaySetupFailure.REFUSED, "budget")
+        }
+        val owner = Any()
+        if (!RelayDutyReservation.shared.tryAcquire(owner)) return SeekAdmission.Refuse(RelaySetupFailure.BUSY, "duty")
+        return when (val admission = RelaySeekHelperState.budgets.admit(budget, requestedMs.toLong())) {
+            is RelaySeekBudgets.Admission.Accept -> SeekAdmission.Accept(owner, admission.allowanceMs)
+            is RelaySeekBudgets.Admission.Refuse -> {
+                RelayDutyReservation.shared.release(owner)
+                logBudget()
+                SeekAdmission.Refuse(RelaySetupFailure.REFUSED, "budget_" + admission.reason)
+            }
+        }
+    }
+
+    override fun seekFinished(owner: Any, startedMs: Long, ready: Boolean) {
+        RelaySeekHelperState.budgets.finish(owner, startedMs, ready)
+        logBudget()
+    }
+
+    override fun seekCharge(owner: Any, dial: Boolean) {
+        if (dial) RelaySeekHelperState.budgets.chargeDial(owner) else RelaySeekHelperState.budgets.chargeHandshake(owner)
+    }
+
+    /**
+     * The on-demand low-latency scan of a search: only while two scan starts stay free in the app's 30 s window for the
+     * owner and the scan budget has time left; its results reach the search through [RelayedCallsRuntime.seekOffers].
+     */
+    override fun seekScan(owner: Any, untilMs: Long, done: () -> Boolean): Long {
+        val adapter = adapterProvider() ?: return 0L
+        val budget = runCatching { BluetoothTransportPolicy.scanBudget() }.getOrNull()
+        val freeStarts = budget?.let { it.maxStarts - ScanStartGate.shared.used(it) } ?: Int.MAX_VALUE
+        val scanLeft = RelaySeekHelperState.budgets.scanLeftMs()
+        val startMs = SystemClock.elapsedRealtime()
+        val endMs = minOf(untilMs, startMs + scanLeft)
+        if (freeStarts < OWNER_SCAN_STARTS + 1 || endMs - startMs < MIN_SCAN_MS) {
+            Log.i(
+                "BluetoothVideo",
+                (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                    "relayed_seek_scan: start_ms=-1 | first_result_ms=-1 | refused=${if (freeStarts < OWNER_SCAN_STARTS + 1) "quota" else "budget"}",
+            )
+            return 0L
+        }
+        val firstResultMs = java.util.concurrent.atomic.AtomicLong(-1L)
+        val started = java.util.concurrent.CountDownLatch(1)
+        val scan = java.util.concurrent.atomic.AtomicReference<BleL2capDiscovery?>(null)
+        handler.post {
+            scan.set(
+                BleL2capDiscovery(
+                    adapter,
+                    onPeer = { firstResultMs.compareAndSet(-1L, SystemClock.elapsedRealtime() - startMs) },
+                    onFinished = {},
+                    onError = { message -> Log.w("BluetoothVideo", "relayed_seek_scan: error | $message") },
+                    acceptAnnouncement = { it.isPrivateCallOffer() },
+                    scanDurationMs = 0L,
+                    reportDuplicates = true,
+                    continuousLowLatency = true,
+                    startLowLatency = true,
+                    acceptRotating = true,
+                ).also { it.start() },
+            )
+            started.countDown()
+        }
+        val launchedMs = try {
+            started.await(1, java.util.concurrent.TimeUnit.SECONDS)
+            SystemClock.elapsedRealtime() - startMs
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            -1L
+        }
+        try {
+            while (SystemClock.elapsedRealtime() < endMs && !done()) Thread.sleep(SCAN_POLL_MS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } finally {
+            handler.post { scan.getAndSet(null)?.close() }
+        }
+        val scannedMs = SystemClock.elapsedRealtime() - startMs
+        RelaySeekHelperState.budgets.chargeScan(scannedMs, owner)
+        Log.i(
+            "BluetoothVideo",
+            (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                "relayed_seek_scan: start_ms=$launchedMs | first_result_ms=${firstResultMs.get()} | refused=none | scanned_ms=$scannedMs",
+        )
+        return scannedMs
+    }
+
+    private fun logBudget() {
+        if (BuildConfig.DEBUG) Log.i("BluetoothVideo", "BENCHMARK " + RelaySeekHelperState.budgets.line())
+    }
+
     private companion object {
+        /** Scan starts kept free for the owner's own actions in the app's 30 s window. */
+        const val OWNER_SCAN_STARTS = 2
+        const val MIN_SCAN_MS = 300L
+        const val SCAN_POLL_MS = 100L
         const val TICK_MS = 5_000L
         const val TABLE_LOG_TICKS = 6
         const val SCAN_RETRY_MS = 30_000L

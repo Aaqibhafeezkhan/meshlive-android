@@ -243,6 +243,32 @@ class ClassicPeerConnectionTest {
         assertEquals(null, classicLinkIdentityProblem(relay, null, directRoute = true))
     }
 
+    /**
+     * Review 2026-10-27 (finding 5): a Classic call to a phone in pseudonym mode met a throwaway at the link, failed the
+     * prefix comparison ("identity changed") and made the caller forget the correct learned address. A throwaway has no
+     * node ID to compare (the reveal binds the callee later); only a real key that proved to be someone else disproves an
+     * address.
+     */
+    @Test
+    fun aThrowawayLinkPeerIsNotComparedAndNeverCostsTheLearnedAddress() {
+        val throwaway = ByteArray(16) { (it + 90).toByte() }
+        val announced = ByteArray(6) { (it + 1).toByte() }
+        assertEquals(null, classicLinkIdentityProblem(throwaway, announced, directRoute = true, peerPseudonymous = true))
+        assertEquals(null, classicLinkIdentityProblem(throwaway, announced, directRoute = false, peerPseudonymous = true))
+        // Review 2026-10-27 (finding 3): a throwaway from a guessed address (bonded fallback, discovered, inquiry) proves
+        // nothing about which phone answered, so another phone could ring: that candidate fails and the next one is tried.
+        for (kind in ClassicCandidateKind.entries) {
+            val problem = classicLinkIdentityProblem(throwaway, announced, directRoute = true, peerPseudonymous = true, resolvedCandidate = kind.resolved)
+            assertEquals(kind.name, !kind.resolved, problem != null)
+        }
+        val wrongPerson = ClassicLinkIdentityException(requireNotNull(classicLinkIdentityProblem(throwaway, announced, directRoute = true)))
+        assertTrue(classicLearnedAddressDisproved(ClassicCandidateKind.LEARNED, wrongPerson))
+        assertFalse(classicLearnedAddressDisproved(ClassicCandidateKind.DISCOVERED, wrongPerson))
+        assertFalse("a failed check of another kind says nothing about the address",
+            classicLearnedAddressDisproved(ClassicCandidateKind.LEARNED, IllegalArgumentException("Peer did not authenticate Classic support")))
+        assertFalse(classicLearnedAddressDisproved(ClassicCandidateKind.LEARNED, java.io.IOException("page timeout")))
+    }
+
     @Test
     fun legacyPlanKeepsEachRolesPreviousCandidatesAndDeadlines() {
         val discovered = Peer("5A:00:00:00:00:03", "Phone")

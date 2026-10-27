@@ -135,7 +135,7 @@ class CrashAndWipeFlowTest {
         val used = phone.start()
         OnboardingState.markDone(used)
         UpdateConsent.set(used, settings(), yes = true, nowMs = 5_000L)
-        settings().edit().putBoolean(CallFeature.MESSAGES.prefKey, !CallFeatureDefaults.MESSAGES).apply()
+        settings().edit().putBoolean(requireNotNull(CallFeature.MESSAGES.prefKey), !CallFeatureDefaults.MESSAGES).apply()
         RecentCalls.record(used, RecentCall("0123456789ab", video = false, atMs = 7_000L))
         crashOnce(used)
         val before = appStart(used)

@@ -195,6 +195,8 @@ internal object ScanRecordForms {
         class Compact(val announcement: DiscoveryAnnouncement) : Outcome
         class Pc(val announcement: DiscoveryAnnouncement, val decoded: PcAnnouncement) : Outcome
         class PcInvalid(val error: PcAnnouncementError) : Outcome
+        class PcStream(val announcement: DiscoveryAnnouncement, val kind: Int) : Outcome
+        object PcDisabled : Outcome
     }
 
     /**
@@ -202,16 +204,67 @@ internal object ScanRecordForms {
      * [compactCandidate] is non-null only while compact discovery is active, [pcData] only while the PC scan is.
      * A compact candidate wins even when it is invalid: the PC form is never tried behind it.
      */
-    fun resolve(compactCandidate: UUID?, pcData: ByteArray?, acceptRotating: Boolean): Outcome {
+    fun resolve(compactCandidate: UUID?, pcData: ByteArray?, acceptRotating: Boolean, pcStreams: Boolean = PcStreamsFeature.enabled): Outcome {
         if (compactCandidate != null) {
             return runCatching { CompactDiscoveryAnnouncement.decode(compactCandidate, acceptRotating) }
                 .fold({ Outcome.Compact(it) }, { Outcome.CompactInvalid })
         }
         if (pcData == null) return Outcome.None
+        if (pcStreams && pcData.isNotEmpty()) {
+            val first = pcData[0].toInt() and 0xff
+            if (first ushr 4 != 1) return Outcome.PcInvalid(PcAnnouncementError.Version)
+            if (first and 0xf !in 0..2) return Outcome.PcInvalid(PcAnnouncementError.Kind)
+        }
+        if (pcData.isNotEmpty() && pcData[0].toInt() and 0xf != 0) {
+            val first = pcData[0].toInt() and 0xff
+            if (first ushr 4 != 1) return Outcome.PcInvalid(PcAnnouncementError.Version)
+            val kind = first and 0xf
+            if (kind !in 1..2) return Outcome.PcInvalid(PcAnnouncementError.Kind)
+            if (!pcStreams) return Outcome.PcDisabled
+            if (!acceptRotating) return Outcome.PcInvalid(PcAnnouncementError.Fields)
+            return runCatching { PcStreamAnnouncement.decode(pcData) }.fold(
+                { Outcome.PcStream(it, kind) },
+                { Outcome.PcInvalid((it as? PcAnnouncementException)?.error ?: PcAnnouncementError.Fields) },
+            )
+        }
         return PcAnnouncement.tryDecode(pcData).fold(
             { Outcome.Pc(it.toDiscoveryAnnouncement(), it) },
             { Outcome.PcInvalid((it as? PcAnnouncementException)?.error ?: PcAnnouncementError.Fields) },
         )
+    }
+}
+
+/** Design QV revision 4: a second, default-off gate in addition to Find PCs. */
+object PcStreamsFeature {
+    const val EXTRA = "test_pc_streams"
+    const val PREF = "experimental_pc_streams"
+    @Volatile var enabled = false
+}
+
+/** Kinds 1/2 wrap the unchanged 22-byte rotating announcement. No handshake changes. */
+internal object PcStreamAnnouncement {
+    fun decode(bytes: ByteArray): DiscoveryAnnouncement {
+        fun fail(error: PcAnnouncementError): Nothing = throw PcAnnouncementException(error, "Invalid PC stream announcement")
+        if (bytes.isEmpty()) fail(PcAnnouncementError.Length)
+        val first = bytes[0].toInt() and 0xff
+        if (first ushr 4 != 1) fail(PcAnnouncementError.Version)
+        val kind = first and 0xf
+        if (kind !in 1..2) fail(PcAnnouncementError.Kind)
+        if (bytes.size != 23) fail(PcAnnouncementError.Length)
+        val a = try { DiscoveryAnnouncementCodec.decode(bytes.copyOfRange(1, 23), acceptRotating = true) }
+            catch (_: IllegalArgumentException) { fail(PcAnnouncementError.Fields) }
+        if (a.version != 5 || a.streamToken >= 0) fail(PcAnnouncementError.Fields)
+        val valid = if (kind == 1) {
+            val plain = a.flags == 0x09 && a.recoveryFromNodeIdPrefix == null &&
+                a.sequence == 0 && a.streamWidth == 0 && a.streamHeight == 0 && a.streamFps == 0
+            val recovering = a.flags == 0x89 && a.recoveryFromNodeIdPrefix?.any { it != 0.toByte() } == true
+            (plain || recovering) && a.capabilitySummary == 0
+        } else {
+            a.flags and 0x20.inv() == 0x0c && a.capabilitySummary and 0x47.inv() == 0 &&
+                a.routeCost == 0 && a.recoveryFromNodeIdPrefix == null
+        }
+        if (!valid) fail(PcAnnouncementError.Fields)
+        return a
     }
 }
 

@@ -32,13 +32,14 @@ internal object LocalReporting {
 
     @Synchronized
     fun hideStream(context: Context, token: Int) {
+        if (WipeGuard.active) return // review 2026-10-27 (finding 15): nothing is written once a wipe started
         val prefs = prefs(context)
         prefs.edit().putStringSet(STREAMS, prefs.getStringSet(STREAMS, emptySet()).orEmpty() + token.toString()).commit()
     }
 
     @Synchronized
     fun report(context: Context, fingerprint: IdentityFingerprint, streamToken: Int? = null): Boolean =
-        LocalReportPolicy.report({ BlockedPeople.block(context, fingerprint) }) {
+        !WipeGuard.active && LocalReportPolicy.report({ BlockedPeople.block(context, fingerprint) }) {
             val prefs = prefs(context)
             val people = prefs.getStringSet(PEOPLE, emptySet()).orEmpty() + fingerprint.hex
             val streams = prefs.getStringSet(STREAMS, emptySet()).orEmpty() + listOfNotNull(streamToken?.toString())

@@ -358,13 +358,13 @@ class LeLinkTeardownAndAdvertisingTest {
         assertEquals(BluetoothDevice.PHY_LE_2M_MASK, BlePhyPreference.TWO_M.mask)
         assertEquals("2M", BlePhyPreference.TWO_M.label)
         try {
-            DebugTunables.experimentalBle1mPhy = true
+            DebugTunables.experimentalBlePhy = ExperimentalBlePhy.LE_1M
             assertEquals(BluetoothDevice.PHY_LE_1M_MASK, BlePhyPreference.TWO_M.mask)
             assertEquals("1M (experimental)", BlePhyPreference.TWO_M.label)
             // 2M is the only user-facing PHY; ONE_M_ADAPTIVE is chosen internally for a peer remembered bad on 2M.
         assertEquals(listOf(BlePhyPreference.TWO_M, BlePhyPreference.ONE_M_ADAPTIVE), BlePhyPreference.entries)
         } finally {
-            DebugTunables.experimentalBle1mPhy = false
+            DebugTunables.experimentalBlePhy = null
         }
         assertEquals(BluetoothDevice.PHY_LE_2M_MASK, BlePhyPreference.TWO_M.mask)
     }

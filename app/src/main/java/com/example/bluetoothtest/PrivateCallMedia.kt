@@ -234,6 +234,72 @@ internal fun combineCallAudio(packets: List<StreamProtocol.Packet>): StreamProto
     else -> StreamProtocol.batchAudioPackets(packets)
 }
 
+/**
+ * Call audio coalescing (`test_call_audio_coalesce`, default on; DEBUG `=false` is the control). When the call writer takes one
+ * ordinary Opus access unit while more ordinary units already wait in its queue (the link is behind, typically
+ * audio that queued during a blocking video write), it sends them as one existing `BTA1` pair or `BTA2` batch
+ * record instead of one record each. Nothing waits for audio that has not been captured yet, so the added
+ * delay is zero; with an empty queue the record is exactly the single unit, as before.
+ *
+ * Every unit added must be an ordinary unit (flags exactly `AUDIO`: never codec configuration or an
+ * already-combined record), within the format's unit-size limit and within the format's 1 s timestamp span of
+ * the first unit, at most [StreamProtocol.MAX_AUDIO_BATCH_PACKETS] units. [takeNextIf] removes and returns the
+ * oldest queued audio record only when the predicate accepts it, else null (the record stays queued).
+ */
+internal fun <T> coalesceQueuedCallAudio(
+    first: T,
+    flagsOf: (T) -> Int,
+    timeUsOf: (T) -> Long,
+    sizeOf: (T) -> Int,
+    takeNextIf: ((T) -> Boolean) -> T?,
+    maxUnits: Int = StreamProtocol.MAX_AUDIO_BATCH_PACKETS,
+): List<T> {
+    if (!callAudioCoalescible(flagsOf(first), sizeOf(first), 0L) || maxUnits < 2) return listOf(first)
+    val firstTimeUs = timeUsOf(first)
+    val units = arrayListOf(first)
+    while (units.size < minOf(maxUnits, StreamProtocol.MAX_AUDIO_BATCH_PACKETS)) {
+        val next = takeNextIf { candidate ->
+            callAudioCoalescible(flagsOf(candidate), sizeOf(candidate), timeUsOf(candidate) - firstTimeUs)
+        } ?: break
+        units += next
+    }
+    return units
+}
+
+private fun callAudioCoalescible(flags: Int, size: Int, deltaUs: Long): Boolean =
+    flags == StreamProtocol.FLAG_AUDIO &&
+        size <= StreamProtocol.MAX_AUDIO_ACCESS_UNIT_BYTES &&
+        deltaUs in 0..StreamProtocol.MAX_AUDIO_PAIR_GAP_US
+
+/** Removes and returns the oldest queued audio record if [accept] takes it; otherwise leaves the queue unchanged. */
+internal fun <T> takePrivateCallAudioIf(
+    queue: java.util.concurrent.ArrayBlockingQueue<T>,
+    isAudio: (T) -> Boolean,
+    accept: (T) -> Boolean,
+): T? {
+    val waitingAudio = queue.firstOrNull(isAudio) ?: return null
+    if (!accept(waitingAudio)) return null
+    return if (queue.remove(waitingAudio)) waitingAudio else null
+}
+
+/**
+ * Experimental stream audio batches (`test_stream_audio_batch_frames`): units per stream audio record. 2 (default,
+ * and any value outside 3..10) keeps the 40 ms `BTA1` pairs every stream sends today; 3..10 sends 60-200 ms `BTA2`
+ * batches, which every stream receiver and relay already accepts (audio-only live streams send 200 ms batches).
+ * The newest unit of a batch waits up to (frames - 1) x 20 ms longer before it is sent; a stream viewer already
+ * plays several hundred milliseconds behind the source.
+ */
+internal fun streamAudioBatchFrames(requested: Int): Int = if (requested in 3..10) requested else 2
+
+/** A pending stream audio batch can take [next]: same 1 s timestamp span as the format, never backwards. */
+internal fun streamAudioBatchAccepts(pending: List<StreamProtocol.Packet>, next: StreamProtocol.Packet): Boolean {
+    val first = pending.firstOrNull() ?: return true
+    val last = pending.last()
+    return next.presentationTimeUs >= last.presentationTimeUs &&
+        next.presentationTimeUs - first.presentationTimeUs <= StreamProtocol.MAX_AUDIO_PAIR_GAP_US &&
+        next.payload.size <= StreamProtocol.MAX_AUDIO_ACCESS_UNIT_BYTES
+}
+
 internal fun pairPrivateCallAudioForRoute(
     transport: BluetoothTransportOption,
     relayHops: Int,
@@ -251,11 +317,18 @@ internal fun privateCallAudioBatchSizeForRoute(
     peerMaxBitrateKbps: Int? = null,
     /** Experimental legacy low delay (see [privateCallLegacyLowDelay]); false keeps the 20-packet batch. */
     legacyLowDelay: Boolean = false,
+    /**
+     * Experimental call audio pairs (`test_call_audio_pairs`, off by default): a route that would send single
+     * 20 ms units sends 40 ms `BTA1` pairs instead (every peer already accepts them; legacy routes send them today).
+     * Routes that already pair or batch are unchanged.
+     */
+    alwaysPair: Boolean = false,
 ): Int = when {
     transport == BluetoothTransportOption.BLE_L2CAP &&
         !privateCallLegacyLowDelay(legacyLowDelay, relayHops) &&
         pairPrivateCallAudioForRoute(transport, relayHops, fingerprint, peerMaxBitrateKbps) -> 20
     pairPrivateCallAudioForRoute(transport, relayHops, fingerprint, peerMaxBitrateKbps) -> 2
+    alwaysPair -> 2
     else -> 1
 }
 

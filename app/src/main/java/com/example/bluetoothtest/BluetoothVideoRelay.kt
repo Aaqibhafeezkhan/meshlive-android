@@ -254,7 +254,7 @@ class BluetoothVideoRelay(
             "Source did not authenticate ${transport.shortLabel} support"
         }
         if (transport == BluetoothTransportOption.CLASSIC_RFCOMM) {
-            learnClassicPeerAddress(upstreamSocket, session.peerNodeId, "incoming")
+            learnClassicPeerAddress(upstreamSocket, session.peerNodeId, "incoming", session.peerPseudonymous)
         }
         upstreamSession = session
         onStatus("Relay authenticated source ${session.peerNodeId.shortLabel()}.")

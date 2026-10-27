@@ -28,14 +28,14 @@ class MediaPlayoutClock(
     private val adaptiveMaxDelayMs: Long = delayMs,
     calmBeforeShrinkMs: Long = STREAM_CALM_BEFORE_SHRINK_MS,
     /**
-     * Experimental one-step growth (DebugTunables.playoutBurstGrowth, null = off): media at least
+     * Experimental one-step growth (DebugTunables.playoutBurstGrowth via PlaybackDelayProfile, streams only; null = off): media at least
      * [BURST_LATENESS_MS] late grows the delay by this multiple of its lateness at once. With the
      * default lateness + 50 ms per late frame, one GATT scene-cut burst stepped the delay
      * 250 -> ~1030 -> 1350-2000 ms within ~1.5 s, each step a separate hold, and two report rises
      * read as sustained lateness (lane-b F8). The single step trades those holds for one longer hold
      * and more held latency; the A/B measures which users see as better.
      */
-    private val burstGrowthFactor: Double? = DebugTunables.playoutBurstGrowth,
+    private val burstGrowthFactor: Double? = null,
     /**
      * Experimental time-based target (Q31, DebugTunables.playoutTimeTarget, null = off, streams only):
      * the delay grows to the measured arrival jitter before a frame is late, and calm shrinking stops at

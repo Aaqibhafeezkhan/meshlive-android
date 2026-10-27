@@ -53,12 +53,13 @@ for strangers are two more (Settings > Features). All three are on by default an
 
 **Who learns who you are.** With the defaults, a call link carries both phones' identity keys encrypted. A phone that
 is not one of your verified contacts meets a throwaway identity instead of your real one. Your real identity goes only
-to verified contacts and, after you press Accept, to the person whose call you accept; a declined call reveals nothing.
+to verified contacts and, after you press Accept, to whoever holds the call you accept, which may be a relaying phone; a declined call reveals nothing.
 Still true: accepting a call from a stranger tells them who you are, and calling a stranger tells whoever answers who
 you are; a live stream source still answers the old handshake, so a viewer, or anyone who connects to the source,
 learns its identity; and a phone with pseudonyms on refuses the old handshake, so it cannot call, or be called by, an
-older version of the app or a phone that has the switches off. Message exchanges and calls relayed through other
-phones (experimental) work only with verified contacts while pseudonyms are on.
+older version of the app or a phone that has the switches off. Message exchanges work only with verified contacts while pseudonyms are on. Calls relayed through other phones
+(experimental) use a throwaway identity on every relay link; in a call between strangers a relaying phone could sit in
+the middle, so a relayed call from a stranger is marked "via a phone nearby".
 
 **Still stable or exposed.**
 
@@ -80,7 +81,10 @@ phones (experimental) work only with verified contacts while pseudonyms are on.
   not, so on Android 13 and older the name stays readable. Links your phone opens itself still show the name to the
   other side. Settings > Advanced has an option, off by default, to use the neutral name "Phone" instead; it renames the
   phone for everything (headphones, car, watch, PC), shows your original name so you can restore it, and if you
-  uninstall the app while it is on the name stays "Phone" until you rename the phone in Android settings.
+  uninstall the app while it is on the name stays "Phone" until you rename the phone in Android settings. While it is
+  on, the call-ready and viewer-request announcements let an unpaired device that connects read the name, so a Mac can
+  call without asking to pair; the name it reads is "Phone" and nothing else is exposed. If the name changes away from
+  "Phone", those announcements hide it again at once.
 - **Capability bits.** The codec set, transport and relay hint bits stay the same across IDs: a few bits that can
   single out a phone when few others are nearby.
 - **Verified contacts.** After a call you both answered, mutual verified contacts exchange keys that let each recognise
@@ -204,6 +208,12 @@ problem privately, read [SECURITY.md](../SECURITY.md).
   in an encrypted thread store and file vault on the phone, read receipts are off unless you turn them on, and a contact
   connected over an authenticated link can tell that your app supports the newer format (nothing about it is in any
   advertisement). Older messages stay readable as they were.
+- Your call history (Recent) and the small memories the app keeps about phones it met (which ones speak the newer
+  handshake, Classic Bluetooth addresses, which links were slow on 2M) are also encrypted at rest with a Keystore key,
+  and the emergency wipe deletes them.
+- After you accept a call from a stranger, the other side must prove the identity of whoever holds the call (which may
+  be a relaying phone) within seconds, more through relays, or your phone ends the call; until then nothing it sends is
+  played and your camera and microphone stay off.
 - **No cloud or device-to-device backup.** The app opts out of Android backup (`allowBackup="false"`) and excludes all its data from cloud backup and from phone-to-phone transfer (Android 12+ data-extraction rules). Its keys live in
   the hardware-backed Keystore and cannot be restored on another phone, so a backup would be useless, and nothing
   about your calls, contacts or messages (for example call history by peer prefix) is sent to Google's backup.

@@ -77,4 +77,32 @@ class RelayStallHoldoffTest {
         holdoff.onStall(child, 0)
         assertEquals(0L, holdoff.remainingMs("1e3f0761977b", 100))
     }
+
+    @Test
+    fun turningTheStallHoldoffOffKeepsRefusalEscalationsHoldoff() {
+        val key = "7a7a00stall0a4"
+        val stall = RelayStallHoldoff()
+        val refusal = RelayStallHoldoff()
+        fun policy(stallHoldoff: Boolean, refusalEscalation: Boolean) = RelayChildRecoveryPolicy(
+            RelayRecoveryConfig.DEFAULTS.copy(stallHoldoff = stallHoldoff, refusalEscalation = refusalEscalation),
+            EstablishmentFailureTracker(),
+            stall,
+            refusal,
+        )
+        refusal.onStall(key, 1_000) // a refusal round failed a dial
+        // Control arm test_relay_stall_holdoff=false with refusal escalation on (its default): still deferred.
+        val deferred = policy(stallHoldoff = false, refusalEscalation = true).dialDecision(key, 2_000)
+        assertEquals(RelayStallHoldoff.HOLDOFF_MS - 1_000, deferred.heldMs)
+        assertEquals(RelayChildDialGate.Verdict.DEFER_HOLDOFF, deferred.verdict)
+        // Refusal escalation off: its hold-off is not read, and the stall hold-off alone does not see it.
+        assertEquals(0L, policy(stallHoldoff = true, refusalEscalation = false).holdoffRemainingMs(key, 2_000))
+        policy(stallHoldoff = true, refusalEscalation = true).onStallClosed(key, 1_500) // the stall guard closed the next link
+        assertEquals(RelayStallHoldoff.HOLDOFF_MS - 500, policy(true, false).holdoffRemainingMs(key, 2_000))
+        assertEquals(
+            RelayChildDialGate.Verdict.DIAL,
+            policy(stallHoldoff = false, refusalEscalation = false).dialDecision(key, 2_000).verdict,
+        )
+        policy(true, true).onHandshakeComplete(key)
+        assertEquals(0L, policy(true, true).holdoffRemainingMs(key, 2_000))
+    }
 }

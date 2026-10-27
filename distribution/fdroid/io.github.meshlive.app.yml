@@ -34,9 +34,9 @@ Repo: https://github.com/MeshLive/meshlive-android.git
 # `commit` with the tag of the first release built with AGP 8.13.2 or newer: v0.1.0-beta was built with
 # 8.13.0-rc01 and has a path-dependent native library (docs/dev/architecture.md "Distribution and releases", reproducible builds).
 Builds:
-  - versionName: '0.3.0-beta'
-    versionCode: 31
-    commit: v0.3.0-beta
+  - versionName: '0.4.0-beta'
+    versionCode: 61
+    commit: v0.4.0-beta
     subdir: app
     sudo:
       - apt-get update
@@ -62,9 +62,9 @@ Builds:
       - universalApk=false
     ndk: r28c
 
-  - versionName: '0.3.0-beta'
-    versionCode: 32
-    commit: v0.3.0-beta
+  - versionName: '0.4.0-beta'
+    versionCode: 62
+    commit: v0.4.0-beta
     subdir: app
     sudo:
       - apt-get update
@@ -105,8 +105,8 @@ UpdateCheckData: 'app/build.gradle.kts|versionCode\s*=\s*(\d+)|.|versionName\s*=
 VercodeOperation:
   - '%c * 10 + 1'
   - '%c * 10 + 2'
-CurrentVersion: '0.3.0-beta'
-CurrentVersionCode: 32
+CurrentVersion: '0.4.0-beta'
+CurrentVersionCode: 62
 
 # libaom pin (srclibs/libaom.yml): commit 0006e96cdb595ff88950a2c664115335ca5517bf, a main-branch commit after
 # the v3.14.1 tag (tag commit 03087864cf4bea6abb0d28f95cf7843511413d8f). tools/fetch_native_sources.py verifies
@@ -120,7 +120,7 @@ CurrentVersionCode: 32
 # PACKAGE_VERSION="1.5.2" to package_version (CMakeLists.txt checks it) and differs from the tarball tree (UNTESTED).
 #
 # Notes for the build recipe and what is untested
-# - AGP 8.13.2 (stable), Gradle 8.13 (wrapper, SHA-256 pinned), Kotlin 2.0.21, JDK 17, compileSdk/targetSdk 36
+# - AGP 9.4.1 (stable), Gradle 9.6.0 (wrapper, SHA-256 pinned), built-in Kotlin (2.2.10), JDK 17, compileSdk/targetSdk 36
 #   (platform 36 and build-tools 35+), NDK 28.2.13676358 (= r28c), CMake 3.22.1. Dependencies are locked
 #   (app/gradle.lockfile, buildscript-gradle.lockfile) and checksummed (gradle/verification-metadata.xml);
 #   the buildserver needs network access to Google Maven and Maven Central for them.

@@ -274,6 +274,10 @@ class PresenceVault(
                     state = loaded.state
                     floor.raiseTo(loaded.state.generation)
                     clearEphemeral()
+                    // Review 2026-10-27 (finding 14): a phone that was off (or whose app did not run) over a day boundary
+                    // kept the keys of days that are over, its own and its contacts' leases, until the next daily
+                    // maintenance. They are dropped as soon as the store is loaded.
+                    runCatching { pruneExpiredLocked(epochSource()) }
                 }
             }
             PresenceStore.Loaded.Missing -> {
@@ -296,7 +300,46 @@ class PresenceVault(
             }
             is PresenceStore.Loaded.Unreadable -> Unit
         }
+        // A load that just succeeded settles a pending blocked-people revocation before any restored key is used.
+        if (state != null) reconcileBlockedIfPending(force = true)
         return state != null
+    }
+
+    /** Who is blocked (node IDs), or null while the block list cannot be read; set by [requestBlockedReconcile]. */
+    private var blockedPeopleSource: (() -> Set<NodeId>?)? = null
+    private var blockedReconcilePending = false
+    private var lastBlockedAttemptMs = 0L
+    private var reconcilingBlocked = false
+
+    /**
+     * reviewer review 2026-10-27 (finding 5): a contact blocked while rotating IDs were off still holds a current lease. The
+     * revocation stays pending until both the vault and the block list can be read, and it is completed before a restored
+     * key is handed out ([dayKey]), not skipped for the rest of the run after one temporary failure.
+     */
+    @Synchronized
+    fun requestBlockedReconcile(source: () -> Set<NodeId>?) {
+        blockedPeopleSource = source
+        blockedReconcilePending = true
+        ensureLoaded()
+        reconcileBlockedIfPending(force = true)
+    }
+
+    @get:Synchronized
+    val blockedReconcileOutstanding: Boolean get() = blockedReconcilePending
+
+    private fun reconcileBlockedIfPending(force: Boolean) {
+        if (!blockedReconcilePending || reconcilingBlocked || state == null) return
+        val now = clockMs()
+        if (!force && lastBlockedAttemptMs != 0L && now - lastBlockedAttemptMs in 0 until AUTO_RETRY_MS) return
+        lastBlockedAttemptMs = now
+        val blocked = runCatching { blockedPeopleSource?.invoke() }.getOrNull() ?: return
+        reconcilingBlocked = true
+        try {
+            blocked.forEach { revokeForBlocked(it, failClosedWhenUnreadable = false) }
+            blockedReconcilePending = false
+        } finally {
+            reconcilingBlocked = false
+        }
     }
 
     @Synchronized
@@ -317,6 +360,9 @@ class PresenceVault(
                 lastAutoRetryMs = now
                 ensureLoaded()
             }
+        } else {
+            // The block list could not be read at start: retried here (every few seconds) until the revocation is done.
+            reconcileBlockedIfPending(force = false)
         }
         val day = PresenceLeases.dayOf(idEpoch)
         if (!DayKeyWindow.contains(currentEpoch, day)) return null
@@ -439,6 +485,22 @@ class PresenceVault(
         return if (revoke) bump() else false
     }
 
+    /**
+     * [nodeId] was blocked (review 2026-10-27, finding 3). When it received a lease of the current generation, its
+     * "Can see when I'm nearby" is switched off, which starts a new generation ([setVisible]): a blocked contact must not
+     * keep recognising this phone. A contact that holds no current lease is left alone (the lease offer skips blocked
+     * people, [PersonPolicy]); while the store is unreadable the revocation fails closed. True when a revocation happened.
+     */
+    @Synchronized
+    fun revokeForBlocked(nodeId: NodeId, failClosedWhenUnreadable: Boolean = true): Boolean {
+        ensureLoaded()
+        // The start-up reconciliation passes false: an unreadable store must not start a new generation at every launch.
+        val current = state ?: return failClosedWhenUnreadable && failClosed(revoke = true)
+        val existing = current.contacts.firstOrNull { it.nodeId == nodeId } ?: return false
+        if (existing.deliveredGeneration != current.generation) return false
+        return setVisible(nodeId, false)
+    }
+
     /** Forgets [nodeId]: drops its record and, if a lease of the current generation was delivered, starts a new generation. */
     @Synchronized
     fun forget(nodeId: NodeId): Boolean {
@@ -558,6 +620,33 @@ class PresenceVault(
             clearEphemeral()
         }
         return removed
+    }
+
+    /**
+     * The load-time half of [maintain] (review 2026-10-27, finding 14): deletes this phone's day keys of days before
+     * [DayKeyWindow.firstDay] and the contacts' lease days that are over, and stores the result. It never creates a key:
+     * a clock that reads earlier than the stored window must not bring back a day that was already deleted ("a key is
+     * never recreated within a generation"); the daily maintenance on the monotonic epoch adds the new days. Only when
+     * every stored day is over does it run the whole [maintain] (a new window of days that never existed).
+     */
+    private fun pruneExpiredLocked(epoch: Long): Boolean {
+        if (epoch < 0) return false
+        val current = state ?: return false
+        val first = DayKeyWindow.firstDay(epoch)
+        val kept = current.dayKeys.filterKeys { it >= first }
+        if (kept.isEmpty()) return maintain(epoch)
+        var contactsChanged = false
+        val contacts = current.contacts.map { contact ->
+            val presence = contact.presence ?: return@map contact
+            val pruned = presence.pruned(epoch)
+            if (pruned === presence) contact else contact.copyWith(presence = pruned).also { contactsChanged = true }
+        }
+        if (kept.size == current.dayKeys.size && !contactsChanged) return false
+        val next = PresenceState(current.generation, kept, contacts)
+        if (!store.save(next)) return false
+        current.zeroise()
+        state = next
+        return true
     }
 
     /** Moves the stored window to [epoch] and stores it; false when it could not be stored (the state is unchanged). */

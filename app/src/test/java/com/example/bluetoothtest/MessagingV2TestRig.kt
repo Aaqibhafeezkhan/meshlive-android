@@ -249,13 +249,24 @@ internal class SfRig {
         return SfLive(sessionA, sessionB, threadA, threadB, { resultA }, { resultB }, { errorB }, close)
     }
 
+    /**
+     * A session clock that runs [LOAD_SLOWDOWN] times slower than real time, for tests of a long transfer that are not about the
+     * watchdogs: the exchange deadlines (progress, liveness, total) are measured on it, so a host saturated by other builds
+     * cannot end a correct exchange with TIMEOUT, while a stuck exchange still ends at the test's own real-time limit.
+     */
+    fun slowClock(): () -> Long {
+        val start = System.nanoTime()
+        return { (System.nanoTime() - start) / 1_000_000 / LOAD_SLOWDOWN }
+    }
+
     fun sync(
         a: Phone,
         b: Phone,
         onAChunk: (StoreForwardLinkSession, Int, () -> Unit) -> Unit = { _, _, _ -> },
         onBChunk: (StoreForwardLinkSession, Int, () -> Unit) -> Unit = { _, _, _ -> },
         logs: MutableList<String>? = null,
-    ): SfPair = open(a, b, onAChunk, onBChunk, logs).join()
+        monotonicMs: () -> Long = { System.nanoTime() / 1_000_000 },
+    ): SfPair = open(a, b, onAChunk, onBChunk, logs, monotonicMs).join()
 
     /** The real session of [phone] as the responder, with the other end of the link driven by the test. */
     fun scripted(
@@ -285,3 +296,5 @@ internal class SfRig {
 
     fun bytes(size: Int, seed: Int = 1): ByteArray = ByteArray(size).also { java.util.Random(seed.toLong()).nextBytes(it) }
 }
+
+private const val LOAD_SLOWDOWN = 50L

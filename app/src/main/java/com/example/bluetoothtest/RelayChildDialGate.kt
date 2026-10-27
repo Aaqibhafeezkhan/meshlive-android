@@ -1,7 +1,8 @@
 package com.example.bluetoothtest
 
 /**
- * Relay child dial gate (Experimental, default off; DEBUG launch extra `test_relay_hold_in_place=true`).
+ * Relay child dial gate (default on since the connection review B1, 2026-10-27; DEBUG `test_relay_hold_in_place=false`
+ * is the control arm).
  *
  * Why (lane 8, build 2cc4ca5a, b6-q31-c1-reset 01-A0 / 02-A1 / 06-A3, M31 relay -> A15s): after a failed dial the relay
  * marks the child (`EstablishmentFailureTracker`) or holds the next dial off (`RelayStallHoldoff`). Both checks sat inside

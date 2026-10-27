@@ -423,6 +423,51 @@ class ReachTableTest {
         assertNull(u.setupRoute(d, 0))
     }
 
+    /**
+     * Relay-showcase z1/z2 (a15s > m31 > s22 > asus, both callers and the first helper blind to direct offers): the target
+     * is itself a helper, so its own call offer is a helper offer. The first helper's route to it goes through the second
+     * helper, and its redial after a failed 2M attempt must find that helper, never the target its dial announcement names
+     * (the target answered a helper SETUP for itself with FAIL 1 and the second helper never got one).
+     */
+    @Test
+    fun aHelperRedialsItsNextHelperNeverTheTargetThatAlsoOffersHelp() {
+        val t = ReachTable<String>(own, ReachConfig(), { now }, Random(1), directSightings = { false })
+        seenTwice {
+            t.observeOffer("target", offer(d, helper = true), "AA:01")
+            t.observeOffer("r1", offer(r1, helper = true), "AA:10")
+            t.observePage(page(r1, entry(d, 1)), "BB:10")
+        }
+        val route = t.setupRoute(d, 2)!!
+        assertEquals(r1.toList(), route.nextHop!!.toList())
+        assertEquals("r1", route.hop.peer)
+
+        // Both phones re-advertise after the failed dial; the helper's redial goes to the next helper.
+        val failedAt = now
+        now += 1_500
+        t.observeOffer("target-new", offer(d, helper = true), "AA:02")
+        t.observeOffer("r1-new", offer(r1, helper = true), "AA:11")
+        assertEquals("r1-new", t.rediscoverHop(route.nextHop, d, failedAt)!!.peer)
+        // A direct hop (no helper) is the target itself.
+        assertEquals("target-new", t.rediscoverHop(null, d, failedAt)!!.peer)
+        // A helper hop equal to the target is no hop.
+        assertNull(t.rediscoverHop(d, d, failedAt))
+        // Nothing newer than the failure: the known address is redialled.
+        assertNull(t.rediscoverHop(route.nextHop, d, now + 1))
+    }
+
+    @Test
+    fun theTargetIsNeverAHelperRouteForItsOwnCalls() {
+        val t = ReachTable<String>(own, ReachConfig(maxRelays = 4), { now }, Random(1), directSightings = { false })
+        seenTwice {
+            t.observeOffer("target", offer(d, helper = true), "AA:01")
+            // A page that names its own advertiser (a broken or hostile helper) is not a route through the target.
+            t.observePage(page(d, entry(d, 1)), "BB:01")
+        }
+        assertNull(t.setupRoute(d, 2))
+        assertTrue(t.callerRoutes(d).isEmpty())
+        assertTrue(t.relayedTargets().isEmpty())
+    }
+
     @Test
     fun advertisingNeedsFiveSecondsAHelperOfferAndRanksByCostThenAge() {
         val t = table(ReachConfig(maxRelays = 4, advertisedEntries = 4))

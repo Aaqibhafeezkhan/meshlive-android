@@ -134,11 +134,8 @@ class LinkChangeRollbackTest {
         LinkChangeRollbacks.onLinkLost("p", listOf(change(LinkChangeKind.MTU, 0)), 9_900, 8, now)
         assertEquals(185, LinkChangeRollbacks.mtuCap("p"))
         assertNull(LinkChangeRollbacks.mtuCap("other"))
-        assertEquals(BleConnectionPriority.HIGH, LinkChangeRollbacks.priorityFor("p", BleConnectionPriority.HIGH))
         LinkChangeRollbacks.onLinkLost("p", listOf(change(LinkChangeKind.PRIORITY, 0)), 9_900, 8, now)
-        assertEquals(BleConnectionPriority.BALANCED, LinkChangeRollbacks.priorityFor("p", BleConnectionPriority.HIGH))
-        assertEquals(BleConnectionPriority.BALANCED, LinkChangeRollbacks.priorityFor("p", BleConnectionPriority.DCK))
-        assertEquals("a quieter priority is never raised", BleConnectionPriority.LOW, LinkChangeRollbacks.priorityFor("p", BleConnectionPriority.LOW))
+        assertTrue(LinkChangeRollbacks.isDowngraded("p", LinkChangeKind.PRIORITY))
         LinkChangeRollbacks.onBluetoothRestarted()
         assertNull(LinkChangeRollbacks.mtuCap("p"))
     }

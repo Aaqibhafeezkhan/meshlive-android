@@ -30,41 +30,46 @@ class SettingsSwitchesFlowTest {
 
     private fun settings() = phone.preferences(UpdateSettings.PREFERENCES_FILE)
 
-    /** An app start: every feature group registers (the list MainActivity.refreshFeatureCatalog registers), then the stored choices are read. */
+    /** An app start: every feature registers (AppFeatures, as MainActivity and the Application do), then the stored choices are read. */
     private fun startApp(): FeatureSnapshot {
         FeatureCatalog.clearForTest()
-        CallFeatureSpecs.registerAll()
-        ConnectivityFeatures.registerAll()
-        ViewerFeatures.registerAll()
-        UpdateFeatures.registerAll(updaterAvailable = true)
-        NamingFeatures.registerAll()
-        return FeatureCatalog.refresh(false, { false }) { key -> if (settings().contains(key)) settings().getBoolean(key, false) else null }
+        AppFeatures.registerAll(updaterAvailable = true)
+        return FeatureCatalog.refresh(
+            false,
+            { null },
+            { key -> if (settings().contains(key)) settings().getBoolean(key, false) else null },
+            advancedSettings = settings().getBoolean(PREF_ADVANCED_SETTINGS, false),
+        )
     }
+
+    /** The switches a user can touch: constants have no stored choice and no row. */
+    private fun switches(): List<FeatureSpec> = FeatureCatalog.all().filterNot { it.constant }
 
     /** Every sub-option below [spec], at any depth. */
     private fun descendantsOf(spec: FeatureSpec, all: List<FeatureSpec>): List<FeatureSpec> {
-        val direct = all.filter { it.dependsOn == spec.id }
+        val direct = all.filter { spec.id in it.dependsOn }
         return direct + direct.flatMap { descendantsOf(it, all) }
     }
 
-    /** What the Settings card stores when the user touches a switch. */
+    /** What the Settings card stores when the user touches a switch; an Advanced-only row is reached with Advanced on. */
     private fun touch(spec: FeatureSpec, enabled: Boolean) {
-        settings().edit().putBoolean(spec.prefKey, enabled).apply()
+        val edit = settings().edit().putBoolean(requireNotNull(spec.prefKey), enabled)
+        if (spec.advancedOnly) edit.putBoolean(PREF_ADVANCED_SETTINGS, true)
+        edit.apply()
     }
 
     @Test
     fun everySwitchTurnedOnSurvivesARestartAndTurnedOffStaysOff() {
         startApp()
-        val specs = FeatureCatalog.all()
+        val specs = switches()
         assertTrue("the app registers features", specs.isNotEmpty())
 
         specs.forEach { touch(it, true) }
         val allOn = startApp()
         specs.forEach { spec ->
-            val parent = spec.dependsOn
-            // A sub-option is on only while its parent is on; every parent is on here.
+            // A sub-option is on only while its parents are on; every parent is on here.
             assertTrue("${spec.id} stays on after a restart", allOn.isOn(spec))
-            if (parent != null) assertTrue("$parent is on for ${spec.id}", allOn.isOn(parent))
+            spec.dependsOn.forEach { parent -> assertTrue("$parent is on for ${spec.id}", allOn.isOn(parent)) }
         }
 
         specs.forEach { touch(it, false) }
@@ -74,9 +79,9 @@ class SettingsSwitchesFlowTest {
 
     @Test
     fun oneSwitchAtATimeChangesOnlyItself() {
-        val specs = startApp().let { FeatureCatalog.all() }
+        val specs = startApp().let { switches() }
         val standing = startApp()
-        specs.filter { it.dependsOn == null }.forEach { spec ->
+        specs.filter { it.dependsOn.isEmpty() }.forEach { spec ->
             val before = standing.isOn(spec)
             touch(spec, !before)
             val after = startApp()
@@ -85,7 +90,7 @@ class SettingsSwitchesFlowTest {
             specs.filter { it.id != spec.id && it.id !in below }.forEach { other ->
                 assertEquals("${other.id} is unchanged by ${spec.id}", standing.isOn(other), after.isOn(other))
             }
-            settings().edit().remove(spec.prefKey).apply()
+            settings().edit().remove(spec.prefKey).remove(PREF_ADVANCED_SETTINGS).apply()
         }
     }
 
@@ -93,10 +98,10 @@ class SettingsSwitchesFlowTest {
     fun aSwitchTheUserNeverTouchedFollowsTheShippedDefaultAndAnExplicitOffBeatsADefaultOn() {
         val specs = startApp().let { FeatureCatalog.all() }
         val fresh = startApp()
-        specs.filter { it.dependsOn == null }.forEach { spec ->
+        specs.filter { it.dependsOn.isEmpty() }.forEach { spec ->
             assertEquals("${spec.id} default", spec.defaultEnabled, fresh.isOn(spec))
         }
-        val defaultOn = specs.filter { it.dependsOn == null && it.defaultEnabled }
+        val defaultOn = specs.filter { it.dependsOn.isEmpty() && it.defaultEnabled && !it.constant }
         assertTrue("some features ship on", defaultOn.isNotEmpty())
         defaultOn.forEach { touch(it, false) }
         val after = startApp()
@@ -105,13 +110,15 @@ class SettingsSwitchesFlowTest {
 
     @Test
     fun aSubOptionIsOffWhileItsParentIsOffWhateverItsOwnChoice() {
-        val specs = startApp().let { FeatureCatalog.all() }
-        specs.filter { it.dependsOn != null }.forEach { child ->
-            touch(child, true)
-            touch(requireNotNull(FeatureCatalog.spec(child.dependsOn!!)), false)
-            val snapshot = startApp()
-            assertFalse("${child.id} needs ${child.dependsOn}", snapshot.isOn(child))
-            settings().edit().remove(child.prefKey).remove(FeatureCatalog.spec(child.dependsOn!!)!!.prefKey).apply()
+        val specs = startApp().let { switches() }
+        specs.filter { it.dependsOn.isNotEmpty() }.forEach { child ->
+            child.dependsOn.mapNotNull(FeatureCatalog::spec).filterNot { it.constant }.forEach { parent ->
+                touch(child, true)
+                touch(parent, false)
+                val snapshot = startApp()
+                assertFalse("${child.id} needs ${parent.id}", snapshot.isOn(child))
+                settings().edit().remove(child.prefKey).remove(parent.prefKey).apply()
+            }
         }
     }
 

@@ -68,6 +68,9 @@
     <!-- Readiness card -->
     <string name="recent_title">Recent</string>
     <string name="recent_empty">No calls yet</string>
+    <string name="recent_unreadable">Your call history cannot be opened on this phone right now. Tap to clear it.</string>
+    <string name="recent_clear_message">Clear your call history? Recent calls on this phone are deleted. Contacts and blocked people stay.</string>
+    <string name="recent_clear_action">Clear history</string>
     <string name="recent_voice">Voice, %1$s</string>
     <string name="recent_video">Video, %1$s</string>
     <string name="contact_not_found_title">%1$s is not found nearby yet</string>
@@ -154,6 +157,9 @@
     <string name="people_reach_relayed">Via %1$d phones · not confirmed</string>
     <string name="relayed_chain_required">A relayed chain is required for this test; a direct call is refused.</string>
     <string name="relayed_route_gone">That person is no longer reachable through nearby phones. Scanning continues.</string>
+    <!-- Design OR (DEBUG prototype): the on-demand route search of a contact call. -->
+    <string name="relayed_seek_searching">Searching phones nearby for %1$s…</string>
+    <string name="relayed_seek_backed_off">Searched for %1$s just now. A search through phones nearby can run again in %2$d s.</string>
     <string name="relay_preempted">Stopping the call you were helping with, then calling…</string>
     <string name="relay_helping_text">Helping a call nearby</string>
     <string name="relay_stop_action">Stop</string>

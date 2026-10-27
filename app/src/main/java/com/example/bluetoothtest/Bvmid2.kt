@@ -93,7 +93,8 @@ internal interface QrDisplayEvents {
 internal class QrCodeDisplay(
     private val clockMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val random: (ByteArray) -> Unit = SecureRandom()::nextBytes,
-    private val budget: Bmh3SigningBudget = Bmh3Policy.signingBudget,
+    /** The Meet screen's own signing bucket (review 2026-10-27, finding 13), not the one strangers share. */
+    private val budget: Bmh3SigningBudget = Bmh3Policy.meetBudget,
     var events: QrDisplayEvents = QrDisplayEvents.NONE,
 ) {
     enum class Phase { LIVE, RESERVED, CONSUMED }

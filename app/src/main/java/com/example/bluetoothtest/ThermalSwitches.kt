@@ -33,12 +33,6 @@ internal object ThermalSwitches {
             field = value && BuildConfig.DEBUG
         }
 
-    /** `test_adpf_hint` (Experimental, default off): PerformanceHintManager session for the visible call (T-04). */
-    @Volatile var adpfHint: Boolean = false
-        set(value) {
-            field = value && BuildConfig.DEBUG
-        }
-
     /** `test_native_simd_safe_mode` (Experimental, default off): AOM_SIMD_CAPS_MASK relaunch after a native crash at encoder start (T-05). */
     @Volatile var simdSafeMode: Boolean = false
         set(value) {
@@ -57,7 +51,6 @@ internal object ThermalSwitches {
         forecastLegacy10sCadence = boolExtra("test_thermal_forecast_legacy_10s", false)
         batteryFallback = boolExtra("test_thermal_battery_fallback", false)
         memoryTierSizing = boolExtra("test_memory_tier", false)
-        adpfHint = boolExtra("test_adpf_hint", false)
         simdSafeMode = boolExtra("test_native_simd_safe_mode", false)
         userspace32Tier = boolExtra("test_userspace32_tier", false)
     }
@@ -80,6 +73,6 @@ internal object ThermalSwitches {
     fun benchmarkLine(): String =
         "BENCHMARK thermal_switches: forecast=${MemoryThermalPolicy.headroomForecast} | " +
             "forecastLegacy10s=$forecastLegacy10sCadence | batteryFallback=$batteryFallback | " +
-            "memoryTierSizing=$memoryTierSizing | adpfHint=$adpfHint | simdSafeMode=$simdSafeMode | " +
+            "memoryTierSizing=$memoryTierSizing | simdSafeMode=$simdSafeMode | " +
             "userspace32Tier=$userspace32Tier"
 }

@@ -268,7 +268,7 @@ object LinkCapacity {
             context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
         }.getOrDefault(0L)
         if (adapter != null) features = PhoneRadioFeatures.read(adapter)
-        features?.let { prefs?.edit()?.putString("features", it.summary)?.apply() }
+        if (!WipeGuard.active) features?.let { prefs?.edit()?.putString("features", it.summary)?.apply() }
         Log.i(
             "BluetoothVideo",
             "Phone radio features: ${features?.summary ?: "unavailable"}; " +
@@ -380,6 +380,8 @@ object LinkCapacity {
         bps: Int,
         buildKeyed: Boolean = false,
     ) {
+        // Review 2026-10-27 (finding 15): nothing is written once an emergency wipe started (it would recreate the file).
+        if (WipeGuard.active) return
         val key = sustainedKey(transport, use, peer, buildKeyed)
         val edit = prefs?.edit()?.putInt(key, bps)?.putLong("$key.at", System.currentTimeMillis()) ?: return
         if (buildKeyed) edit.putLong("$key.build", buildStamp)
@@ -419,7 +421,7 @@ object LinkCapacity {
     /** Stores [peer]'s report; rewrites only on a 10% change or after [PEER_LINK_REWRITE_MS]. */
     fun recordPeerLinkKbps(transport: BluetoothTransportOption, peer: String, kbps: Int) {
         val store = prefs ?: return
-        if (peer.isEmpty() || kbps <= 0) return
+        if (peer.isEmpty() || kbps <= 0 || WipeGuard.active) return
         val key = "${radioKey(transport)}.peerlink.$peer"
         val now = System.currentTimeMillis()
         val previous = store.getInt(key, 0)
@@ -526,6 +528,7 @@ object LinkCapacity {
         change: (LearnedLinkCapacity) -> LearnedLinkCapacity,
     ) {
         val store = prefs ?: return
+        if (WipeGuard.active) return
         val before = learned(transport, kind)
         val after = change(before)
         if (after == before) return

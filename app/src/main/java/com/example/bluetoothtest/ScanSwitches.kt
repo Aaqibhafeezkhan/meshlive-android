@@ -38,12 +38,6 @@ internal object ScanSwitches {
             field = value && BuildConfig.DEBUG
         }
 
-    /** `test_scan_pause_during_connect` (Experimental, S-07): discovery scans pause while the app dials a link. */
-    @Volatile var pauseDuringConnect: Boolean = false
-        set(value) {
-            field = value && BuildConfig.DEBUG
-        }
-
     /**
      * `test_scan_probe_ungated` (control arm of the quota fix): the DEBUG probes (GapNameProbe, InboundProbe) start
      * scans without taking a scan-start gate slot, as before 2026-10-14. The shipped behaviour gates them: the
@@ -65,7 +59,6 @@ internal object ScanSwitches {
         renewalAll = boolExtra("test_scan_renewal_all", false)
         staleRestart = boolExtra("test_scan_stale_restart", false)
         softwareFilterFallback = boolExtra("test_scan_sw_filter_fallback", false)
-        pauseDuringConnect = boolExtra("test_scan_pause_during_connect", false)
         probeUngated = boolExtra("test_scan_probe_ungated", false)
     }
 

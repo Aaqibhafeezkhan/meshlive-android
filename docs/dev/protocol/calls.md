@@ -20,7 +20,7 @@ Signals are Invite (`1`), Ringing (`2`), Accept (`3`), Decline (`4`), Cancel (`5
 
 **Hang-up before a liveness close (2026-10-20, no wire change).** A call phone that ends a call because nothing arrived from its peer for 8 s (or, with the Experimental stall tolerance, for up to 14 s while its own writes still complete) first writes Hang-up/Error on the link, best effort and for at most 300 ms, then closes as link lost. A peer that can still read (its own sending had stalled) ends at once instead of after its own 8 s; it tells the user that its sound and video stopped reaching the other phone when its own sends have not completed for 3 s, otherwise it shows the Error hang-up as before. Ringing phases send nothing, as before. Control arm `test_call_liveness_hang_up=false`.
 
-**In-call link renewal (Experimental, off by default).** A direct GATT call whose one direction stalled can replace its hop link and keep the call: see "Experimental in-call link renewal (Design SR, off by default)".
+**In-call link renewal (on by default since 2026-10-21).** A direct GATT call whose one direction stalled can replace its hop link and keep the call: see "Experimental in-call link renewal (Design SR, on by default)".
 
 **Busy while dialling (2026-10-19, no wire change).** A callee whose user is dialling someone else declines an Invite at once with Decline/Busy, before any Ringing. "Dialling" means the user's own call is still looking for its person: the address refresh of a tapped row, or a Contacts or Recent call waiting for a sighting. A caller shows Busy as "they are calling someone else or are in another call". Older builds show it as an ordinary decline. An Invite from the very person being dialled (matched by the caller's real node prefix after the handshake; a throwaway never matches) rings as usual and ends the callee's own dial, so two phones that dial each other connect through whichever Invite arrives first.
 
@@ -45,7 +45,7 @@ Admission, overload and capacity guards stay hop-local: each relay still holds e
 
 ### Voice calls and push-to-talk
 
-Status (2026-10-11): no longer experimental. Voice calls are the Settings > Features switch "Voice calls" (shipped default off until the phone test passes; DEBUG `test_voice_calls` is the benchmark switch), and hold-Mute-to-talk is part of every call. The wire is unchanged.
+Status (2026-10-11): no longer experimental. Voice calls are on by default since 2026-10-17 with no Settings switch (DEBUG `test_voice_calls` is the benchmark switch, default off there), and hold-Mute-to-talk is part of every call. The wire is unchanged.
 
 Voice calls add no signal, reason, capability bit or version; `BMC2` stays 23 bytes. The only change is ordering: Camera off (`7`) may now precede acceptance. A voice caller queues Invite and then Camera off in its ordered endpoint sequence. A callee with the experiment on treats Camera off while it is ringing as a voice offer; Camera on while ringing withdraws the offer. A voice answer queues Accept and then Camera off. Neither side starts a camera or video encoder, and no video packet, codec configuration or keyframe is sent. Each `BTV3` header still declares Opus audio and the codec/format that a later upgrade would use. A receiver creates its video decoder only when the first video packet arrives.
 
@@ -68,9 +68,9 @@ In an end-to-end call hello, decode-mask bit 7 (`0x80`) means "decode VP9 when y
 
 Push-to-talk adds no wire value. Holding the button sends Microphone unmuted (`10`), and releasing it sends Microphone muted (`9`). The microphone and Opus encoder keep running, and the sender drops captured audio while muted. Security is unchanged: all signals use the authenticated, ordered endpoint sequence. As with camera off today, a relay or radio observer can infer a voice call or a released talk button from the absence of video or audio records. That is record size/timing metadata.
 
-## Experimental in-call link renewal (Design SR, off by default)
+## Experimental in-call link renewal (Design SR, on by default)
 
-Switch: `test_call_link_renewal` (Experimental, DEBUG, default off; Android `CallLinkRenewal.kt`). Reasons, options and both reviews: DECISIONS "Design SR". A renewal replaces the **hop link** of a running direct GATT call after a one-way stall; the call ID, the call state and the end-to-end `BME1` session (keys and sequences) continue. It is not a redial. The constants below are part of the contract.
+Switch: `test_call_link_renewal` (on by default since 2026-10-21, design decision; DEBUG `false` is the control arm, on both phones; Android `CallLinkRenewal.kt`). Reasons, options and both reviews: DECISIONS "Design SR". A renewal replaces the **hop link** of a running direct GATT call after a one-way stall; the call ID, the call state and the end-to-end `BME1` session (keys and sequences) continue. It is not a redial. The constants below are part of the contract.
 
 **Scope (checked, not assumed).** Only a call whose end-to-end peer is its hop peer: no relay (relay count 0, no relayed route, the link's authenticated node ID equals the end-to-end node ID), over GATT on both ends (a CoC, Classic or dual-listening call that runs on another transport is not renewed), in the `ACTIVE` phase, never a `BVMID2` verification session. A relayed or other call ends as before. Every renewal record is end-to-end content, so a relay never sees or acts on one.
 

@@ -143,8 +143,9 @@ class PlatformBehaviourGuardTest {
      * sticky battery); Android says to pass no flag for those. A new file must pass a flag or be added here with that reason.
      */
     private val systemBroadcastReceiverFiles = setOf(
-        "AdvertisingBudget.kt", "BluetoothEpoch.kt", "BluetoothRestart.kt", "GapNameProbe.kt", "GattLinkLifetime.kt",
-        "ScanRuntime.kt", "MainActivity.kt", "DebugSessionTelemetry.kt", "BleCocClient.kt", "CocAutoGatt.kt",
+        "AdvertisingBudget.kt", "BluetoothEpoch.kt", "BluetoothRestart.kt", "GapNameProbe.kt", "AclDownWatch.kt",
+        "ScanRuntime.kt", "MainActivity.kt", "DebugSessionTelemetry.kt", "CocAutoGatt.kt",
+        "DiscoverableWhenNeutral.kt",
     )
 
     @Test

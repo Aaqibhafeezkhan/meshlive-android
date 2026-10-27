@@ -115,9 +115,15 @@ internal class EstablishmentFailureTracker(
     }
 }
 
-/** Child side: the parent never connected (CoC accept timed out before the link was ever active). */
+/**
+ * Child side: the parent never connected (CoC accept timed out, or a GATT join's wait ended with no connection: review B4,
+ * 2026-10-27; before, the GATT join ended without a stop cause, so the fallback never counted a GATT parent).
+ */
 internal fun isChildEstablishmentFailure(wasActive: Boolean, stopSignature: String?): Boolean =
-    !wasActive && stopSignature?.contains("accept timed out", ignoreCase = true) == true
+    !wasActive && (
+        stopSignature?.contains("accept timed out", ignoreCase = true) == true ||
+            stopSignature?.startsWith(ReceiverStopKind.JOIN_TIMEOUT.name + "|") == true
+        )
 
 /**
  * Relay side: the child connection failed before hop authentication at link establishment (GATT

@@ -108,9 +108,10 @@ class AudioLiveBackgroundTest {
         val spec = AudioLiveFeatures.audioLive
         assertTrue(spec.defaultEnabled)
         assertEquals("test_audio_live", spec.benchmarkExtra)
-        // No Settings row (no title), and a new preference key: a 0.2.0 stored choice no longer applies.
+        // No Settings row: a constant, so no stored choice (0.2.0 or later) applies.
         assertEquals(0, spec.titleRes)
-        assertEquals("feature_audio_live_v2", spec.prefKey)
+        assertNull(spec.prefKey)
+        assertTrue(FeatureCatalog.resolve(spec, benchmarkLaunch = false, extra = { false }, stored = { false }))
         // A normal launch with no stored choice follows the default constant.
         assertTrue(FeatureCatalog.resolve(spec, benchmarkLaunch = false, extra = { false }, stored = { null }))
         // A benchmark launch reads only its own extra.

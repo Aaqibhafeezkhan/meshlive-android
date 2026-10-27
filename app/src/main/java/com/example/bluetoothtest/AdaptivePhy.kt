@@ -4,9 +4,9 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.content.Context
-import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
+import java.io.File
 import java.io.FilterOutputStream
 import java.io.OutputStream
 import java.util.Locale
@@ -381,6 +381,90 @@ internal object AdaptivePhyRegistry {
 }
 
 /**
+ * The bad-2M marks of [AdaptivePhyMemory]: `key -> epoch ms` (purge flags are marks with the value 1), held in memory
+ * and written sealed ([SealedTextFile]) off the caller's thread after each change. Review 2026-10-27 (finding 6): the
+ * keys carry the node labels of peers this phone met, which were plain preferences before.
+ */
+internal class AdaptivePhyMarks(private val file: SealedTextFile?, private val writeAsync: Boolean = true) {
+    private val values = ConcurrentHashMap<String, Long>()
+    private val writer = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "AdaptivePhyMarks").apply { isDaemon = true }
+    }
+
+    /** False while the sealed file could not be read (a passing failure): it is never written over then. */
+    @Volatile private var loadedFromFile = file == null
+
+    init {
+        reloadIfNeeded()
+    }
+
+    /** Reads the stored marks once they can be read; marks recorded meanwhile in this process win. */
+    @Synchronized
+    private fun reloadIfNeeded(): Boolean {
+        if (loadedFromFile) return true
+        val sealed = file ?: return true
+        val text = try {
+            sealed.read()
+        } catch (unavailable: SealedTextUnavailable) {
+            return false
+        } catch (other: Exception) {
+            null
+        }
+        val recent = HashMap(values)
+        text?.let(::decodeInto)
+        values.putAll(recent)
+        loadedFromFile = true
+        return true
+    }
+
+    fun get(key: String): Long? = values[key]
+
+    fun put(key: String, value: Long) {
+        values[key] = value
+        persist()
+    }
+
+    fun flag(key: String): Boolean = (values[key] ?: 0L) != 0L
+
+    fun keys(): Set<String> = values.keys.toSet()
+
+    fun all(): Map<String, Long> = HashMap(values)
+
+    fun remove(keys: Collection<String>, setFlag: String? = null) {
+        keys.forEach { values.remove(it) }
+        setFlag?.let { values[it] = 1L }
+        if (keys.isNotEmpty() || setFlag != null) persist()
+    }
+
+    /** The plain preferences of an earlier build: Long marks and Boolean purge flags. */
+    fun importLegacy(entries: Map<String, *>) {
+        entries.forEach { (key, value) ->
+            when (value) {
+                is Long -> values[key] = value
+                is Boolean -> if (value) values[key] = 1L
+            }
+        }
+        persist()
+    }
+
+    fun encode(): String = values.entries.sortedBy { it.key }.joinToString("\n") { "${it.key}=${it.value}" }
+
+    private fun decodeInto(text: String) {
+        text.lineSequence().forEach { line ->
+            val at = line.lastIndexOf('=')
+            if (at <= 0) return@forEach
+            line.substring(at + 1).toLongOrNull()?.let { values[line.substring(0, at)] = it }
+        }
+    }
+
+    private fun persist() {
+        val sealed = file ?: return
+        val write = Runnable { if (reloadIfNeeded()) runCatching { sealed.write(encode()) } }
+        if (writeAsync) writer.execute(write) else write.run()
+    }
+}
+
+/**
  * Remembers, per authenticated hop peer and transport, that 2M was measured bad: an adaptive move
  * fired on a link to it ([AdaptivePhyLink]), or a 2M link to it died within [EARLY_LOSS_MS] of
  * authentication while this phone sent on fewer than two links of that transport. Later
@@ -418,37 +502,43 @@ internal object AdaptivePhyMemory {
     const val REDISCOVER_MS = 8_000L
     private const val PREFS = "adaptive_phy_memory"
 
-    @Volatile private var prefs: SharedPreferences? = null
+    /** The marks (node labels of peers this phone met) in a sealed file since 2026-10-27 (review finding 6). */
+    @Volatile private var prefs: AdaptivePhyMarks? = null
     private val addressHops = ConcurrentHashMap<String, Pair<BluetoothTransportOption, String>>()
+    private const val SEALED_FILE = "adaptive-phy-memory.bin"
 
     fun attach(context: Context) {
         // The persistent link-change rollback memory (Experimental test_link_change_rollback) and the learned
         // child-link limit share this startup hook.
         runCatching { LinkChangeRollbacks.attach(context) }
         runCatching { DualRoleProbes.attach(context) }
-        prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        prefs?.let { store ->
-            val stale = store.all.keys.filter { it.startsWith("bad2m.") }
-            if (stale.isNotEmpty()) {
-                store.edit().apply { stale.forEach(::remove) }.apply()
-                Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | cleared_format1=${stale.size}")
+        val app = context.applicationContext
+        val marks = AdaptivePhyMarks(SealedTextFile(File(app.noBackupFilesDir, SEALED_FILE), { IdentityVerification.atRestCipher() }))
+        // Earlier builds kept the marks in plain preferences: moved once into the sealed file, then deleted.
+        runCatching {
+            val legacy = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            if (legacy.all.isNotEmpty()) {
+                marks.importLegacy(legacy.all)
+                legacy.edit().clear().commit()
             }
-            if (!store.getBoolean(GATT_FANOUT_PURGED, false)) {
-                val polluted = gattFanOutPollutedKeys(store.all.keys)
-                store.edit().apply {
-                    polluted.forEach(::remove)
-                    putBoolean(GATT_FANOUT_PURGED, true)
-                }.apply()
-                Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | cleared_gatt_fanout=${polluted.size}")
-            }
-            if (DebugTunables.relayPhyGuard && !store.getBoolean(RELAYED_CALL_PURGED, false)) {
-                val relayed = relayedCallViaKeys(store.all.keys)
-                store.edit().apply {
-                    relayed.forEach(::remove)
-                    putBoolean(RELAYED_CALL_PURGED, true)
-                }.apply()
-                Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | cleared_relayed_call_via=${relayed.size}")
-            }
+            app.deleteSharedPreferences(PREFS)
+        }
+        prefs = marks
+        val store = marks
+        val stale = store.keys().filter { it.startsWith("bad2m.") }
+        if (stale.isNotEmpty()) {
+            store.remove(stale)
+            Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | cleared_format1=${stale.size}")
+        }
+        if (!store.flag(GATT_FANOUT_PURGED)) {
+            val polluted = gattFanOutPollutedKeys(store.keys())
+            store.remove(polluted, setFlag = GATT_FANOUT_PURGED)
+            Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | cleared_gatt_fanout=${polluted.size}")
+        }
+        if (DebugTunables.relayPhyGuard && !store.flag(RELAYED_CALL_PURGED)) {
+            val relayed = relayedCallViaKeys(store.keys())
+            store.remove(relayed, setFlag = RELAYED_CALL_PURGED)
+            Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | cleared_relayed_call_via=${relayed.size}")
         }
     }
 
@@ -502,18 +592,18 @@ internal object AdaptivePhyMemory {
     /** DEBUG: removes every bad-2M mark (direct and via); returns how many. */
     fun clearAll(): Int {
         val store = prefs ?: return 0
-        val keys = store.all.keys.filter { it.startsWith("bad2m") }
-        if (keys.isNotEmpty()) store.edit().apply { keys.forEach(::remove) }.commit()
+        val keys = store.keys().filter { it.startsWith("bad2m") }
+        if (keys.isNotEmpty()) store.remove(keys)
         return keys.size
     }
 
     /** DEBUG launch record: every bad-2M mark with its age in hours and whether it is still fresh. */
     fun summary(nowMs: Long = System.currentTimeMillis()): String {
         val store = prefs ?: return "unavailable"
-        val marks = store.all.filter { (key, value) -> key.startsWith("bad2m") && value is Long }
+        val marks = store.all().filterKeys { it.startsWith("bad2m") }
         if (marks.isEmpty()) return "none"
         return marks.entries.sortedBy { it.key }.joinToString(" | ") { (key, value) ->
-            val at = value as Long
+            val at = value
             "%s=%.1fh%s".format(java.util.Locale.ROOT, key, (nowMs - at) / 3_600_000.0, if (fresh(at, nowMs)) "" else "(stale)")
         }
     }
@@ -524,17 +614,17 @@ internal object AdaptivePhyMemory {
 
     fun isBad(transport: BluetoothTransportOption, node: String, nowMs: Long = System.currentTimeMillis()): Boolean {
         if (!enabled || transport == BluetoothTransportOption.CLASSIC_RFCOMM || node.isEmpty()) return false
-        return fresh(prefs?.getLong(key(transport, node), 0L) ?: 0L, nowMs)
+        return fresh(prefs?.get(key(transport, node)) ?: 0L, nowMs)
     }
 
     fun recordBad(transport: BluetoothTransportOption, node: String, reason: String) {
         if (!enabled || transport == BluetoothTransportOption.CLASSIC_RFCOMM || node.isEmpty()) return
         if (RelayUpstream.active && DebugTunables.relayPhyGuard) {
-            Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | node=$node | bad2m=not_recorded | reason=$reason | relay_upstream=true")
+            Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | node=${AdaptivePhyMemory.logLabel(node)} | bad2m=not_recorded | reason=$reason | relay_upstream=true")
             return
         }
-        prefs?.edit()?.putLong(key(transport, node), System.currentTimeMillis())?.apply()
-        Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | node=$node | transport=${transport.name} | bad2m=recorded | reason=$reason")
+        prefs?.put(key(transport, node), System.currentTimeMillis())
+        Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | node=${AdaptivePhyMemory.logLabel(node)} | transport=${transport.name} | bad2m=recorded | reason=$reason")
     }
 
     /** The link to [address] authenticated [node] as its hop peer on [transport]. */
@@ -553,7 +643,7 @@ internal object AdaptivePhyMemory {
     fun recordBadForAddress(address: String?, reason: String) {
         val (transport, node) = address?.let(addressHops::get) ?: return
         if (skipsRelayingHop(address in relayingHops, DebugTunables.relayPhyGuard)) {
-            Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | node=$node | bad2m=not_recorded | reason=$reason | hop_relays=true")
+            Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | node=${AdaptivePhyMemory.logLabel(node)} | bad2m=not_recorded | reason=$reason | hop_relays=true")
             return
         }
         recordBad(transport, node, reason)
@@ -608,20 +698,26 @@ internal object AdaptivePhyMemory {
             runCatching {
                 Log.i(
                     "BluetoothVideo",
-                    "BENCHMARK adaptive_phy: link=$link | node=$node | from=2M to=1M | reason=link_lost_after_phy_change | at=connect",
+                    "BENCHMARK adaptive_phy: link=$link | node=${AdaptivePhyMemory.logLabel(node)} | from=2M to=1M | reason=link_lost_after_phy_change | at=connect",
                 )
             }
             return BlePhyPreference.ONE_M_ADAPTIVE
         }
         Log.i(
             "BluetoothVideo",
-            "BENCHMARK adaptive_phy: link=$link | node=$node | from=2M to=1M | reason=remembered | " +
+            "BENCHMARK adaptive_phy: link=$link | node=${AdaptivePhyMemory.logLabel(node)} | from=2M to=1M | reason=remembered | " +
                 "at=connect | via=$relayedOffer | key=$keySource",
         )
         return BlePhyPreference.ONE_M_ADAPTIVE
     }
 
     internal fun prefixLabel(nodePrefix: ByteArray): String = nodePrefix.joinToString("") { "%02x".format(it) }
+
+    /**
+     * A peer's node label in a log line: DEBUG builds keep it for the benchmark tools; a release log names no peer
+     * (security review 2026-10-27, item 13: a shared or bug-report log listed the peers this phone met).
+     */
+    internal fun logLabel(node: String, debug: Boolean = BuildConfig.DEBUG): String = if (debug) node else "peer"
 
     /**
      * The bad-2M memory key of a direct offer advertising [nodePrefix]. A stable advertisement keys by its prefix. A rotating
@@ -666,15 +762,15 @@ internal object AdaptivePhyMemory {
 
     fun isBadVia(transport: BluetoothTransportOption, advertisedPrefix: String, nowMs: Long = System.currentTimeMillis()): Boolean {
         if (!enabled || transport == BluetoothTransportOption.CLASSIC_RFCOMM || advertisedPrefix.isEmpty()) return false
-        return fresh(prefs?.getLong(viaKey(transport, advertisedPrefix), 0L) ?: 0L, nowMs)
+        return fresh(prefs?.get(viaKey(transport, advertisedPrefix)) ?: 0L, nowMs)
     }
 
     /** The hop that carries a relayed offer advertised as [advertisedPrefix] was bad on 2M. */
     fun recordBadVia(transport: BluetoothTransportOption, advertisedPrefix: String, reason: String) {
         if (!enabled || transport == BluetoothTransportOption.CLASSIC_RFCOMM || advertisedPrefix.isEmpty()) return
         if (RelayUpstream.active && DebugTunables.relayPhyGuard) return
-        prefs?.edit()?.putLong(viaKey(transport, advertisedPrefix), System.currentTimeMillis())?.apply()
-        Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | via=$advertisedPrefix | transport=${transport.name} | bad2m=recorded | reason=$reason")
+        prefs?.put(viaKey(transport, advertisedPrefix), System.currentTimeMillis())
+        Log.i("BluetoothVideo", "BENCHMARK adaptive_phy: link=memory | via=${AdaptivePhyMemory.logLabel(advertisedPrefix)} | transport=${transport.name} | bad2m=recorded | reason=$reason")
     }
 }
 

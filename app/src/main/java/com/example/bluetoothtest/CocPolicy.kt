@@ -328,6 +328,7 @@ internal object CocPolicy {
         reviewed = REVIEWED,
         origin = ORIGIN_BATCH_C,
         legacySwitches = listOf("test_coc_echo_verify=true"),
+        arm = PolicyArm("test_coc_echo_verify=true") { CocSwitches.echoVerify },
         area = PolicyArea.BLUETOOTH_TRANSPORT,
         validation = PolicyValidation.EXPERIMENTAL,
         fallback = "A CoC socket is used as soon as connect() returns.",
@@ -380,20 +381,7 @@ internal object CocPolicy {
     fun resolve(
         traits: DeviceTraits,
         disabled: Set<String> = DeviceFamilyPolicy.switchedOff,
-    ): ResolvedDevicePolicy {
-        val off = disabled + traits.policyOff
-        val allOff = "all" in off
-        val matching = entries.filter { it.matcher.matches(traits) }
-        val implemented = matching.filterNot { it.proposed }
-        val switchedOff = implemented.filter { allOff || it.id in off }
-        return ResolvedDevicePolicy(
-            traits = traits,
-            disabled = disabled,
-            active = implemented - switchedOff.toSet(),
-            switchedOff = switchedOff,
-            matchingProposals = matching.filter { it.proposed },
-        )
-    }
+    ): ResolvedDevicePolicy = DevicePolicyOff.resolve(entries, traits, disabled)
 
     fun current(): ResolvedDevicePolicy = resolve(DeviceTraits.current())
 }

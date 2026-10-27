@@ -55,4 +55,14 @@ internal object WeakPairReach {
         if (!on || typicalGapMs == null || typicalGapMs <= 0L) return DIAL_WAIT_MIN_MS
         return (typicalGapMs * DIAL_WAIT_SIGHTINGS).coerceIn(DIAL_WAIT_MIN_MS, DIAL_WAIT_MAX_MS)
     }
+
+    /**
+     * With relayed calls on, a contact may be reachable only through one or two other phones. A route is learned one hop
+     * at a time (about 12-20 s for one relay, 25-35 s for two, measured 3-8 s when helpers already know it), so the wait
+     * gives two hops room before saying the contact cannot be found.
+     */
+    const val RELAYED_CONTACT_WAIT_MS = 45_000L
+
+    fun contactDialWaitMs(directWaitMs: Long, relayedCalls: Boolean): Long =
+        if (relayedCalls) maxOf(directWaitMs, RELAYED_CONTACT_WAIT_MS) else directWaitMs
 }

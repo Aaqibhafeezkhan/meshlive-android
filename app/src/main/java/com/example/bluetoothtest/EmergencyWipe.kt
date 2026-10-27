@@ -455,6 +455,8 @@ object EmergencyWipe {
         override fun resetInMemoryState() {
             IdentityVerification.clearForWipe()
             BlockedPeople.clearForWipe()
+            PersonPolicy.clearForWipe()
+            Bmh3Android.clearForWipe()
             ContactClaims.clearForWipe()
             StoreForwardRuntime.clearForWipe()
             RotatingDiscovery.clearForWipe()

@@ -45,6 +45,58 @@ class IdentityVerificationTest {
 
     private fun store() = VerifiedContactStore(File(directory, "verified-contacts.bin"), cipher) { 1_700_000_000_000L }
 
+    /**
+     * reviewer review 2026-10-27 (finding 3): two stores sealing for the first time at once each generated the shared key, and
+     * the second generation replaced the first's. Under [AddOnlyKey] the key is created once, whoever asks first.
+     */
+    @Test
+    fun twoFirstUsersOfTheSharedKeyGetTheSameKeyAndItIsCreatedOnce() {
+        val store = java.util.concurrent.atomic.AtomicReference<Any?>(null)
+        val created = java.util.concurrent.atomic.AtomicInteger()
+        val start = java.util.concurrent.CountDownLatch(1)
+        val results = java.util.Collections.synchronizedList(mutableListOf<Any>())
+        val threads = (1..8).map {
+            thread {
+                start.await()
+                results += AddOnlyKey.getOrCreate(get = { store.get() }, create = {
+                    Thread.sleep(5)
+                    Any().also { key -> created.incrementAndGet(); store.set(key) }
+                })
+            }
+        }
+        start.countDown()
+        threads.forEach { it.join() }
+        assertEquals(1, created.get())
+        assertEquals(1, results.toSet().size)
+    }
+
+    /** reviewer review 2026-10-27 (finding 7): the mismatch error itself (which callers log) names no peer in a release build. */
+    @Test
+    fun aReleaseMismatchErrorNamesNoPeer() {
+        assertFalse(PeerIdentityGate.mismatchMessage("peer", "a1b2c3d4e5f6", debug = false).contains("a1b2c3d4e5f6"))
+        assertTrue(PeerIdentityGate.mismatchMessage("peer", "a1b2c3d4e5f6", debug = true).contains("a1b2c3d4e5f6"))
+    }
+
+    /** Security review 2026-10-27 (item 13): the bad-2M memory's lines name no peer in a release build. */
+    @Test
+    fun aReleaseLogOfThePhyMemoryNamesNoPeer() {
+        assertEquals("peer", AdaptivePhyMemory.logLabel("a1b2c3d4e5f6", debug = false))
+        assertEquals("a1b2c3d4e5f6", AdaptivePhyMemory.logLabel("a1b2c3d4e5f6", debug = true))
+    }
+
+    /** Review 2026-10-27 (finding 12): a release log line of the identity gate keeps the event but names no peer. */
+    @Test
+    fun aReleaseLogOfAnImpersonationAttemptNamesNoPeer() {
+        val prefix = "a1b2c3d4e5f6"
+        for (event in PeerIdentityGate.SecurityEvent.entries) {
+            val release = PeerIdentityGate.securityLine(event, "peer", prefix, MismatchPolicy.REFUSE, debug = false)
+            assertFalse(release.contains(prefix))
+            assertTrue(PeerIdentityGate.securityLine(event, "peer", prefix, MismatchPolicy.REFUSE, debug = true).contains(prefix))
+        }
+        assertTrue(PeerIdentityGate.securityLine(PeerIdentityGate.SecurityEvent.MISMATCH, "peer", prefix, MismatchPolicy.REFUSE, debug = false)
+            .startsWith("IDENTITY MISMATCH"))
+    }
+
     @Test
     fun fingerprintIsSha256OverTheExactIdentityKeyEncodingAndExtendsTheNodeId() {
         val identity = KeyPairSigningIdentity(generateEcKeyPair())

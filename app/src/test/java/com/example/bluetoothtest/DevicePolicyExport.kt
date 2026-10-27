@@ -15,7 +15,13 @@ internal object DevicePolicyExport {
         ),
     )
 
-    private fun entry(entry: DevicePolicyEntry): Map<String, Any?> = linkedMapOf(
+    private fun entry(entry: DevicePolicyEntry): Map<String, Any?> = entryFields(entry).also { fields ->
+        // Set only where used, so other entries export exactly as before (tools/device_policy_report.py reads both).
+        if (entry.supersededBy != null) fields["superseded_by"] = entry.supersededBy
+        if (entry.arm != null) fields["arm"] = entry.arm.switch
+    }
+
+    private fun entryFields(entry: DevicePolicyEntry): MutableMap<String, Any?> = linkedMapOf(
         "id" to entry.id,
         "title" to entry.title,
         "status" to if (entry.proposed) "proposed" else "implemented",
@@ -92,7 +98,7 @@ internal object DevicePolicyExport {
                 "stack_lineage" to traits.stackFamily.name, // umbrella value: tools/device_policy_report.py derives the same two
                 "codec_components" to traits.codecComponents,
             ),
-            "active" to resolved.active.filter { it.component == null }.map { it.id },
+            "active" to resolved.reportedActive.filter { it.component == null }.map { it.id },
             "component_rules" to resolved.active.filter { it.component != null }.associate { entry ->
                 entry.id to traits.codecComponents.filter { entry.component!!.matches(it) }
             }.filterValues { it.isNotEmpty() },

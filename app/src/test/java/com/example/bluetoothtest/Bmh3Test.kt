@@ -650,6 +650,28 @@ class Bmh3Test {
     }
 
     @Test
+    fun aHelperSignsRelaySeekInItsLinkResponderBlockOnlyAndTheInitiatorReadsIt() {
+        // Design OR (DEBUG prototype): RELAY_SEEK (type 5) rides in the responder's signed LINK block; none by default.
+        for (bits in listOf<Int?>(null, RelaySeek.FEATURE_SEEK_V1)) {
+            val pipes = Duplex()
+            val out = both(
+                { SecureBluetoothHandshake.initiate(pipes.bToA.input, pipes.aToB.output, newIdentity(), caps, bmh3 = Bmh3InitiatorOptions()) },
+                {
+                    SecureBluetoothHandshake.respond(
+                        pipes.aToB.input, pipes.bToA.output, newIdentity(), responderCaps,
+                        bmh3 = Bmh3ResponderOptions().also { options -> options.relaySeek = { bits } },
+                    )
+                },
+            )
+            assertEquals(bits ?: 0, out.initiator.getOrThrow().peerRelaySeek)
+            assertEquals("an initiator never signs it", 0, out.responder.getOrThrow().peerRelaySeek)
+        }
+        // Never in an end-to-end block, even when asked for.
+        val endToEnd = Bmh3Config(Bmh3Purpose.END_TO_END, newIdentity(), caps, relaySeek = 1)
+        assertEquals(null, endToEnd.relaySeek)
+    }
+
+    @Test
     fun aBmh3InitiatorFailsClosedAgainstAnOldResponderAndNeverFallsBack() {
         val pipes = Duplex()
         val written = ByteArrayOutputStream()

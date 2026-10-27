@@ -1,0 +1,5 @@
+Calls through other phones (beta): call a contact who is out of range through phones in between. Turn on in Settings > Advanced.
+Privacy: a stranger who calls you must prove who they are before your video and audio are sent. Blocking now also covers livestreams and relaying.
+Calls from a Mac no longer ask to pair when Hide phone name is on.
+More reliable call setup and reconnection; fewer dropped calls.
+Lower audio delay in calls on slow links.

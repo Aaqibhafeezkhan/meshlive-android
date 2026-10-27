@@ -86,10 +86,13 @@ class FdroidRecipeTests(unittest.TestCase):
 
     def test_no_updater_class_lives_in_the_fdroid_source_set(self):
         fdroid_sources = sorted(p.name for p in (ROOT / "app/src/fdroid").rglob("*.kt"))
-        self.assertEqual(fdroid_sources, ["FlavourUpdater.kt"])
-        text = (ROOT / "app/src/fdroid/java/com/example/bluetoothtest/FlavourUpdater.kt").read_text(encoding="utf-8")
-        for forbidden in ("HttpURLConnection", "PackageInstaller", "URL(", "JobScheduler"):
-            self.assertNotIn(forbidden, text)
+        # FlavourBattery.kt is the battery-exemption prompt every flavour defines (github and play have their own);
+        # it holds no network, installer or scheduler code, which the forbidden-token check below enforces on both.
+        self.assertEqual(fdroid_sources, ["FlavourBattery.kt", "FlavourUpdater.kt"])
+        for name in fdroid_sources:
+            text = (ROOT / "app/src/fdroid/java/com/example/bluetoothtest" / name).read_text(encoding="utf-8")
+            for forbidden in ("HttpURLConnection", "PackageInstaller", "URL(", "JobScheduler"):
+                self.assertNotIn(forbidden, text, name)
 
 
 if __name__ == "__main__":

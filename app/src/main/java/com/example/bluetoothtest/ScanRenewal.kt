@@ -286,70 +286,6 @@ internal class ScanRenewal(
     fun restartAfterEnvironmentChange(): RenewalOutcome = renewNow("environment", force = true)
 }
 
-/**
- * Pause bookkeeping for the connect-establishment arm (batch S-07, Experimental, default off). The
- * dial paths call [pauseFor]; with `test_scan_pause_during_connect` off they only record the window,
- * which tags discovery statistics that overlap an own connect attempt (diagnostic, always on).
- */
-internal class ScanGateImpl(
-    private val registry: ScanRegistryImpl,
-    private val timer: ScanTimer,
-    private val clock: () -> Long,
-    private val pauseEnabled: () -> Boolean = { ScanSwitches.pauseDuringConnect },
-) {
-    private val windows = ArrayDeque<LongArray>() // [startMs, endMs]
-    private var pausedUntilMs = 0L
-    private var cancelResume: (() -> Unit)? = null
-    private var paused: List<ScanRegistryImpl.Entry> = emptyList()
-
-    @Volatile var pausedNow: Boolean = false
-        private set
-
-    @Synchronized
-    fun pauseFor(ms: Long) {
-        val now = clock()
-        val end = now + ms.coerceAtLeast(0L)
-        windows.addLast(longArrayOf(now, end))
-        while (windows.size > MAX_WINDOWS) windows.removeFirst()
-        if (!pauseEnabled() || ms <= 0L) return
-        if (!pausedNow) {
-            paused = registry.running(renewableOnly = true)
-            registry.pause(paused)
-            pausedNow = true
-        }
-        pausedUntilMs = maxOf(pausedUntilMs, end)
-        cancelResume?.invoke()
-        cancelResume = timer.schedule(pausedUntilMs - now) { resume() }
-    }
-
-    @Synchronized
-    private fun resume() {
-        if (!pausedNow) return
-        pausedNow = false
-        cancelResume = null
-        pausedUntilMs = 0L
-        // The restart is the entries' own start (it reserves a slot at ScanStartGate).
-        registry.resume(paused)
-        paused = emptyList()
-    }
-
-    /** Milliseconds of [startMs, endMs] that overlap own connect attempts; 0 when none. */
-    @Synchronized
-    fun overlapMs(startMs: Long, endMs: Long): Long {
-        var total = 0L
-        for (w in windows) {
-            val from = maxOf(startMs, w[0])
-            val to = minOf(endMs, w[1])
-            if (to > from) total += to - from
-        }
-        return total
-    }
-
-    private companion object {
-        const val MAX_WINDOWS = 64
-    }
-}
-
 /** Process-wide instances (batch S). The wiring to Android (clock, timer, gate) lives here and in [ScanRuntime]. */
 internal object ScanRegistry {
     val shared = ScanRegistryImpl()
@@ -371,14 +307,6 @@ internal object ScanRegistry {
     fun renewAll(): Boolean = ScanRuntime.renewal.renewNow("manual", force = false) == RenewalOutcome.STARTED
 }
 
-/** `ScanGate.pauseFor(ms)`: consulted by BleL2capDiscovery's dial paths (root hook in the GATT/CoC connect code). */
-internal object ScanGate {
-    val shared by lazy { ScanGateImpl(ScanRegistry.shared, HandlerScanTimer(), SystemClock::elapsedRealtime) }
-
-    fun pauseFor(ms: Long) = shared.pauseFor(ms)
-
-    fun overlapMs(startMs: Long, endMs: Long): Long = shared.overlapMs(startMs, endMs)
-}
 
 internal fun scanLog(line: String) {
     Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + line)

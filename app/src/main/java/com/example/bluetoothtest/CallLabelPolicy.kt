@@ -131,12 +131,10 @@ internal object NamingSettings {
     const val EXTRA_AUDIENCE = "test_names_audience"
     const val EXTRA_BEFORE_ANSWER = "test_names_before_answer"
 
-    /** The one default of "Show my name before they answer" (design decision G-Q1, 2026-10-12: on). */
-    const val BEFORE_ANSWER_DEFAULT = true
-
     fun audience(benchmarkLaunch: Boolean, extra: (String) -> String?, stored: (String) -> String?): NamesAudience =
         NamesAudience.fromPref(if (benchmarkLaunch) extra(EXTRA_AUDIENCE) else stored(PREF_AUDIENCE))
 
+    /** The spec's one default ([NamingFeatureDefaults.NAMES_BEFORE_ANSWER], design decision G-Q1) by the shared rule. */
     fun nameBeforeAnswer(benchmarkLaunch: Boolean, extra: (String) -> Boolean, stored: (String) -> Boolean?): Boolean =
-        if (benchmarkLaunch) extra(EXTRA_BEFORE_ANSWER) else stored(PREF_BEFORE_ANSWER) ?: BEFORE_ANSWER_DEFAULT
+        FeatureCatalog.resolve(NamingFeatures.NAMES_BEFORE_ANSWER, benchmarkLaunch, extra, stored)
 }

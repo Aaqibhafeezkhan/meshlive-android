@@ -815,11 +815,19 @@ object AutoQualityFeature {
     /** DEBUG-only encoder class override for the control matrix: strong, standard or weak. */
     const val CLASS_EXTRA = "test_auto_ladder_class"
 
+    /** A constant, default off, with no Settings row; the extra decides in any DEBUG launch ([FeatureCatalog.resolve]). */
+    val spec = FeatureSpec(
+        id = "auto_ladder",
+        prefKey = null,
+        defaultEnabled = false,
+        benchmarkExtra = EXTRA,
+        group = ViewerFeatures.GROUP,
+        extraInAnyDebugLaunch = true,
+    )
+
     @Volatile var enabled = false
 
     @Volatile internal var encoderClassOverride: AutoEncoderClass? = null
-
-    fun resolve(debugBuild: Boolean, extraValue: Boolean): Boolean = debugBuild && extraValue
 
     internal fun parseClass(value: String?): AutoEncoderClass? =
         AutoEncoderClass.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }

@@ -16,11 +16,6 @@ internal data object MemoryTierSizing : DevicePolicyEffect {
     override fun describe(): String = "4 MiB sender queue and lag cap 8 on the 4 GB limiter tier and on low-RAM phones below 3200 MiB"
 }
 
-/** Experimental: ADPF hint session for the visible call. */
-internal data object AdpfHintSessionEffect : DevicePolicyEffect {
-    override fun describe(): String = "PerformanceHintManager session for the encode threads while an activity is visible"
-}
-
 /** Experimental: AOM_SIMD_CAPS_MASK after a native crash at encoder start. */
 internal data object NativeSimdSafeModeEffect : DevicePolicyEffect {
     override fun describe(): String = "relaunch with AOM_SIMD_CAPS_MASK=0x3 (NEON, CRC32) after a native crash within 10 s of encoder init"
@@ -66,18 +61,6 @@ internal object ThermalFamilyEntries {
         "https://source.android.com/docs/core/perf/lmkd",
         "lmkd kills by pressure-stall information since Android 10; low-RAM configurations use stricter stall and swap " +
             "thresholds (the page does not state kill rules for foreground-service processes)",
-    )
-    private val ADPF_HINT = PolicySource(
-        PolicySourceKind.AOSP_SOURCE,
-        "https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/os/PerformanceHintManager.java",
-        "createHintSession(tids, targetNs) returns null when unsupported and throws on an empty tid list or non-positive " +
-            "target; HintManagerService pauses a session while the uid's process state is above IMPORTANT_FOREGROUND " +
-            "(as read in research note cpu-power.md section 5; the AOSP files were not re-fetched for this entry)",
-    )
-    private val HINT_MANAGER = PolicySource(
-        PolicySourceKind.API_REFERENCE,
-        "https://developer.android.com/reference/android/os/PerformanceHintManager",
-        "PerformanceHintManager, API 31; Session.updateTargetWorkDuration, reportActualWorkDuration, close",
     )
     private val AOM_ARM64_DETECT = PolicySource(
         PolicySourceKind.GOOGLE_OPEN_SOURCE,
@@ -149,30 +132,6 @@ internal object ThermalFamilyEntries {
             validation = PolicyValidation.EXPERIMENTAL,
             fallback = "The original 8 MiB sender queue, or 4 MiB on isLowRamDevice (low-ram-sender-queue)",
             legacySwitches = listOf("DEBUG test_memory_tier=true enables the sizing (default off); the tier log is always on"),
-        ),
-        DevicePolicyEntry(
-            id = "adpf-hint-session",
-            title = "ADPF performance hint session for the visible call",
-            matcher = DeviceMatcher(sdkMin = 31),
-            effects = listOf(AdpfHintSessionEffect),
-            behaviour = "Proposed (Experimental, test_adpf_hint=true): while an activity is visible (process importance " +
-                "FOREGROUND or VISIBLE) the encode threads get a PerformanceHintManager session with target 1/fps and the " +
-                "measured work time per frame; closed when the process leaves the screen. Never for the screen-off relay: the " +
-                "platform pauses sessions below IMPORTANT_FOREGROUND. createHintSession returning null (no vendor support) " +
-                "ends the attempt for the process; nothing is inferred from the SoC.",
-            sources = listOf(ADPF_HINT, HINT_MANAGER),
-            sourceStatus = PolicySourceStatus.PARTIAL,
-            evidence = listOf("none: no hint session has been created on an owned phone"),
-            confidence = PolicyConfidence.LOW,
-            reviewed = REVIEWED,
-            origin = "new experiment (T-04)",
-            confidenceNote = "The API is documented; vendor support varies, the pause rule is read from the research note on " +
-                "HintManagerService, and the benefit and power cost for the libaom threads are unmeasured.",
-            area = PolicyArea.MEMORY_THERMAL,
-            proposed = true,
-            validation = PolicyValidation.EXPERIMENTAL,
-            fallback = "No hint session; the encode-time governor alone adapts the preset",
-            legacySwitches = listOf("DEBUG test_adpf_hint=true enables the code path (default off)"),
         ),
         DevicePolicyEntry(
             id = "native-simd-safe-mode",

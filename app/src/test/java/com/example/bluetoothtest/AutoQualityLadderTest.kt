@@ -355,9 +355,11 @@ class AutoQualityLadderTest {
     @Test
     fun switchIsOffByDefaultAndDebugOnly() {
         assertFalse(AutoQualityFeature.enabled)
-        assertFalse(AutoQualityFeature.resolve(debugBuild = true, extraValue = false))
-        assertFalse(AutoQualityFeature.resolve(debugBuild = false, extraValue = true))
-        assertTrue(AutoQualityFeature.resolve(debugBuild = true, extraValue = true))
+        val spec = AutoQualityFeature.spec
+        assertFalse(FeatureCatalog.resolve(spec, false, { false }, { null }, debugBuild = true))
+        assertFalse(FeatureCatalog.resolve(spec, false, { true }, { true }, debugBuild = false))
+        assertTrue(FeatureCatalog.resolve(spec, false, { true }, { null }, debugBuild = true))
+        assertTrue(FeatureCatalog.resolve(spec, true, { true }, { null }, debugBuild = true))
         assertEquals(AutoEncoderClass.STRONG, AutoQualityFeature.parseClass("strong"))
         assertEquals(AutoEncoderClass.WEAK, AutoQualityFeature.parseClass("WEAK"))
         assertNull(AutoQualityFeature.parseClass("other"))

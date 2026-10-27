@@ -224,13 +224,4 @@ internal object LinkChangeRollbacks {
     /** The MTU cap for [peer], or null. Hook for the GATT MTU request. */
     fun mtuCap(peer: String?): Int? = DOWNGRADED_MTU.takeIf { isDowngraded(peer, LinkChangeKind.MTU) }
 
-    /** BALANCED instead of [planned] for a peer whose priority change was followed by a lost link. Hook for the priority request. */
-    fun priorityFor(peer: String?, planned: BleConnectionPriority): BleConnectionPriority =
-        if ((planned == BleConnectionPriority.HIGH || planned == BleConnectionPriority.DCK) &&
-            isDowngraded(peer, LinkChangeKind.PRIORITY)
-        ) {
-            BleConnectionPriority.BALANCED
-        } else {
-            planned
-        }
 }

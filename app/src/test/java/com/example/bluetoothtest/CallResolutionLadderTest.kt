@@ -104,9 +104,13 @@ class CallResolutionLadderTest {
 
     @Test
     fun benchmarkLaunchesAreOffUnlessTheExtraTurnsTheLadderOn() {
-        assertTrue(CallResolutionLadderFeature.resolve(benchmarkLaunch = false, hasExtra = false, extraValue = false))
-        assertFalse(CallResolutionLadderFeature.resolve(benchmarkLaunch = true, hasExtra = false, extraValue = false))
-        assertTrue(CallResolutionLadderFeature.resolve(benchmarkLaunch = true, hasExtra = true, extraValue = true))
-        assertFalse(CallResolutionLadderFeature.resolve(benchmarkLaunch = true, hasExtra = true, extraValue = false))
+        val spec = CallResolutionLadderFeature.spec
+        val absent = { _: String -> null as Boolean? }
+        assertTrue(FeatureCatalog.resolve(spec, false, absent, { null }))
+        assertFalse(FeatureCatalog.resolve(spec, true, absent, { null }))
+        assertTrue(FeatureCatalog.resolve(spec, true, { true }, { null }))
+        assertFalse(FeatureCatalog.resolve(spec, true, { false }, { null }))
+        // A constant: no stored choice reaches it.
+        assertTrue(FeatureCatalog.resolve(spec, false, absent, { false }))
     }
 }

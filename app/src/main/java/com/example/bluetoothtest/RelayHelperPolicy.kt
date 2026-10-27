@@ -7,12 +7,16 @@ internal enum class HelperPause(val label: String) {
     HELP_OFF("helping switched off"),
     ROTATING_IDS("rotating IDs on"),
     CLASSIC_TRANSPORT("Classic calls"),
+    /** DeviceFamilyPolicy `mediatek-call-relay-gatt-helper-off`: this phone helps only over LE CoC, and the call endpoint is GATT. */
+    GATT_FAMILY("CoC only on this phone"),
     BLUETOOTH("Bluetooth or permissions"),
     NOT_CALL_READY("not reachable for calls"),
     BATTERY("battery low"),
     BATTERY_SAVER("battery saver"),
     THERMAL("phone hot"),
     OWN_ACTIVITY("own call or stream"),
+    /** Design OR (DEBUG prototype) without Amendment CP: a helper with BMH3 pseudonyms on cannot serve a search. */
+    PSEUDONYMS("pseudonymous toward strangers"),
 }
 
 internal enum class HelperScan { BALANCED, LOW_POWER }
@@ -25,6 +29,8 @@ internal data class RelayHelperInputs(
     val rotatingCompat: Boolean = false,
     /** The call transport is LE (CoC or GATT); Classic is not relayed on demand. */
     val leTransport: Boolean,
+    /** The call transport is GATT and this phone's family policy keeps helper duty on LE CoC ([RelayedCalls.gattHelperDutyBlocked]). */
+    val gattHelperBlocked: Boolean = false,
     val bluetoothReady: Boolean,
     /** The call endpoint is available (reachable for calls) and not in a call, ringing or exchange. */
     val callReady: Boolean,
@@ -36,6 +42,8 @@ internal data class RelayHelperInputs(
     /** The user's own call, ringing call, stream, viewing or message exchange. */
     val ownActivity: Boolean,
     val screenOn: Boolean,
+    /** Design OR on, outside its helper scope (rotating IDs and BMH3 on, pseudonyms off). False otherwise. */
+    val seekScopeBlocked: Boolean = false,
 )
 
 internal data class RelayHelperPlan(
@@ -59,12 +67,14 @@ internal object RelayHelperPolicy {
             !inputs.helpOn -> HelperPause.HELP_OFF
             inputs.rotatingIdsOn && !inputs.rotatingCompat -> HelperPause.ROTATING_IDS
             !inputs.leTransport -> HelperPause.CLASSIC_TRANSPORT
+            inputs.gattHelperBlocked -> HelperPause.GATT_FAMILY
             !inputs.bluetoothReady -> HelperPause.BLUETOOTH
             inputs.ownActivity -> HelperPause.OWN_ACTIVITY
             !inputs.callReady -> HelperPause.NOT_CALL_READY
             inputs.batterySaver -> HelperPause.BATTERY_SAVER
             relayAutoPaused(inputs.batteryPercent, inputs.charging, batterySaver = false) -> HelperPause.BATTERY
             inputs.thermalSevere -> HelperPause.THERMAL
+            inputs.seekScopeBlocked -> HelperPause.PSEUDONYMS
             else -> HelperPause.NONE
         }
         val scan = if (inputs.screenOn || inputs.charging) HelperScan.BALANCED else HelperScan.LOW_POWER

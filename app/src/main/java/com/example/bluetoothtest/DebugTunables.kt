@@ -203,8 +203,9 @@ object DebugTunables {
         }
 
     /**
-     * Experimental, DEBUG only (`test_gatt_chunk_recovery=true`, default off): `GR1` lost-chunk recovery on GATT links
-     * ([GattChunkRecovery], DECISIONS "Design GR" option C). Off: no history, no type-2 values sent, type 2 ignored.
+     * Default on since 2026-10-21 (design decision; DEBUG `test_gatt_chunk_recovery=false` is the control arm): `GR1` lost-chunk
+     * recovery on GATT links ([GattChunkRecovery], DECISIONS "Design GR" option C). Off: no history, no type-2 values sent,
+     * type 2 ignored.
      */
     @Volatile var gattChunkRecovery: Boolean = true
         set(value) {
@@ -235,6 +236,33 @@ object DebugTunables {
         set(value) {
             // Default on (design decision 2026-10-21); DEBUG launches can pass false as the control arm.
             field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default off, DEBUG `test_dial_recent_sighting`): a dial to a row heard under 1.5 s ago starts at once
+     * instead of waiting for the next sighting ([RecentSightingDial]). Release builds never enable it.
+     */
+    @Volatile var dialRecentSighting: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default off, DEBUG `test_relay_join_key_frame`): a source honours a relay child's keyframe request
+     * after a 2 s calm gap at once, bypassing the recovery back-off ([RelayJoinKeyFrame]). Release builds never enable it.
+     */
+    @Volatile var relayJoinKeyFrame: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default off, DEBUG `test_fast_0x3e_dials`): a call's first GATT dial redials a fast 0x3E failure up to
+     * 4 dials, 0.3-0.8 s apart, inside the early-loss window ([FastEstablishDials]). Release builds never enable it.
+     */
+    @Volatile var fastEstablishDials: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
         }
 
     /**
@@ -317,15 +345,17 @@ object DebugTunables {
         }
 
     /**
-     * F11 item 5, Experimental (default off, DEBUG `test_reachable_scan_yield=true`): the Nearby call list and the Live list
+     * F11 item 5, default ON since 2026-10-27 (control arm DEBUG `test_reachable_scan_yield=false`): the Nearby call list and the Live list
      * scan at low latency for their first 8 s and then balanced, instead of low latency without end. Hypothesis to A/B:
      * a callee whose radio scans without pause (the Redmi 12: 100/100 ms on 1M and Coded) misses the caller's CONNECT_IND or
      * cannot schedule the first connection events, so the caller sees status 133 with HCI 0x3E (failed to be established).
-     * 2026-10-19 counts by target: Xiaomi 42, A15s 26, ASUS 20 failures; measure establishment per pair with it on and off.
+     * 2026-10-19 counts by target: Xiaomi 42, A15s 26, ASUS 20 failures. Promoted 2026-10-27 (owner go-ahead): better or
+     * equal on every measured pair (S22/ASUS 10/10 vs 8/10, M31/A15s 4/5 vs 2/5, S24/M31 6/6 vs 3/6, ASUS/A15s 3/6 vs
+     * 3/6; tap->ring median 1.9 vs 2.5 s); Xiaomi and A55 not yet measured.
      */
-    @Volatile var reachableScanYield: Boolean = false
+    @Volatile var reachableScanYield: Boolean = true
         set(value) {
-            field = value && BuildConfig.DEBUG
+            field = value || !BuildConfig.DEBUG
         }
 
     /**
@@ -347,6 +377,62 @@ object DebugTunables {
     @Volatile var callHandshakeDeadlineAll: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Review A3 (2026-10-27): the caller closes a link still waiting for the callee's RINGING 15 s after hop authentication
+     * (relayed: SETUP budget + 10 s), [CallSetupDeadlines.callerAnswerMs]. DEBUG `test_caller_answer_deadline=false` is the
+     * control arm (no bound, as before). Release builds always have it.
+     */
+    @Volatile var callerAnswerDeadline: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Review T5 (2026-10-27): the GATT control client re-attached after a CoC connect makes one attempt bounded at 3 s and
+     * returns at once (the PHY request follows 600 ms later, off the connect path). DEBUG `test_coc_attach_single=false`
+     * is the control arm: up to 3 attempts of 6 s, and the connect waits the 600 ms. Release builds always have it.
+     */
+    @Volatile var cocAttachSingle: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /** Experimental (off), review T2/A11: [FastFailRedial] for the BLE control client. DEBUG `test_fast_fail_redial_all=true`. */
+    @Volatile var fastFailRedialAll: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /** Experimental (off), review A10: [StallRetryOwnBudget]. DEBUG `test_stall_retry_own_budget=true`. */
+    @Volatile var stallRetryOwnBudget: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (0 = off), review A14: the first-2M setup stall guard's arm in ms (e.g. 2000) instead of
+     * [AdaptivePhyMemory.SETUP_STALL_MS]. DEBUG `test_setup_stall_ms`.
+     */
+    @Volatile var setupStallMs: Long = 0L
+        set(value) {
+            field = if (BuildConfig.DEBUG) value.coerceIn(0L, 10_000L) else 0L
+        }
+
+    /** Experimental (off), review A13: the relayed SETUP budget starts at hop authentication. DEBUG `test_relayed_budget_from_hop_auth=true`. */
+    @Volatile var relayedBudgetFromHopAuth: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (off), simplification pass A: the single connect-retry rule ([UnifiedConnectRule]) instead of the separate
+     * dial rules ([ConnectRetryConfig]). DEBUG `test_unified_connect_policy=true`.
+     */
+    @Volatile var unifiedConnectPolicy: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
         }
 
     /**
@@ -557,6 +643,16 @@ object DebugTunables {
         }
 
     /**
+     * B2 (DiscoverableWhenNeutral): null = default (call-offer and viewer-request sets are discoverable while the
+     * adapter name is "Phone" exactly when the neutral-name option is on). DEBUG launch extra
+     * `test_discoverable_when_neutral=true|false` forces it; release builds always keep the default.
+     */
+    @Volatile var discoverableWhenNeutral: Boolean? = null
+        set(value) {
+            field = if (BuildConfig.DEBUG) value else null
+        }
+
+    /**
      * Deferred GATT client close (GattClientTeardown): null = the stack-family default (deferred on
      * Android 11 and older, whose GattService ContextMap races an immediate close). DEBUG launch extra
      * `test_deferred_gatt_close=true|false` forces it on or off on any phone.
@@ -607,7 +703,9 @@ object DebugTunables {
      * Relay child re-anchoring (default on): a relay whose child link is starved (under 50 kbps for 2 s
      * with media waiting) reconnects that child on a fresh connection, at most twice a minute, before
      * the withdrawal policy decides. See RelayChildReanchor.kt. DEBUG launch extra
-     * `test_relay_child_reanchor=false` is the control arm.
+     * `test_relay_child_reanchor=false` is the control arm. The child-side watch and same-parent preference
+     * follow it unless [relayParentWatch] sets it apart; the same-parent preference [relayPreferParent] is off by default
+     * since build 4 ([RelayRecoveryConfig]).
      */
     @Volatile var relayChildReanchor: Boolean = true
         set(value) {
@@ -659,15 +757,15 @@ object DebugTunables {
         }
 
     /**
-     * Experimental (off): a sighting of a child that the relay will not dial (marked by [EstablishmentFailureTracker] or inside
+     * Default on since review B1 (2026-10-27; was Experimental, off): a sighting of a child that the relay will not dial (marked by [EstablishmentFailureTracker] or inside
      * [RelayStallHoldoff]) is dropped in the discovery callback before `stopPresence()`, so the offer and the scan are not stopped
      * and restarted for nothing ([RelayChildDialGate]). b6-q31-c1-reset 06-A3: 51 Discovery advertising-set starts and 27 deferred
-     * scan starts in 5 minutes, which left the relay blind for 29 s at a time. DEBUG launch extra `test_relay_hold_in_place=true`;
-     * off restores the restart-per-sighting behaviour exactly.
+     * scan starts in 5 minutes, which left the relay blind for 29 s at a time. Release builds have it on; DEBUG launch extra
+     * `test_relay_hold_in_place=false` is the control arm and restores the restart-per-sighting behaviour exactly.
      */
-    @Volatile var relayHoldInPlace: Boolean = false
+    @Volatile var relayHoldInPlace: Boolean = true
         set(value) {
-            field = value && BuildConfig.DEBUG
+            field = value || !BuildConfig.DEBUG
         }
 
     /**
@@ -681,9 +779,9 @@ object DebugTunables {
         }
 
     /**
-     * Experimental, default off (DEBUG `test_call_link_renewal`): in-call link renewal (Design SR revision 2,
-     * [CallRenewalWire]). A direct GATT call whose one direction stalled replaces its hop link and keeps the call, when
-     * both end-to-end hellos carry bit 4. Both phones need it.
+     * Default on since 2026-10-21 (design decision; DEBUG `test_call_link_renewal=false` is the control arm): in-call link
+     * renewal (Design SR revision 2, [CallRenewalWire]). A direct GATT call whose one direction stalled replaces its hop link
+     * and keeps the call, when both end-to-end hellos carry bit 4. Both phones need it.
      */
     @Volatile var callLinkRenewal: Boolean = true
         set(value) {
@@ -770,6 +868,28 @@ object DebugTunables {
         }
 
     /**
+     * Child side of relay recovery, split out of [relayChildReanchor] (switch audit B2, [RelayRecoveryConfig]): a relayed child
+     * watches its parent link and closes it when silent for 5 s (and, with [relayParentTrickle], when it trickles). Null (the
+     * default, and always in release) follows [relayChildReanchor], so `test_relay_child_reanchor=false` alone still turns it
+     * off; DEBUG `test_relay_parent_watch=true|false` sets it apart from the relay-side close.
+     */
+    @Volatile var relayParentWatch: Boolean? = null
+        set(value) {
+            field = value.takeIf { BuildConfig.DEBUG }
+        }
+
+    /**
+     * Child side of relay recovery, split out of [relayChildReanchor] (B2): after a link loss of an active relayed route the
+     * child prefers the same relay parent (and waits for it under [relayRecoveryGrace]). Off by default since build 4 (and
+     * always in release): a child whose middle phone was killed and relaunched re-anchored 5/5 (freeze median 2.9 s) without
+     * it vs 4/5 (about 4 s, one never recovered) with it. DEBUG `test_relay_prefer_parent=true` brings the old behaviour back.
+     */
+    @Volatile var relayPreferParent: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
      * A relay's child writer skips its link pacer only when the next record is audio (default on,
      * 2026-10-11). It used to skip it whenever any audio was queued anywhere, and the child queue is
      * strictly ordered, so during a backlog (which always holds audio, 50 records/s) every record was
@@ -836,11 +956,23 @@ object DebugTunables {
     /**
      * Latency budget of both time-based arms, ms (300-5000). A relay queue never holds more than this and a
      * viewer pays at most this much delay in advance; beyond it the earlier behaviour applies. DEBUG launch
-     * extra `test_time_queue_budget_ms` (benchmark tunable `time_queue_budget_ms`).
+     * extra `test_time_queue_budget_ms` (benchmark tunable `time_queue_budget_ms`); [playoutTimeBudgetMs]
+     * overrides the viewer's alone.
      */
     @Volatile var timeQueueBudgetMs: Long = TimeBasedSizing.DEFAULT_LATENCY_BUDGET_MS
         set(value) {
             field = if (BuildConfig.DEBUG) value.coerceIn(300L, 5_000L) else TimeBasedSizing.DEFAULT_LATENCY_BUDGET_MS
+        }
+
+    /**
+     * Viewer playout budget of the time-based playout target alone, ms (300-5000; switch audit B12). Null (the default, and
+     * always in release) follows [timeQueueBudgetMs], which keeps its meaning of setting both budgets; DEBUG launch extra
+     * `test_playout_time_budget_ms` (benchmark tunable `playout_time_budget_ms`) lets an A/B vary the relay queue's budget
+     * and the viewer's separately. Read through [TimeBasedSizing.playoutBudgetMs].
+     */
+    @Volatile var playoutTimeBudgetMs: Long? = null
+        set(value) {
+            field = value?.takeIf { BuildConfig.DEBUG }?.coerceIn(300L, 5_000L)
         }
 
     /**
@@ -929,16 +1061,6 @@ object DebugTunables {
      * server never requests it. DEBUG launch extra `test_coc_phy_after_connect=true` turns it on.
      */
     @Volatile var cocPhyAfterConnect: Boolean = false
-        set(value) {
-            field = value && BuildConfig.DEBUG
-        }
-
-    /**
-     * Experimental (default off): one deterministic initiator per direct call pair ([CocSingleInitiator]).
-     * The phone with the higher node-ID prefix holds an outgoing direct call for 1.5 s and yields when
-     * the peer's call reaches it first. DEBUG launch extra `test_coc_single_initiator=true` turns it on.
-     */
-    @Volatile var cocSingleInitiator: Boolean = false
         set(value) {
             field = value && BuildConfig.DEBUG
         }
@@ -1053,9 +1175,11 @@ object DebugTunables {
      * Experimental (default off): relay establishment budget ([RelayEstablishBudget]). A relay's child
      * connect retries fast establishment failures (GATT 133 / HCI 0x3E) in place with 300-900 ms spacing
      * for up to 12 s from the first connect (a 5 s create-connection timeout at most once), counts ONE
-     * failure per exhausted budget, escalates the child mark 30/60/120/300 s and skips the useless
-     * 2M -> 1M swap after such a failure. DEBUG launch extra `test_relay_establish_budget=true` turns it
-     * on; off keeps 2 attempts per cycle, one failure per cycle and the flat 5-minute mark.
+     * failure per exhausted budget, escalates the child mark 30/60/120/300 s and keeps 2M after such a
+     * failure (the pre-link rule it shares with [relayEstablishKeep2M], [RelayChildRecoveryPolicy.setupPhyAfterFailure]).
+     * DEBUG launch extra `test_relay_establish_budget=true` turns it on; off keeps 2 attempts per cycle and one
+     * failure per cycle. The mark escalation is shared with [relayRefusalEscalation] (on by default), so the flat
+     * 5-minute mark exists only with that off too ([RelayRecoveryConfig.escalatingRefusalMarks]).
      * Line: `BENCHMARK relay_child_connect`.
      */
     @Volatile var relayEstablishBudget: Boolean = false
@@ -1196,6 +1320,95 @@ object DebugTunables {
         }
 
     /**
+     * Relayed calls (default on, relay-showcase 2026-10-26): the first hop of an on-demand relayed route (caller to the
+     * selected helper, before SETUP) gets the direct-call 2M protections for that helper: its bad-2M memory is read at the
+     * dial and written at a 2M setup stall under the helper's recognised contact node, and the 1M retry rescans for the
+     * helper's own current offer (same helper ID; the hop opening still proves it) instead of redialing the stale address.
+     * DEBUG launch extra `test_relayed_first_hop_direct=false` is the control arm (retry to the old address, no memory).
+     */
+    @Volatile var relayedFirstHopDirect: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Relayed calls (default on, relay-showcase 2026-10-26): a helper whose connect to its next hop fails within
+     * [RelayHopPolicy.FAST_FAIL_MS] (no link was formed) retries that same connect once, logged, while at least
+     * [RelayHopPolicy.RETRY_MIN_LEFT_MS] of the SETUP deadline is left. DEBUG `test_relayed_hop_retry=false` is the control arm.
+     */
+    @Volatile var relayedHopRetry: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default off, relay-showcase 2026-10-26): a helper opens its next hop of a relayed call on LE 1M instead of
+     * the 2M default (logged as requested 2M, effective 1M). Hypothesis under test: the A15s -> ASUS child hop stalls right after
+     * the 2M PHY update, as the direct A15s -> ASUS 2M setup does. DEBUG launch extra `test_relayed_hop_1m=true`.
+     */
+    @Volatile var relayedHop1m: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Relayed calls (default on, relay-showcase 2026-10-26): a relayed call whose route failed before READY tries the
+     * next-best route through a different helper inside the same attempt (at most 3 routes in 60 s, exact relay count
+     * under `require`, every hop authenticated as before), logged as `relayed_route: ... attempt=N`. DEBUG launch extra
+     * `test_relayed_candidates=false` is the control arm (the attempt ends at the first failed route, as before).
+     */
+    @Volatile var relayedCandidates: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Relayed calls (default on, relay-showcase 2026-10-26): a helper's next hop gets the call's measured per-link 2M
+     * protection. A first 2M attempt whose connect fails or whose hop authentication stalls 3 s is retried once on 1M to the
+     * next hop's freshest advert; a 1M retry that authenticates records that hop peer bad on 2M, so the next dial of the pair
+     * starts on 1M. Evidence: A15s -> ASUS child hop 0 of 4 on 2M, 3 of 4 on 1M (`test_relayed_hop_1m` A/B). DEBUG launch
+     * extra `test_relayed_hop_phy_retry=false` is the control arm; `test_relayed_hop_1m=true` still forces 1M from the start.
+     */
+    @Volatile var relayedHopPhyRetry: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Relayed calls, DECISIONS Design C "Amendment CP" (default on, review CP-1): every relay edge (caller to helper, helper
+     * to helper, helper to target) runs BMH3 with a throwaway that declares PSEUDONYM, fresh per connection, never BMH2 while
+     * pseudonym mode is on; a hop is bound when it answers with a real key and not when it declared a throwaway; a helper
+     * accepts one SETUP on such a link. DEBUG launch extra `test_relayed_pseudonymous_edges=false` is the control arm
+     * (today's links: relayed calls fail at the first hop under the BMH3 pseudonym defaults).
+     */
+    @Volatile var relayedPseudonymousEdges: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Relayed calls between strangers (owner decision 2026-10-26, with the safeguards of review CP-1): a relayed call whose
+     * end-to-end caller is a throwaway rings, labelled "via a phone nearby", and a caller may place a relayed call to a target
+     * it holds no contact tag for. A relay in the middle can pose as the caller of such a call. DEBUG launch extra
+     * `test_relayed_stranger_calls=false` is the control arm (contacts only).
+     */
+    @Volatile var relayedStrangerCalls: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default off): a caller that recognises the selected helper's offer as exactly one contact tags that
+     * helper's own offer at the link and runs real/real with the opening check, instead of a throwaway. Privacy cost: the
+     * helper learns who is calling. A failed contact-helper authentication fails the candidate (no anonymous retry). DEBUG
+     * launch extra `test_relayed_contact_helper=true`.
+     */
+    @Volatile var relayedContactHelper: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
      * Experimental, default off (A/B for the A15s-central to ASUS-peripheral pair): the GATT client asks for different PHYs per
      * direction instead of the same one ([GattPhySplit]); `tx2m-rx1m` keeps the central -> peripheral media direction on 2M and
      * moves the peripheral -> central direction, the one that went silent, to 1M. DEBUG launch extra `test_gatt_phy_split`.
@@ -1277,13 +1490,6 @@ object DebugTunables {
     @Volatile var experimentalBlePhy: ExperimentalBlePhy? = null
         set(value) {
             field = value.takeIf { BuildConfig.DEBUG }
-        }
-
-    /** The 1M control arm of [experimentalBlePhy] (kept for its existing callers and tests). */
-    var experimentalBle1mPhy: Boolean
-        get() = experimentalBlePhy == ExperimentalBlePhy.LE_1M
-        set(value) {
-            experimentalBlePhy = if (value) ExperimentalBlePhy.LE_1M else null
         }
 
     /**
@@ -1503,14 +1709,15 @@ object DebugTunables {
      * `test_call_speech_led_playout` (benchmark tunable `call_speech_led_playout`).
      */
     /**
-     * Promoted call policy (design decision 2026-10-11, DECISIONS "Call head-of-line A/B"): in user
-     * launches, direct calls whose endpoint transport is BLE GATT use video fragments plus
-     * speech-led playout by default (GATT audio queue age p95 -38..-69%, playout delay p50 about
-     * -100 ms; LE CoC showed no head-of-line wait, so CoC/Classic stay unchanged). Benchmark
-     * launches (any `test_` extra in a DEBUG build) never set this, so their arms stay extras-only:
-     * the control arm is a launch without the two extras. Release-reachable.
+     * `test_call_head_of_line=off|gatt_default|on` ([CallHeadOfLine.Mode]; null = absent): one switch for the call head-of-line
+     * measures of a DEBUG benchmark launch. The promoted policy (design decision 2026-10-11, DECISIONS "Call head-of-line A/B":
+     * fragments plus speech-led playout on direct BLE GATT calls; GATT audio queue age p95 -38..-69%, playout delay p50 about
+     * -100 ms; CoC and Classic unchanged) is what [CallHeadOfLine] resolves for user launches; `gatt_default` measures it.
      */
-    @Volatile var callGattSpeechDefaults: Boolean = false
+    @Volatile var callHeadOfLineMode: CallHeadOfLine.Mode? = null
+        set(value) {
+            field = value.takeIf { BuildConfig.DEBUG }
+        }
 
     @Volatile var callSpeechLedPlayout: Boolean = false
         set(value) {
@@ -1549,6 +1756,47 @@ object DebugTunables {
     @Volatile var callLegacyLowDelay: Boolean = false
         set(value) {
             field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Call audio coalescing (default on since build 4; see coalesceQueuedCallAudio): ordinary 20 ms Opus units
+     * that already wait in the call queue go out as one existing pair/batch record. No added delay, no wire
+     * change. DEBUG control arm: launch extra `test_call_audio_coalesce=false` (benchmark tunable `call_audio_coalesce`).
+     */
+    @Volatile var callAudioCoalesce: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental call audio pairs (off by default; see privateCallAudioBatchSizeForRoute): routes that send single
+     * 20 ms units send 40 ms pairs (+20 ms for every other unit). No wire change. Launch extra
+     * `test_call_audio_pairs` (benchmark tunable `call_audio_pairs`).
+     */
+    @Volatile var callAudioPairs: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental AEAD reuse (off by default; see MeshAead.Context): hop and endpoint record writers, readers,
+     * sealers and openers keep one AES-GCM `Cipher` instead of a provider lookup per record, seal the header and
+     * ciphertext into one array (one stream write per hop record) and open endpoint records in place. Byte-for-byte
+     * the same records. Read when a link or endpoint session is created. Launch extra `test_aead_cipher_reuse`
+     * (benchmark tunable `aead_cipher_reuse`).
+     */
+    @Volatile var aeadCipherReuse: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental stream audio batches (off = 2, the 40 ms pairs; see streamAudioBatchFrames): 3..10 units per stream
+     * audio record. Launch extra `test_stream_audio_batch_frames` (benchmark tunable `stream_audio_batch_frames`).
+     */
+    @Volatile var streamAudioBatchFrames: Int = 2
+        set(value) {
+            field = if (BuildConfig.DEBUG) value else 2
         }
 
     /**

@@ -237,7 +237,15 @@ data class GpuScaleRequest(val session: VideoResolution, val fps: Int)
 object GpuScaleFeature {
     const val EXTRA = "test_gpu_scale_ladder"
 
-    @Volatile var enabled = false
+    /** A constant, default off, with no Settings row; the extra decides in any DEBUG launch ([FeatureCatalog.resolve]). */
+    val spec = FeatureSpec(
+        id = "gpu_scale_ladder",
+        prefKey = null,
+        defaultEnabled = false,
+        benchmarkExtra = EXTRA,
+        group = ViewerFeatures.GROUP,
+        extraInAnyDebugLaunch = true,
+    )
 
-    fun resolve(debugBuild: Boolean, extraValue: Boolean): Boolean = debugBuild && extraValue
+    @Volatile var enabled = false
 }

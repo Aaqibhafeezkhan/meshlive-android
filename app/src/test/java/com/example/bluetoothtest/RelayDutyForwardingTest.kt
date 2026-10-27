@@ -288,7 +288,7 @@ class RelayDutyForwardingTest {
         )
         assertEquals(
             RelaySetupFailure.NO_ROUTE,
-            relay.onDemandFailure(BluetoothPrivateCallRelay.OnDemandStage.CONNECTING, IOException("no connection")),
+            relay.onDemandFailure(BluetoothPrivateCallRelay.OnDemandStage.CONNECTING, IOException("no connection"), pseudonymousEdges = false),
         )
     }
 }

@@ -702,23 +702,40 @@ object PeerIdentityGate {
         when (state) {
             VerificationState.STORE_UNREADABLE ->
                 // Comparing is impossible, but unverified peers were never refused: keep accepting.
-                logSecurity("verified-contact store unreadable; $role $prefixHex not compared (fail-open)")
+                logSecurity(securityLine(SecurityEvent.STORE_UNREADABLE, role, prefixHex, policy, BuildConfig.DEBUG))
             VerificationState.MISMATCH -> {
                 val contact = current.contactForPrefix(nodeId.toByteArray().copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES))
-                logSecurity(
-                    "IDENTITY MISMATCH: $role node prefix $prefixHex matches a verified contact but the key " +
-                        "differs; possible impersonation | policy=$policy",
-                )
+                logSecurity(securityLine(SecurityEvent.MISMATCH, role, prefixHex, policy, BuildConfig.DEBUG))
                 listeners.forEach { listener -> runCatching { listener(nodeId, fingerprint, contact) } }
                 if (policy == MismatchPolicy.REFUSE) {
-                    throw IdentityMismatchException(
-                        "The $role $prefixHex uses a different key than the verified contact; possible impersonation",
-                    )
+                    // reviewer review 2026-10-27 (finding 7): the message reaches release logs through the callers' error
+                    // lines, so a release build names no peer here either.
+                    throw IdentityMismatchException(mismatchMessage(role, prefixHex, BuildConfig.DEBUG))
                 }
             }
             else -> Unit
         }
     }
+
+    internal enum class SecurityEvent { STORE_UNREADABLE, MISMATCH }
+
+    /**
+     * The gate's log line. Review 2026-10-27 (finding 12): a release log names no peer (a bug report or a shared log
+     * would otherwise list who tried to impersonate whom); the event, the role and the policy stay. DEBUG builds keep
+     * the 12-hex prefix for the benchmark tools.
+     */
+    internal fun securityLine(event: SecurityEvent, role: String, prefixHex: String, policy: MismatchPolicy, debug: Boolean): String {
+        val peer = if (debug) " $prefixHex" else ""
+        return when (event) {
+            SecurityEvent.STORE_UNREADABLE -> "verified-contact store unreadable; $role$peer not compared (fail-open)"
+            SecurityEvent.MISMATCH ->
+                "IDENTITY MISMATCH: $role node prefix$peer matches a verified contact but the key differs; " +
+                    "possible impersonation | policy=$policy"
+        }
+    }
+
+    internal fun mismatchMessage(role: String, prefixHex: String, debug: Boolean): String =
+        "The $role${if (debug) " $prefixHex" else ""} uses a different key than the verified contact; possible impersonation"
 
     internal fun clearForWipe() {
         synchronized(recent) { recent.clear() }
@@ -739,6 +756,15 @@ object PeerIdentityGate {
 }
 
 /** Process-wide facade the UI binds to. */
+/** Get-or-create of a shared key that never replaces an existing one: lookup and creation under one lock. */
+internal object AddOnlyKey {
+    private val lock = Any()
+
+    fun <K : Any> getOrCreate(get: () -> K?, create: () -> K): K = synchronized(lock) {
+        get() ?: create()
+    }
+}
+
 class IdentityVerification internal constructor(
     private val ownIdentity: () -> SigningIdentity,
     val store: VerifiedContactStore,
@@ -859,10 +885,25 @@ class IdentityVerification internal constructor(
         /** The verified-contacts at-rest cipher, shared with the rotating-ID presence store (same Keystore key). */
         internal fun atRestCipher(): AtRestCipher = AesGcmAtRestCipher { verificationAtRestKey() }
 
+        /**
+         * reviewer review 2026-10-27 (finding 3): several sealed stores share this alias, and two of them sealing for the
+         * first time at once could each generate a key; the second generation replaces the alias (AOSP
+         * AndroidKeyStoreKeyGeneratorSpi), so what the first had sealed could no longer be opened. Lookup and creation are
+         * one step under one process-wide lock ([AddOnlyKey]): a key is created only when it is still absent.
+         */
         private fun verificationAtRestKey(): SecretKey {
             WipeGuard.check("verification key")
-            val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            (keyStore.getKey(AT_REST_ALIAS, null) as? SecretKey)?.let { return it }
+            return AddOnlyKey.getOrCreate(
+                get = {
+                    val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+                    keyStore.getKey(AT_REST_ALIAS, null) as? SecretKey
+                },
+                create = ::generateVerificationAtRestKey,
+            )
+        }
+
+        private fun generateVerificationAtRestKey(): SecretKey {
+            WipeGuard.check("verification key")
             return KeyGenerator.getInstance(
                 android.security.keystore.KeyProperties.KEY_ALGORITHM_AES,
                 "AndroidKeyStore",

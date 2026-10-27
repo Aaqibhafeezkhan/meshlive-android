@@ -267,12 +267,19 @@ class MessagingV2ContentTest {
         val extraOff = { _: String -> false }
         val noExtra = { _: String -> null as Boolean? }
         assertTrue("design decision 2026-10-21: Messages on means v2", MessagingV2Defaults.ENABLED)
-        assertTrue(MessagingV2Feature.resolve(true, extraOn, { true }, messages = true))
-        assertFalse("the DEBUG control arm test_messaging_v2=false is v1", MessagingV2Feature.resolve(true, extraOff, { true }, messages = true))
-        assertTrue("a benchmark launch without the extra follows the default", MessagingV2Feature.resolve(true, noExtra, { false }, messages = true))
-        assertFalse("needs Messages", MessagingV2Feature.resolve(true, extraOn, { null }, messages = false))
-        assertFalse("needs Messages, also by default", MessagingV2Feature.resolve(false, noExtra, { null }, messages = false))
-        assertTrue("shipped default", MessagingV2Feature.resolve(false, { true }, { null }, messages = true))
-        assertFalse("a user's own Messages v2 off is kept", MessagingV2Feature.resolve(false, { true }, { false }, messages = true))
+        val spec = MessagingV2Feature.spec
+        // As the activity resolves it: Messages first, then the master switch by the catalog rule.
+        fun v2(benchmark: Boolean, extra: (String) -> Boolean?, stored: (String) -> Boolean?, messages: Boolean) =
+            messages && FeatureCatalog.resolve(spec, benchmark, extra, stored)
+        assertTrue(v2(true, extraOn, { true }, messages = true))
+        assertFalse("the DEBUG control arm test_messaging_v2=false is v1", v2(true, extraOff, { true }, messages = true))
+        assertTrue("a benchmark launch without the extra follows the default", v2(true, noExtra, { false }, messages = true))
+        assertFalse("needs Messages", v2(true, extraOn, { null }, messages = false))
+        assertFalse("needs Messages, also by default", v2(false, noExtra, { null }, messages = false))
+        assertTrue("shipped default", v2(false, { true }, { null }, messages = true))
+        // No Settings row: a constant (the stored key it used to read was never written by any build).
+        assertTrue(spec.constant)
+        assertTrue("nothing stored reaches it", v2(false, { true }, { false }, messages = true))
+        assertEquals(listOf("messages"), spec.dependsOn)
     }
 }

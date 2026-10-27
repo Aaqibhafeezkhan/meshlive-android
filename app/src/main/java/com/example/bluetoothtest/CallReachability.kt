@@ -14,11 +14,19 @@ package com.example.bluetoothtest
 object CallReachabilityFeature {
     const val EXTRA = "test_always_reachable"
 
-    @Volatile var enabled = true
+    /**
+     * Normal launches follow the Settings switch "Reachable for calls" ([PREF_REACHABLE_FOR_CALLS], its own row on the main
+     * Settings page, default on); [FeatureCatalog.resolve].
+     */
+    val spec = FeatureSpec(
+        id = "call_reachability",
+        prefKey = PREF_REACHABLE_FOR_CALLS,
+        defaultEnabled = true,
+        benchmarkExtra = EXTRA,
+        group = CallFeatureSpecs.GROUP,
+    )
 
-    /** Normal launches follow the Settings switch "Reachable for calls" ([stored], default on). */
-    fun resolve(benchmarkLaunch: Boolean, stored: () -> Boolean = { true }, extra: (String) -> Boolean): Boolean =
-        if (benchmarkLaunch) extra(EXTRA) else stored()
+    @Volatile var enabled = true
 }
 
 /**
@@ -35,13 +43,17 @@ object CallReachabilityFeature {
 object ReachableWhileBrowsingFeature {
     const val EXTRA = "test_reachable_while_browsing"
 
-    @Volatile var enabled = true
+    /** A constant (no Settings row); the extra decides in any DEBUG launch that carries it ([FeatureCatalog.resolve]). */
+    val spec = FeatureSpec(
+        id = "reachable_while_browsing",
+        prefKey = null,
+        defaultEnabled = true,
+        benchmarkExtra = EXTRA,
+        group = CallFeatureSpecs.GROUP,
+        extraInAnyDebugLaunch = true,
+    )
 
-    fun resolve(benchmarkLaunch: Boolean, hasExtra: Boolean, extraValue: Boolean): Boolean = when {
-        hasExtra -> extraValue
-        benchmarkLaunch -> false
-        else -> true
-    }
+    @Volatile var enabled = true
 }
 
 /** Where the activity is, as far as call reachability cares. */

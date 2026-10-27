@@ -274,10 +274,70 @@ object MeshAead {
         for (index in 0 until Long.SIZE_BYTES) {
             nonce[NONCE_BYTES - 1 - index] = (sequence ushr (index * 8)).toByte()
         }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(mode, SecretKeySpec(key, "AES"), GCMParameterSpec(TAG_BITS, nonce))
         cipher.updateAAD(associatedData)
         return cipher.doFinal(input)
+    }
+
+    private const val TRANSFORMATION = "AES/GCM/NoPadding"
+
+    private fun nonce(sequence: Long): ByteArray {
+        require(sequence >= 0) { "Sequence numbers must not be negative" }
+        val nonce = ByteArray(NONCE_BYTES)
+        for (index in 0 until Long.SIZE_BYTES) {
+            nonce[NONCE_BYTES - 1 - index] = (sequence ushr (index * 8)).toByte()
+        }
+        return nonce
+    }
+
+    /**
+     * Experimental AEAD reuse (`test_aead_cipher_reuse`, off by default). The per-record [encrypt]/[decrypt] above
+     * look up a new `Cipher` from the security providers for every record (several per media frame, on every hop
+     * and endpoint). A context keeps one `Cipher` for the record stream that owns it and lets the sealer write the
+     * header and ciphertext into one array instead of concatenating them. Output, nonces, tags and failure behaviour
+     * are byte-for-byte the same AES-256-GCM: the cipher is re-initialised with the record's own key and nonce for
+     * every record, so nothing about a previous record (or a failed one) carries over. Not thread-safe: each owner
+     * (a record writer, reader, sealer or opener) already serialises its calls. [release] drops the cipher together
+     * with the owner's key.
+     */
+    class Context {
+        @Volatile private var cipher: Cipher? = null
+
+        private fun init(mode: Int, key: ByteArray, sequence: Long): Cipher {
+            require(key.size == KEY_BYTES) { "AES-256 requires a $KEY_BYTES-byte key" }
+            val spec = GCMParameterSpec(TAG_BITS, nonce(sequence))
+            val reused = cipher ?: Cipher.getInstance(TRANSFORMATION).also { cipher = it }
+            reused.init(mode, SecretKeySpec(key, "AES"), spec)
+            return reused
+        }
+
+        /** [prefix] followed by the ciphertext and tag of [plaintext] in one array; [prefix] is the associated data. */
+        fun sealAfter(key: ByteArray, sequence: Long, prefix: ByteArray, plaintext: ByteArray): ByteArray {
+            val cipher = init(Cipher.ENCRYPT_MODE, key, sequence)
+            cipher.updateAAD(prefix)
+            val out = prefix.copyOf(prefix.size + plaintext.size + TAG_BYTES)
+            val written = cipher.doFinal(plaintext, 0, plaintext.size, out, prefix.size)
+            check(written == plaintext.size + TAG_BYTES) { "Unexpected AES-GCM output length $written" }
+            return out
+        }
+
+        /** Opens `input[offset until offset + length]` with `input[0 until aadLength]` as associated data. */
+        fun decryptSlice(key: ByteArray, sequence: Long, input: ByteArray, aadLength: Int, offset: Int, length: Int): ByteArray {
+            val cipher = init(Cipher.DECRYPT_MODE, key, sequence)
+            cipher.updateAAD(input, 0, aadLength)
+            return cipher.doFinal(input, offset, length)
+        }
+
+        fun decrypt(key: ByteArray, sequence: Long, ciphertext: ByteArray, associatedData: ByteArray): ByteArray {
+            val cipher = init(Cipher.DECRYPT_MODE, key, sequence)
+            cipher.updateAAD(associatedData)
+            return cipher.doFinal(ciphertext)
+        }
+
+        fun release() {
+            cipher = null
+        }
     }
 }
 

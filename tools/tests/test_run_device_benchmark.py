@@ -59,9 +59,6 @@ class BenchmarkPlanTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.tunable_extras({"coc_phy_after_connect": "on"})
 
-    def test_coc_single_initiator_tunable_maps_to_its_debug_extra(self):
-        self.assertEqual({"test_coc_single_initiator": True}, runner.tunable_extras({"coc_single_initiator": True}))
-
     def test_peer_address_book_tunable_maps_to_its_debug_extra(self):
         self.assertEqual({"test_peer_address_book": True}, runner.tunable_extras({"peer_address_book": True}))
 

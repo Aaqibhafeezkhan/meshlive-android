@@ -34,15 +34,11 @@ data class IntercomFeatureSettings(
         const val EXTRA_VOICE_CALLS = "test_voice_calls"
         const val EXTRA_PUSH_TO_TALK = "test_push_to_talk"
         const val EXTRA_PTT_MODE = "test_ptt_mode"
-        const val PREF_VOICE_CALLS = "experimental_voice_calls_v2" // new key 2026-10-17: no switch, no 0.2.0 choice applies
-        const val PREF_PUSH_TO_TALK = "experimental_push_to_talk"
-        const val PREF_PTT_MODE = "experimental_ptt_mode"
 
         /**
-         * A DEBUG benchmark launch (any `test_` extra) uses only its own extras, default off, so a
-         * stored UI choice never leaks into a measured case. Otherwise the user's explicit voice-call
-         * choice applies, else [CallFeatureDefaults.VOICE_CALLS]. The push-to-talk button and PTT
-         * mode exist only as launch extras.
+         * A DEBUG benchmark launch (any `test_` extra) uses only its own extras, default off. Otherwise voice calls
+         * follow [CallFeatureDefaults.VOICE_CALLS] (a constant with no Settings switch since 2026-10-17). The push-to-talk
+         * button and PTT mode exist only as launch extras; nothing stores them.
          */
         fun resolve(
             benchmarkLaunch: Boolean,

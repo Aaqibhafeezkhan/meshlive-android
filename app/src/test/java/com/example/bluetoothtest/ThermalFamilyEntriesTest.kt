@@ -10,7 +10,6 @@ class ThermalFamilyEntriesTest {
     private val batchIds = setOf(
         "memory-tier-log",
         "memory-tier-sizing",
-        "adpf-hint-session",
         "native-simd-safe-mode",
         "userspace32-tier",
     )
@@ -50,7 +49,6 @@ class ThermalFamilyEntriesTest {
     fun thermalSwitchNamesAppearInTheEntriesThatOwnThem() {
         val all = MemoryThermalPolicy.entries.associateBy { it.id }
         assertTrue(all.getValue("memory-tier-sizing").legacySwitches.single().contains("test_memory_tier=true"))
-        assertTrue(all.getValue("adpf-hint-session").legacySwitches.single().contains("test_adpf_hint=true"))
         assertTrue(all.getValue("native-simd-safe-mode").legacySwitches.single().contains("test_native_simd_safe_mode=true"))
         assertTrue(all.getValue("userspace32-tier").legacySwitches.single().contains("test_userspace32_tier=true"))
         assertTrue(all.getValue("thermal-battery-temperature-fallback").legacySwitches.single().contains("test_thermal_battery_fallback=true"))

@@ -241,8 +241,9 @@ internal object DozeWatchdog {
         last = next
         val nextState = DozePolicy.state(next)
         if (nextState == DeviceSleepState.DEEP_IDLE || nextState == DeviceSleepState.LOW_POWER_STANDBY) slept = true
-        val line = DozePolicy.line(next, trigger.substringAfterLast('.'))
-        if (BuildConfig.DEBUG) Log.i(TAG, "BENCHMARK $line") else Log.w(TAG, line)
+        // DEBUG only: a release build writes no doze_state line (it is a diagnostic, not a user warning).
+        ReleaseLogGate.debugOnly(BuildConfig.DEBUG) { "BENCHMARK " + DozePolicy.line(next, trigger.substringAfterLast('.')) }
+            ?.let { Log.i(TAG, it) }
         val previousState = previous?.let(DozePolicy::state)
         if (previousState != nextState) {
             mainHandler.post { listeners.forEach { listener -> listener(nextState) } }

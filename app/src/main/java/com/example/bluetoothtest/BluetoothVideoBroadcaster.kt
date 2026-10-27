@@ -15,6 +15,8 @@ class BluetoothVideoBroadcaster(
     private val onFirstConnected: () -> Unit,
     private val onPeerReady: () -> Unit = {},
     private val onRemoteKeyFrameNeeded: () -> Unit = {},
+    /** Experimental [RelayJoinKeyFrame]: a keyframe that bypasses the recovery back-off; defaults to the normal request. */
+    private val onRemoteJoinKeyFrame: () -> Unit = onRemoteKeyFrameNeeded,
     private val thermalStatusProvider: () -> Int,
     private val onCapacityAvailable: () -> Unit = {},
     private val debugDirectGattHeartbeat: Boolean = true,
@@ -55,6 +57,13 @@ class BluetoothVideoBroadcaster(
     private val codecConfiguration = mutableListOf<StreamProtocol.Packet>()
     private val videoConfigBatch = VideoConfigBatch()
     private var pendingAudioPacket: StreamProtocol.Packet? = null
+    /**
+     * Experimental stream audio batches (`test_stream_audio_batch_frames`, off = 2, the 40 ms pairs below): with 3 to
+     * 10, ordinary 20 ms units go to every child as one existing `BTA2` batch record of that many units (see
+     * [streamAudioBatchFrames]). Read once per stream.
+     */
+    private val audioBatchFrames = streamAudioBatchFrames(DebugTunables.streamAudioBatchFrames)
+    private val pendingAudioBatch = ArrayList<StreamProtocol.Packet>()
     private val allDisconnectedRunnable = Runnable {
         if (senders.isEmpty() && !closed.get()) onAllDisconnected()
     }
@@ -266,6 +275,7 @@ class BluetoothVideoBroadcaster(
                     }
                 },
                 onRemoteKeyFrameNeeded = onRemoteKeyFrameNeeded,
+                onRemoteJoinKeyFrame = onRemoteJoinKeyFrame,
                 thermalStatusProvider = thermalStatusProvider,
                 debugDirectGattHeartbeat = debugDirectGattHeartbeat,
                 debugGattWriteTiming = debugGattWriteTiming,
@@ -431,6 +441,14 @@ class BluetoothVideoBroadcaster(
             if (closed.get() || paused.get() && packetFlags and StreamProtocol.FLAG_CODEC_CONFIG == 0) {
                 return
             }
+            if (packetFlags == StreamProtocol.FLAG_AUDIO && audioBatchFrames > 2) {
+                val current = StreamProtocol.Packet(packetFlags, presentationTimeUs, bytes.copyOf())
+                // A unit that cannot share the batch (a timestamp jump) sends what waits first.
+                if (!streamAudioBatchAccepts(pendingAudioBatch, current)) flushPendingAudioLocked()
+                pendingAudioBatch += current
+                if (pendingAudioBatch.size >= audioBatchFrames) flushPendingAudioLocked()
+                return
+            }
             if (packetFlags == StreamProtocol.FLAG_AUDIO) {
                 val current = StreamProtocol.Packet(packetFlags, presentationTimeUs, bytes.copyOf())
                 val pending = pendingAudioPacket
@@ -538,7 +556,10 @@ class BluetoothVideoBroadcaster(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         timeoutHandler.removeCallbacksAndMessages(null)
-        synchronized(packetLock) { pendingAudioPacket = null }
+        synchronized(packetLock) {
+            pendingAudioPacket = null
+            pendingAudioBatch.clear()
+        }
         val active = ArrayList(senders.values)
         senders.clear()
         connectedPeers.clear()
@@ -552,6 +573,11 @@ class BluetoothVideoBroadcaster(
     }
 
     private fun flushPendingAudioLocked() {
+        if (pendingAudioBatch.isNotEmpty()) {
+            val batch = combineCallAudio(pendingAudioBatch.toList())
+            pendingAudioBatch.clear()
+            readySenders().forEach { it.send(batch.flags, batch.presentationTimeUs, batch.payload) }
+        }
         val pending = pendingAudioPacket ?: return
         pendingAudioPacket = null
         readySenders().forEach {

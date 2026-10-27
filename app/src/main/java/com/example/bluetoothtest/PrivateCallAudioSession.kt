@@ -233,6 +233,8 @@ internal class PrivateCallAudioSession(
     }
 
     private fun onCommunicationDeviceChanged(device: AudioDeviceInfo?) {
+        // The device actually in use, from the platform's own callback (no blocking read).
+        if (!closed) Log.i("BluetoothVideo", "BENCHMARK call_audio_route: event=platform_device | communicationDevice=${device?.type ?: "none"} | output=${output.name}")
         if (closed || !AudioSwitches.routeReassert || !AudioSwitches.policyActive(ROUTE_ENTRY_ID)) return
         if (!CallRoutingPolicy.needsReassert(device?.type, output)) return
         if (!reassertLimiter.allow(SystemClock.elapsedRealtime())) {
@@ -308,6 +310,7 @@ internal class PrivateCallAudioSession(
                 ).take(1)
             }
             val accepted = CallRoutingPolicy.pickFirstAccepted(ordered) { audioManager.setCommunicationDevice(it) }
+            loggedDeviceType = accepted?.first?.type
             if (accepted == null || accepted.second > 0) {
                 Log.i(
                     "BluetoothVideo",
@@ -350,9 +353,16 @@ internal class PrivateCallAudioSession(
 
     @SuppressLint("NewApi")
     @Suppress("DEPRECATION")
+    /**
+     * The device this session last asked for. Reading AudioManager.communicationDevice right after
+     * setCommunicationDevice blocks the calling (main) thread until the route change completes: 288-453 ms on the S22
+     * (Android 16) at every call start, measured with Perfetto. The listener logs the device actually in use.
+     */
+    private var loggedDeviceType: Int? = null
+
     private fun logRoute(event: String, requested: CallOutput) {
         val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            audioManager.communicationDevice?.type?.toString() ?: "none"
+            loggedDeviceType?.let { "requested:$it" } ?: "none"
         } else {
             "n/a"
         }

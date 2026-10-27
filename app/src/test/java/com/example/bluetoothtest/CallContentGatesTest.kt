@@ -35,7 +35,7 @@ class CallContentGatesTest {
     @Test
     fun theEndpointChecksTheGateBeforeItBuildsAReceiverOrDeliversMedia() {
         val handle = source("AndroidPrivateVideoCall.kt").substringAfter("private fun handleContent(").substringBefore("private fun handleSignal(")
-        val gate = handle.indexOf("CallMediaGate.decide(state?.phase)")
+        val gate = handle.indexOf("CallMediaGate.decide(state?.phase")
         assertTrue(gate > 0)
         assertTrue("gate before the stream header branch", gate < handle.indexOf("EndToEndContentType.STREAM_HEADER -> {"))
         assertTrue("gate before any media delivery", gate < handle.indexOf("deliverMedia("))
@@ -108,5 +108,58 @@ class CallContentGatesTest {
         assertTrue(call.contains("presenceDispatch.dispatch({ session.start() }, runIfEmpty = true)"))
         assertTrue(call.contains("presenceDispatch.dispatch({ session.onRecord(record, verifiedNow) }, runIfEmpty = false)"))
         assertFalse(call.contains("thread(name = \"PresenceAction\""))
+    }
+
+    /**
+     * Review 2026-10-27 (finding 7): with "Allow calls" off and the Meet screen open, only a connection that matched the
+     * displayed code may continue, whatever handshake it spoke; and the code flow needs BMH3, which carries the code's tag.
+     */
+    @Test
+    fun theMeetScreenAcceptsOnlyTheCodeAndNeedsHiddenIdentities() {
+        assertTrue("a plain (BMH2) caller is refused", MeetScreenGate.refuses(screenOnlyReachable = true, linkMatchedCode = false))
+        assertFalse(MeetScreenGate.refuses(screenOnlyReachable = true, linkMatchedCode = true))
+        assertFalse("reachable anyway: calls go on as usual", MeetScreenGate.refuses(screenOnlyReachable = false, linkMatchedCode = false))
+        assertTrue(MeetBridge.available(bvmid2 = true, rotatingIds = true, bmh3 = true, hostRegistered = true))
+        assertFalse(MeetBridge.available(bvmid2 = true, rotatingIds = true, bmh3 = false, hostRegistered = true))
+    }
+
+    /**
+     * reviewer review 2026-10-27 (finding 2): Accept and the caller's reveal decided separately whether the callee's camera and
+     * microphone start, so a blocked caller could get media or an honest call stay held. One decision now: whatever order
+     * the two threads run in, media starts exactly once for an admitted caller and never for a blocked one.
+     */
+    @Test
+    fun theCalleesMediaStartsOnceAfterAcceptAndAnAdmittedRevealInEitherOrderAndNeverForABlockedCaller() {
+        repeat(200) { round ->
+            val gate = CalleeMediaStart(revealRequired = true)
+            val starts = java.util.concurrent.atomic.AtomicInteger()
+            val ready = CountDownLatch(1)
+            val ui = thread { ready.await(); if (gate.onAccepted()) starts.incrementAndGet() }
+            val reader = thread { ready.await(); if (gate.onRevealAdmitted()) starts.incrementAndGet() }
+            ready.countDown()
+            ui.join(); reader.join()
+            assertEquals("round $round", 1, starts.get())
+            assertFalse(gate.held)
+        }
+        repeat(200) { round ->
+            val gate = CalleeMediaStart(revealRequired = true)
+            val starts = java.util.concurrent.atomic.AtomicInteger()
+            val ready = CountDownLatch(1)
+            val ui = thread { ready.await(); if (gate.onAccepted()) starts.incrementAndGet() }
+            // The reader found a blocked person: it never admits the reveal.
+            val reader = thread { ready.await(); gate.onBlocked() }
+            ready.countDown()
+            ui.join(); reader.join()
+            assertEquals("round $round: nothing for a blocked caller", 0, starts.get())
+        }
+        // No reveal is required (a contact, or a real-key caller): Accept starts it, once.
+        val plain = CalleeMediaStart(revealRequired = false)
+        assertTrue(plain.onAccepted())
+        assertFalse(plain.onAccepted())
+        // Held until the reveal, then started by it.
+        val held = CalleeMediaStart(revealRequired = true)
+        assertFalse(held.onAccepted())
+        assertTrue(held.held)
+        assertTrue(held.onRevealAdmitted())
     }
 }

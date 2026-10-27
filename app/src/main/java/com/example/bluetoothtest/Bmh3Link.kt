@@ -59,7 +59,13 @@ class Bmh3ResponderOptions(
      */
     val strangerIdentity: SigningIdentity? = null,
     val log: (String) -> Unit = {},
-)
+) {
+    /**
+     * Design OR (DEBUG prototype): the `RELAY_SEEK` bits to sign in this LINK responder block, read when the block is
+     * built (a helper that would admit a search now); null signs nothing.
+     */
+    var relaySeek: () -> Int? = { null }
+}
 
 /** Log lines of the experiment: a fixed vocabulary, never a node ID, prefix, RDI or key. */
 object Bmh3Log {
@@ -153,7 +159,7 @@ internal object Bmh3Driver {
         val started = nowMs()
         val config = Bmh3Config(
             purpose, identity, capabilities, options.entropy, buildTag,
-            stranger = options.strangerIdentity?.let { Bmh3Presentation(it, capabilities, pseudonym = true) },
+            stranger = options.strangerIdentity?.let { Bmh3Presentation.stranger(it, capabilities, purpose, responder = false) },
         )
         val expected = options.contactTag?.expectedPeer
         val initiator = Bmh3Initiator(
@@ -198,14 +204,10 @@ internal object Bmh3Driver {
         val started = nowMs()
         // A pseudonymous LINK block clears link-hello bit 3: no BDO1 follows, so the salt of a rotating ID stays with
         // the phone until the user accepts a call (PROTOCOL "What the pseudonymous responder withholds").
-        val strangerCapabilities = if (purpose == Bmh3Purpose.LINK) {
-            capabilities.copy(transportMask = capabilities.transportMask and RotatingDiscoveryIds.LINK_HELLO_BIT.inv())
-        } else {
-            capabilities
-        }
         val config = Bmh3Config(
             purpose, identity, capabilities, options.entropy, buildTag,
-            stranger = options.strangerIdentity?.let { Bmh3Presentation(it, strangerCapabilities, pseudonym = true) },
+            stranger = options.strangerIdentity?.let { Bmh3Presentation.stranger(it, capabilities, purpose, responder = true) },
+            relaySeek = if (purpose == Bmh3Purpose.LINK) options.relaySeek() else null,
         )
         val responder = Bmh3Responder(
             config,
@@ -298,6 +300,7 @@ internal object Bmh3LinkHandshake {
             peerPseudonymous = result.peer.pseudonymous,
             ownPseudonymous = result.ownPseudonymous,
             qrTagMatched = result.qrTagMatched,
+            peerRelaySeek = result.peer.relaySeek,
         ).also { result.wipe() }
     }
 }

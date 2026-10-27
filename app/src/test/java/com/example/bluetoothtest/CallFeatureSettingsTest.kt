@@ -27,7 +27,8 @@ class CallFeatureSettingsTest {
     @Test
     fun everyFeatureHasItsOwnPreferenceKeyAndLaunchExtra() {
         val features = CallFeature.entries
-        assertEquals(features.size, features.map { it.prefKey }.toSet().size)
+        val keys = features.mapNotNull { it.prefKey }
+        assertEquals(keys.size, keys.toSet().size)
         assertEquals(features.size, features.map { it.benchmarkExtra }.toSet().size)
         features.forEach { assertTrue(it.name, it.benchmarkExtra.startsWith("test_")) }
         // The old experimental extras are the benchmark switches and keep their names (case IDs stay valid).
@@ -42,11 +43,19 @@ class CallFeatureSettingsTest {
     }
 
     @Test
-    fun theOldPreferenceKeysStillCarryTheirSwitches() {
-        // Users who turned an Advanced switch on keep it on after promotion.
-        assertEquals("experimental_voice_calls_v2", CallFeature.VOICE_CALLS.prefKey)
+    fun messagesKeepTheirSwitchAndTheFeaturesWithoutASwitchAreConstants() {
+        // Users who turned Messages on keep it on; the call features and names have no stored choice (2026-10-17).
         assertEquals("experimental_store_forward", CallFeature.MESSAGES.prefKey)
-        assertEquals("experimental_peer_labels_v2", CallFeature.NAMES_AND_TITLES.prefKey)
+        assertEquals("feature_sf_auto_sync", CallFeature.AUTO_SYNC.prefKey)
+        val constants = CallFeature.entries.filter { it.prefKey == null }.toSet()
+        assertEquals(
+            setOf(
+                CallFeature.VOICE_CALLS, CallFeature.RINGBACK, CallFeature.EAR_CAMERA_PAUSE, CallFeature.LOCK_SCREEN_CALLS,
+                CallFeature.CALL_NOTIFICATIONS, CallFeature.NAMES_AND_TITLES,
+            ),
+            constants,
+        )
+        constants.forEach { assertTrue(it.name, CallFeatureSpecs.specOf(it).constant) }
     }
 
     @Test
@@ -64,18 +73,26 @@ class CallFeatureSettingsTest {
 
     @Test
     fun anExplicitChoiceBeatsTheDefaultBothWays() {
-        val allOn = CallFeature.entries.associate { it.prefKey to true }
+        val allOn = CallFeature.entries.mapNotNull { it.prefKey }.associateWith { true }
         val on = resolve(benchmark = false, stored = allOn)
         assertEquals(CallFeatureSet(true, true, true, true, true, true, true, true), on)
-        val allOff = CallFeature.entries.associate { it.prefKey to false }
-        assertEquals(CallFeatureSet(), resolve(benchmark = false, stored = allOff))
+        val allOff = CallFeature.entries.mapNotNull { it.prefKey }.associateWith { false }
+        // Only the switches that exist can be turned off; the constants keep their shipped value.
+        assertEquals(
+            CallFeatureSet(
+                voiceCalls = CallFeatureDefaults.VOICE_CALLS, ringback = CallFeatureDefaults.RINGBACK,
+                earCameraPause = CallFeatureDefaults.EAR_CAMERA_PAUSE, lockScreenCalls = CallFeatureDefaults.LOCK_SCREEN_CALLS,
+                callNotifications = CallFeatureDefaults.CALL_NOTIFICATIONS, namesAndTitles = CallFeatureDefaults.NAMES_AND_TITLES,
+            ),
+            resolve(benchmark = false, stored = allOff),
+        )
     }
 
     @Test
     fun automaticSyncNeverRunsWithoutMessages() {
-        val syncOnly = mapOf(CallFeature.AUTO_SYNC.prefKey to true)
+        val syncOnly = mapOf(requireNotNull(CallFeature.AUTO_SYNC.prefKey) to true)
         assertFalse(resolve(benchmark = false, stored = syncOnly).autoSync)
-        val both = syncOnly + (CallFeature.MESSAGES.prefKey to true)
+        val both = syncOnly + (requireNotNull(CallFeature.MESSAGES.prefKey) to true)
         assertTrue(resolve(benchmark = false, stored = both).autoSync)
         val extrasSyncOnly = setOf(CallFeature.AUTO_SYNC.benchmarkExtra)
         assertFalse(resolve(benchmark = true, extras = extrasSyncOnly).autoSync)
@@ -84,7 +101,7 @@ class CallFeatureSettingsTest {
 
     @Test
     fun aBenchmarkLaunchReadsOnlyItsExtrasAndIgnoresEveryStoredChoice() {
-        val allOn = CallFeature.entries.associate { it.prefKey to true }
+        val allOn = CallFeature.entries.mapNotNull { it.prefKey }.associateWith { true }
         assertEquals(CallFeatureSet(), resolve(benchmark = true, stored = allOn))
         val onlyVoice = resolve(benchmark = true, extras = setOf("test_voice_calls"), stored = allOn)
         assertEquals(CallFeatureSet(voiceCalls = true), onlyVoice)
@@ -146,10 +163,8 @@ class CallFeatureSettingsTest {
 
     @Test
     fun aUserWithOnlyTheLockScreenCallOnIsAskedForTheNotificationPermission() {
-        // A release user session: lock-screen calls on, CallStyle notifications turned off.
-        val settings = CallUxSettings.resolve(debugBuild = false, benchmarkLaunch = false, stored = { key ->
-            if (key == CallFeature.CALL_NOTIFICATIONS.prefKey) false else null
-        }) { false }
+        // Lock-screen calls on, CallStyle notifications off (a benchmark arm: user sessions have both as constants).
+        val settings = CallUxSettings(audioFocus = true, ringerPolicy = true, lockScreen = true)
         assertTrue(settings.lockScreen)
         assertFalse(settings.callStyleNotifications)
         assertTrue(callAlertNeedsNotificationPermission(settings, sdkInt = 33, granted = false))

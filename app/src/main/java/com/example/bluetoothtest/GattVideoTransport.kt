@@ -425,7 +425,7 @@ private class GattClientOutputStream(
     @Suppress("DEPRECATION")
     @SuppressLint("MissingPermission")
     override fun sendPacket(value: ByteArray) {
-        if (closed.get()) throw IOException("GATT output is closed")
+        if (closed.get()) throw IOException(GATT_OUTPUT_CLOSED_MESSAGE)
         val writeType = if (acknowledgedWrites) {
             BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         } else {
@@ -435,9 +435,7 @@ private class GattClientOutputStream(
         gattWriteFallbackType(acknowledgedWrites, status)?.let { fallbackType ->
             status = writeOnce(value, fallbackType)
         }
-        if (status != BluetoothGatt.GATT_SUCCESS) {
-            throw IOException("GATT video write failed (status $status)")
-        }
+        gattSendFailure("GATT video write", status, closed.get())?.let { throw IOException(it) }
     }
 
     @Suppress("DEPRECATION")
@@ -626,6 +624,21 @@ internal fun gattMiscountSafeValueBytes(valueBytes: Int, sdk: Int, dataPduOctets
     }
 }
 
+/**
+ * The IOException message for a GATT write or notification whose completion latch was released, or null when it succeeded.
+ * close() releases the latch without a stack status, so the status field still holds its GATT_FAILURE (257) placeholder.
+ * Reporting that as "status 257" made a local close look like a stack failure: relay-showcase-20261026 trace-u1 (A15s relay,
+ * GATT) logged "GATT notification failed (status 257)" on the A15s and the S24 only after the M31 had ended the call over a
+ * corrupt record and the links were closing.
+ */
+internal fun gattSendFailure(what: String, status: Int, closedLocally: Boolean): String? = when {
+    closedLocally -> GATT_OUTPUT_CLOSED_MESSAGE
+    status == BluetoothGatt.GATT_SUCCESS -> null
+    else -> "$what failed (status $status)"
+}
+
+internal const val GATT_OUTPUT_CLOSED_MESSAGE = "GATT output is closed"
+
 internal fun gattWriteFallbackType(acknowledgedWrites: Boolean, status: Int): Int? =
     BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE.takeIf {
         acknowledgedWrites && status == BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED
@@ -660,7 +673,7 @@ private class GattServerOutputStream(
     @Suppress("DEPRECATION")
     @SuppressLint("MissingPermission")
     override fun sendPacket(value: ByteArray) {
-        if (closed.get()) throw IOException("GATT output is closed")
+        if (closed.get()) throw IOException(GATT_OUTPUT_CLOSED_MESSAGE)
         byteWindow?.acquire(value.size)
         val latch = CountDownLatch(1)
         notifyLatch = latch
@@ -675,10 +688,8 @@ private class GattServerOutputStream(
         if (!queued) throw IOException("GATT notification queue rejected a packet")
         if (!latch.await(IO_TIMEOUT_SECONDS, TimeUnit.SECONDS)) throw IOException("GATT notification timed out")
         notifyLatch = null
+        gattSendFailure("GATT notification", notifyStatus, closed.get())?.let { throw IOException(it) }
         byteWindow?.onSent(value.size)
-        if (notifyStatus != BluetoothGatt.GATT_SUCCESS) {
-            throw IOException("GATT notification failed (status $notifyStatus)")
-        }
     }
 
     override fun close() {
@@ -704,20 +715,32 @@ object GattVideoClient {
         deferPhy: Boolean = false,
         /** Experimental `test_phy_move_skip_backlog`: runs after this link moved itself from 2M to 1M (stream sender only). */
         onPhyMove: () -> Unit = {},
+        /** The caller's setup deadline (a call's or message's dial), null when unbounded. */
+        deadline: SetupDeadline? = null,
+        config: ConnectRetryConfig = ConnectRetryConfig.current(),
     ): GattVideoConnection {
-        var attempt = 1
-        var extendedRetries = 0
         var linkReached = false
         val startedMs = SystemClock.elapsedRealtime()
-        val budget = if (establishBudget) RelayEstablishBudget(startedMs) else null
+        val peerTail = device.address.takeLast(5)
+        val attempts = ConnectAttempts(ConnectAttempts.Link.GATT_VIDEO, config, deadline, startedMs, establishBudget, peerTail)
         while (true) {
+            val attempt = attempts.attempt
             // Break-before-make: a wedged client's peer (always) or a recent close (test_gatt_acl_wait) waits for the ACL.
             awaitPreviousAcl(context, device)
+            // Review T4: the previous attempt's deferred close to this remote finishes first (bounded), so a retry never
+            // opens a second client to the same remote.
+            if (GattClientTeardown.pendingCloses.pending(device.address)) {
+                val closed = GattClientTeardown.pendingCloses.await(device.address, GattClientTeardown.PREVIOUS_CLOSE_WAIT_MS)
+                Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK gatt_previous_close_wait: peer=...$peerTail | attempt=$attempt | closed=$closed",
+                )
+            }
             // One BluetoothGatt per remote and no crossed connections (GATT-07/09: stack bugs fixed only in 15 QPR1+).
             GattResourceRegistry.shared.dialWarnings(device.address).takeIf { it.isNotEmpty() }?.let { warnings ->
                 Log.i(
                     "BluetoothVideo",
-                    "BENCHMARK gatt_dial_check: peer=...${device.address.takeLast(5)} | warnings=${warnings.joinToString(",")} | sdk=${Build.VERSION.SDK_INT}",
+                    "BENCHMARK gatt_dial_check: peer=...$peerTail | warnings=${warnings.joinToString(",")} | sdk=${Build.VERSION.SDK_INT}",
                 )
             }
             val attemptStartedMs = SystemClock.elapsedRealtime()
@@ -733,93 +756,50 @@ object GattVideoClient {
                     deferConnectionPriority,
                     deferPhy,
                     onPhyMove,
+                    attemptTimeoutMs = attempts.attemptTimeoutMs(attemptStartedMs),
+                    connectPhaseMs = attempts.connectPhaseMs(),
                 )
-                if (budget != null) {
-                    val nowMs = SystemClock.elapsedRealtime()
-                    Log.i(
-                        "BluetoothVideo",
-                        RelayEstablishBudget.logLine("gatt", attempt, nowMs - attemptStartedMs, null, null, nowMs - startedMs),
-                    )
-                }
+                attempts.successLines(attemptStartedMs, SystemClock.elapsedRealtime()).forEach { Log.i("BluetoothVideo", it) }
                 PoolExhaustionPolicy.shared.onConnectSuccess()
                 GattPoolBackoff.recordSuccess(PoolSource.CLIENT)
                 return connection
             } catch (error: IOException) {
                 if (error is LinkReachedSetupFailure) linkReached = true
-                val failureClass = leSetupStatus(error.message)?.let { failedStatus ->
-                    val elapsedMs = SystemClock.elapsedRealtime() - attemptStartedMs
-                    val durationClass = ConnectDurationClass.classify(failedStatus, elapsedMs, TimeUnit.SECONDS.toMillis(CONNECTION_TIMEOUT_SECONDS))
+                val attemptElapsedMs = SystemClock.elapsedRealtime() - attemptStartedMs
+                val failureClass = attempts.classify(error.message, attemptElapsedMs)
+                if (failureClass != null) {
                     Log.i(
                         "BluetoothVideo",
-                        "BENCHMARK gatt_connect_failure_class: peer=...${device.address.takeLast(5)} | status=$failedStatus | " +
-                            "elapsedMs=$elapsedMs | class=${durationClass.label} | sdk=${Build.VERSION.SDK_INT}",
+                        "BENCHMARK gatt_connect_failure_class: peer=...$peerTail | status=${leSetupStatus(error.message)} | " +
+                            "elapsedMs=$attemptElapsedMs | class=${failureClass.label} | sdk=${Build.VERSION.SDK_INT}",
                     )
-                    durationClass
                 }
                 // A refused registration opens one backoff step (one log line); automatic callers consult the hold.
                 GattPoolBackoff.noteConnectFailure(error.message, "gatt-video-client")
                 if (poolFailureRetry(device, error.message, attempt, onStatus)) {
-                    attempt += 1
-                    Thread.sleep(GATT_OPEN_RETRY_DELAY_MS)
+                    attempts.countPoolRetry()
+                    Thread.sleep(ConnectAttempts.Link.GATT_VIDEO.retryDelayMs)
                     continue
-                }
-                if (budget != null) {
-                    val nowMs = SystemClock.elapsedRealtime()
-                    val durationMs = nowMs - attemptStartedMs
-                    val decision = budget.onFailure(error.message, durationMs, nowMs)
-                    Log.i(
-                        "BluetoothVideo",
-                        RelayEstablishBudget.logLine("gatt", attempt, durationMs, error.message, decision, nowMs - startedMs),
-                    )
-                    if (decision.kind != RelayEstablishBudget.Kind.OTHER) {
-                        val delayMs = decision.retryAfterMs
-                            ?: throw EstablishmentBudgetExhausted(error.message, decision.attempt, decision.elapsedMs, error)
-                        attempt += 1
-                        onStatus(leSetupRetryNotice("GATT video", error.message, "retrying in place"))
-                        Thread.sleep(delayMs)
-                        continue
-                    }
-                }
-                // A call's 1M retry after a 2M stall (StallRetryDials, test_stall_retry_dials): a fast 0x3E failure is the
-                // peer's old link still going down, so it is redialed more times, further apart, inside the early-loss window.
-                when (val stallDial = StallRetryDials.next(failureClass, attempt)) {
-                    is StallRetryDials.Verdict.Dial -> {
-                        Log.i(
-                            "BluetoothVideo",
-                            "BENCHMARK stall_retry_dial: peer=...${device.address.takeLast(5)} | failedAttempt=$attempt | " +
-                                "maxAttempts=${StallRetryDials.MAX_ATTEMPTS} | delayMs=${stallDial.delayMs} | remainingMs=${stallDial.remainingMs}",
-                        )
-                        attempt += 1
-                        onStatus(leSetupRetryNotice("GATT video", error.message, "retrying"))
-                        Thread.sleep(stallDial.delayMs)
-                        continue
-                    }
-                    StallRetryDials.Verdict.Stop -> {
-                        Log.i(
-                            "BluetoothVideo",
-                            "BENCHMARK stall_retry_dial: peer=...${device.address.takeLast(5)} | failedAttempt=$attempt | " +
-                                "maxAttempts=${StallRetryDials.MAX_ATTEMPTS} | action=give_up",
-                        )
-                        throw carryLinkReached(error, linkReached)
-                    }
-                    StallRetryDials.Verdict.NotApplicable -> Unit
                 }
                 val retryable = runCatching { BluetoothTransportPolicy.retryableConnectStatuses() }
                     .getOrDefault(setOf(BluetoothTransportPolicy.GATT_ERROR_133))
-                val allowed = leSetupRetryAllowed(
-                    message = error.message,
-                    attemptsUsed = attempt,
-                    maxAttempts = GATT_OPEN_ATTEMPTS,
+                // One decision (ConnectAttempts): relay establish budget, stall-retry dials, fast first-dial dials, ordinary rule.
+                val decision = attempts.onFailure(
+                    error,
+                    failureClass,
+                    attemptStartedMs,
+                    SystemClock.elapsedRealtime(),
                     classifiedRetryable = isRetryableGattVideoFailure(error.message, retryable),
-                    extendedRetriesUsed = extendedRetries,
-                    nextAttemptMs = GATT_OPEN_RETRY_DELAY_MS + TimeUnit.SECONDS.toMillis(CONNECTION_TIMEOUT_SECONDS),
-                    remainingBudgetMs = LeSetupBudget.remainingMs(),
+                    linkReached = linkReached,
                 )
-                if (!allowed) throw carryLinkReached(error, linkReached)
-                if (leSetupStatus(error.message)?.let { it != BluetoothTransportPolicy.GATT_ERROR_133 } == true) extendedRetries++
-                attempt += 1
-                onStatus(leSetupRetryNotice("GATT video", error.message, "retrying once"))
-                Thread.sleep(GATT_OPEN_RETRY_DELAY_MS)
+                decision.lines.forEach { Log.i("BluetoothVideo", it) }
+                when (decision) {
+                    is ConnectAttempts.Decision.GiveUp -> throw decision.error
+                    is ConnectAttempts.Decision.Dial -> {
+                        onStatus(decision.notice)
+                        Thread.sleep(decision.delayMs)
+                    }
+                }
             }
         }
     }
@@ -833,7 +813,7 @@ object GattVideoClient {
         val reason = GattLinkLifetime.redialWaitReason(device.address) ?: return
         val manager = runCatching { context.applicationContext.getSystemService(BluetoothManager::class.java) }.getOrNull()
         GattLinkLifetime.awaitAclDown(
-            watch = GattLinkLifetime.watchAclDown(context, device),
+            watch = AclDownWatch.forDevice(context, device),
             mayBlock = Looper.myLooper() != Looper.getMainLooper(),
             stillUp = { GattLinkLifetime.isGattConnected(manager, device.address) },
             reason = reason,
@@ -867,7 +847,7 @@ object GattVideoClient {
         if (policy.restartGuidanceDue()) {
             Log.i("BluetoothVideo", "BENCHMARK gatt_restart_guidance: ${PoolExhaustionPolicy.GUIDANCE}")
         }
-        if (action != PoolExhaustionPolicy.Action.RETRY_AFTER_CLOSING_IDLE || attempt >= GATT_OPEN_ATTEMPTS) return false
+        if (action != PoolExhaustionPolicy.Action.RETRY_AFTER_CLOSING_IDLE || attempt >= ConnectAttempts.Link.GATT_VIDEO.maxAttempts) return false
         val closedCount = registry.closeIdle(IDLE_CLIENT_AGE_MS)
         Log.i("BluetoothVideo", "GATT pool exhausted: closed $closedCount idle client(s) of this app before one retry")
         if (closedCount > 0) onStatus("GATT video: ${verdict.label}; retrying once after closing idle clients")
@@ -899,6 +879,10 @@ object GattVideoClient {
         deferConnectionPriority: Boolean = false,
         deferPhy: Boolean = false,
         onPhyMove: () -> Unit = {},
+        /** This attempt's bound ([ConnectAttempts.attemptTimeoutMs]: 12 s unless the unified policy clips it). */
+        attemptTimeoutMs: Long = ConnectAttempts.Link.GATT_VIDEO.attemptTimeoutMs,
+        /** Experimental unified policy only: the attempt ends if not connected after this long. */
+        connectPhaseMs: Long? = null,
     ): GattVideoConnection {
         val result = AtomicReference<GattVideoConnection?>()
         val error = AtomicReference<String?>()
@@ -1010,6 +994,7 @@ object GattVideoClient {
             @SuppressLint("MissingPermission")
             override fun onConnectionStateChange(activeGatt: BluetoothGatt, status: Int, newState: Int) {
                 teardown.onCallback()
+                if (newState == BluetoothProfile.STATE_CONNECTED) teardown.onConnected()
                 if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     disconnectStatus.compareAndSet(-1, status)
                     teardown.onDisconnected()
@@ -1311,9 +1296,17 @@ object GattVideoClient {
                         throw IOException("Could not start GATT video connection")
                     }
                 logSetup("connect_return", "created=true")
-                val deadlineNs = System.nanoTime() + TimeUnit.SECONDS.toNanos(CONNECTION_TIMEOUT_SECONDS)
+                        val connectStartedNs = System.nanoTime()
+                val deadlineNs = connectStartedNs + TimeUnit.MILLISECONDS.toNanos(attemptTimeoutMs)
                 var completed = false
                 while (!completed && System.nanoTime() < deadlineNs) {
+                    // Experimental test_unified_connect_policy: an attempt not connected after the connect phase ends here.
+                    if (connectPhaseMs != null && !connectionSetupStarted.get() &&
+                        System.nanoTime() - connectStartedNs >= TimeUnit.MILLISECONDS.toNanos(connectPhaseMs)
+                    ) {
+                        logSetup("connect_phase_timeout", "phaseMs=$connectPhaseMs")
+                        break
+                    }
                     completed = latch.await(SETUP_POLL_MS, TimeUnit.MILLISECONDS)
                     if (!completed) {
                         silence.check()?.let { verdict ->
@@ -1363,7 +1356,7 @@ object GattVideoClient {
                         }
                     }
                 }
-                if (!completed) logSetup("await_timeout", "deadlineSeconds=$CONNECTION_TIMEOUT_SECONDS")
+                if (!completed) logSetup("await_timeout", "deadlineSeconds=${attemptTimeoutMs / 1_000L}")
                 completed
             },
             connection = result::get,
@@ -1381,8 +1374,6 @@ object GattVideoClient {
         )
     }
 
-    private const val GATT_OPEN_ATTEMPTS = 2
-    private const val GATT_OPEN_RETRY_DELAY_MS = 500L
     private val POOL_STATUSES = setOf(GattResourceRegistry.STATUS_REGISTRATION_EXHAUSTED, GattResourceRegistry.STATUS_NO_RESOURCES)
 }
 
@@ -1498,6 +1489,19 @@ class GattVideoServer(
      */
     @Volatile internal var advertise: Boolean = true
 
+    /**
+     * Review T10: advertise again when this phone closes the admitted connection itself (stream viewers set it; a call
+     * endpoint manages its own advertising and keeps it off).
+     */
+    @Volatile internal var readvertiseOnLocalClose: Boolean = false
+
+    /** Review B3: a central that connected and is not admitted yet (in setup), and since when (elapsedRealtime). */
+    @Volatile private var setupCentral: String? = null
+    @Volatile private var setupCentralAtMs = 0L
+
+    /** Review B3: since when a central has been connected but not yet admitted, or null. */
+    fun setupCentralSinceMs(): Long? = if (setupCentral != null && activeDevice == null) setupCentralAtMs else null
+
     private val appContext = context.applicationContext
     private val bluetoothManager = appContext.getSystemService(BluetoothManager::class.java)
     private val advertiseHandler = Handler(Looper.getMainLooper())
@@ -1544,6 +1548,8 @@ class GattVideoServer(
         onStatus = onStatus,
         onLost = ::onAdvertisingLost,
         nonDiscoverable = NonDiscoverableAdvertising.forNewSet(connectable = true),
+        // The in-call renewal advert is not covered by B2 (DiscoverableWhenNeutral).
+        neutralRole = if (renewalServiceUuid != null) null else DiscoverableWhenNeutral.roleOf(value),
     )
 
     /**
@@ -1761,6 +1767,12 @@ class GattVideoServer(
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
             if (closed.get()) return
             if (newState == BluetoothProfile.STATE_DISCONNECTED) connectionWatch?.onDisconnected(device.address)
+            if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED && activeDevice == null) {
+                setupCentral = device.address
+                setupCentralAtMs = SystemClock.elapsedRealtime()
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED && setupCentral == device.address) {
+                setupCentral = null
+            }
             if (
                 status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED &&
                 gattServerOwnsCallback(activeDevice?.address, device.address)
@@ -1836,6 +1848,7 @@ class GattVideoServer(
             }
             if (!valid) return
             activeDevice = device
+            setupCentral = null
             GattResourceRegistry.shared.noteServerLink(device.address)
             // Keep-address (stage 2): the set stays on until this client's first write, so a re-registration keeps it.
             if (admissionHold.onAdmitted(device.address, hold = holdSetUntilFirstWrite())) stopAdvertising()
@@ -1871,6 +1884,7 @@ class GattVideoServer(
                     activeInput::queueState,
                 ) {
                     runCatching { activeServer.cancelConnection(device) }
+                    onLocalClose(device.address)
                 },
             )
         }
@@ -2093,6 +2107,19 @@ class GattVideoServer(
         advertising = false
     }
 
+    /** Review T10: this phone closed the admitted connection: free the slot and advertise again without the callback. */
+    private fun onLocalClose(address: String) {
+        val steps = synchronized(this) {
+            GattServerLocalClose.steps(activeDevice?.address, address, advertise && readvertiseOnLocalClose, closed.get(), advertising).also {
+                if (it.closeConnection) closeConnection()
+            }
+        }
+        if (steps.readvertise) thread(name = "GattVideoReadvertise") {
+            runCatching { startAdvertising() }
+                .onFailure { onStatus("GATT video could not advertise again: ${it.message}") }
+        }
+    }
+
     private fun closeConnection() {
         activeDevice?.let {
             admissionHold.onLinkEnded(it.address)
@@ -2183,7 +2210,6 @@ private const val LE_MAX_DATA_PDU_OCTETS = 251
 internal const val GATT_CHUNK_HEADER_BYTES = 5
 private const val TYPE_DATA: Byte = 1
 private const val IO_TIMEOUT_SECONDS = 8L
-private const val CONNECTION_TIMEOUT_SECONDS = 12L
 private const val SETUP_POLL_MS = 250L
 private const val CONTROL_TIMEOUT_SECONDS = 8L
 private const val LOW_LATENCY_ADVERTISE_BURST_MS = 10_000L

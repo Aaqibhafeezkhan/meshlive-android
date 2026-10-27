@@ -240,11 +240,16 @@ internal class CallResolutionLadder(
 object CallResolutionLadderFeature {
     const val EXTRA = "test_call_resolution_ladder"
 
-    @Volatile var enabled = true
+    /** A constant (no Settings row); the extra decides in any DEBUG launch that carries it ([FeatureCatalog.resolve]). */
+    val spec = FeatureSpec(
+        id = "call_resolution_ladder",
+        prefKey = null,
+        defaultEnabled = true,
+        benchmarkExtra = EXTRA,
+        group = CallFeatureSpecs.GROUP,
+        extraInAnyDebugLaunch = true,
+    )
 
-    fun resolve(benchmarkLaunch: Boolean, hasExtra: Boolean, extraValue: Boolean): Boolean = when {
-        hasExtra -> extraValue
-        benchmarkLaunch -> false
-        else -> true
-    }
+    /** The spec's value, or the measured Auto ladder's need for it (`applyCallResolutionLadder`). */
+    @Volatile var enabled = true
 }

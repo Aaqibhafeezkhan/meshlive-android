@@ -390,6 +390,8 @@ has no MeshLive process; an unknown quiet state blocks.
   for a named failure diagnosis. `--hci-snoop-scratch DIR` (or `HCI_SNOOP_SCRATCH`) holds the large bug-report zips.
 - A failed broadcast run tries End only on its recorded live source process before pulling traces. Every run has a
   unique trace session ID.
+- A requested arm that cannot act is refused, not scored: a switch can be inert because its parent is off or because
+  another switch already decides the same thing (the register's "Requires / masked by" notes list the parents).
 - If a maintainer asks you to stop or pause physical testing, stop all device activity, keep the interrupted evidence
   and continue offline.
 
@@ -723,10 +725,17 @@ A case may carry `tunables`, exact debug launch extras applied to every particip
 The LE link tunables that the switch register ([switches.md](switches.md)) describes (`coc_sequenced_phy`, `gatt_request_mtu`,
 `gatt_aligned_writes`, `ble_phy`, `link_pacer_peer_seed`) work the same way. Every LE link logs `BENCHMARK le_conn_params`
 (interval, latency, supervision timeout, status and payload bounds) whenever the stack reports a connection update; read
-it before attributing an LE throughput result to a phone. Experimental voice calls and push-to-talk (default off) use
-the tunables `voice_calls`, `push_to_talk` and `ptt_mode`; a call case with `call_type: "voice"` measures no video
+it before attributing an LE throughput result to a phone. Voice calls and push-to-talk (voice calls are on in the app; a
+benchmark launch reads only the extra, default off) use the tunables `voice_calls`, `push_to_talk` and `ptt_mode`; a call case with `call_type: "voice"` measures no video
 gate, proves zero video packets in both directions and scores audio continuity in whole 2 s report windows. Acoustic
 quality and gaps under one report window stay UNMEASURED.
+
+A benchmark launch (any `test_*` extra) reads only its extras, so every release-ON feature (rotating IDs, BMH3 and its
+pseudonyms, Find iPhones, voice calls, names, the call resolution ladder, reachability, audio focus and ringer, and the
+GATT call fragments plus speech-led playout) runs OFF unless the case passes its extra. By default an inventory case
+therefore does not measure what users run. The runner tunable `user_launch=true` (`test_user_launch`) launches the phone
+as a person would, with the shipped defaults, while keeping the case's other extras; use it, and name it in the case,
+when the shipped configuration is the thing under test.
 
 Rotating-ID test P3 needs mutual verified contacts, which normally take two people scanning QR codes. On DEBUG builds `python -B tools/debug_verify_contacts.py --phones A,B` reads each phone's `BENCHMARK identity fingerprint=` log line (the apps must have been launched once), writes a one-shot token file plus the peer's fingerprint into each app's private storage with `run-as` (no other phone action), and prints the `--es test_verify_contact <token>` launch extras; the owning runner starts each phone with them and checks `BENCHMARK contact_verified source=debug` before the call. `--forget` prepares `test_forget_contact` for the Forget and Reset cases. The day roll uses the tunable `presence_day_offset` (extra `test_presence_day_offset`, same value on both phones, cold start only): it shifts the discovery wall clock by whole days instead of waiting for 00:00 UTC, so record it as a simulated clock, not a natural roll, and clear app data afterwards. ARCHITECTURE register row "Debug contact verification and day-roll clock" has the details.
 
@@ -764,7 +773,7 @@ to the phones they use and do not replace suite eligibility, frozen-build checks
 
 ## Message transfer measurement (Design M phase 0, v1 store-and-forward)
 
-Measures what the v1 Messages exchange actually delivers, so the time table, the 1 MB inline limit and the chunk size in DECISIONS "Design M" rest on numbers instead of call-stream rates, and records whether messages arrive while the app is in the background (T-M8). It needs no taps (adb taps are ignored on the M31 and A15s) and runs on the v1 code: `test_messaging_v2` is absent or false. It is not part of the benchmark suite inventory and creates no case IDs; a lane that uses it owns the phones exclusively and keeps its logs in a run-owned folder.
+Measures what the v1 Messages exchange actually delivers, so the time table, the 1 MB inline limit and the chunk size in DECISIONS "Design M" rest on numbers instead of call-stream rates, and records whether messages arrive while the app is in the background (T-M8). It needs no taps (adb taps are ignored on the M31 and A15s) and runs on the v1 code: `--ez test_messaging_v2 false` is passed (an absent extra now follows the Messaging v2 default, on whenever Messages is on, so a launch with `test_store_forward` alone runs v2). It is not part of the benchmark suite inventory and creates no case IDs; a lane that uses it owns the phones exclusively and keeps its logs in a run-owned folder.
 
 ## Messaging v2 phone procedure
 

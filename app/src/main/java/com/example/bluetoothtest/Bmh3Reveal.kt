@@ -119,6 +119,9 @@ class Bmh3RevealSession(
     private var peerVerified: Bmh3Reveal.Verified? = null
     private var failed = false
 
+    /** SHA-256 of the peer's verified reveal record: an identical repeat (a link renewal resent it) is not a second reveal. */
+    private var peerRecordHash: ByteArray? = null
+
     /** SHA-256 of the callee's reveal record (sent by the callee, verified by the caller): the caller's reveal binds it. */
     private var calleeRecordHash: ByteArray? = null
 
@@ -143,9 +146,16 @@ class Bmh3RevealSession(
     fun callerMayReveal(): Boolean =
         localRole == Bmh3Reveal.ROLE_CALLER && ownPseudonymous && peerPseudonymous && peerVerified != null && !ownSent && !failed
 
-    /** True while a reveal from the peer is required before the call may proceed (the callee's, seen by a caller). */
+    /**
+     * True while a reveal from the peer is required before the call may proceed: the callee's, seen by a caller, and
+     * (review 2026-10-27, finding 1) the caller's, seen by a callee in a pseudonym-pseudonym session. Such a caller
+     * always reveals right after it verified the callee's reveal (PROTOCOL steps 3 and 4), ahead of its stream header in
+     * the same ordered queue, so a callee that still waits for it refuses the caller's media and hangs up after
+     * [CallerRevealGate.DEADLINE_MS]; without this a caller could stay a throwaway for the whole call.
+     */
     @Synchronized
-    fun peerRevealRequired(): Boolean = localRole == Bmh3Reveal.ROLE_CALLER && peerPseudonymous && peerVerified == null
+    fun peerRevealRequired(): Boolean = peerPseudonymous && peerVerified == null &&
+        (localRole == Bmh3Reveal.ROLE_CALLER || ownPseudonymous)
 
     /** Builds this phone's reveal; throws when the rules above do not allow it or it was already sent. */
     @Synchronized
@@ -167,6 +177,17 @@ class Bmh3RevealSession(
      * Processes the peer's reveal record. Throws [Bmh3Failure] (the call ends) for a reveal from a peer that did not declare a
      * pseudonym, a second one, a wrong role or signature, or a caller reveal before this callee sent its own.
      */
+    /**
+     * True when [record] is byte for byte the reveal this session already verified: a writer whose link was renewed before it
+     * flushed sends the same record again (review 2026-10-27, finding 2). The caller ignores it; any other second reveal
+     * is still the protocol error of [onPeerReveal].
+     */
+    @Synchronized
+    fun isRepeatOfVerified(record: DiscoveryExchange.IdentityReveal): Boolean {
+        val known = peerRecordHash ?: return false
+        return peerVerified != null && Bmh3Crypto.sha256(DiscoveryExchange.encode(record)).contentEquals(known)
+    }
+
     @Synchronized
     fun onPeerReveal(record: DiscoveryExchange.IdentityReveal): Bmh3Reveal.Verified {
         try {
@@ -178,6 +199,7 @@ class Bmh3RevealSession(
             // The caller's own reveal will bind the callee's record exactly as it was sent.
             if (localRole == Bmh3Reveal.ROLE_CALLER) calleeRecordHash = Bmh3Crypto.sha256(DiscoveryExchange.encode(record))
             peerVerified = verified
+            peerRecordHash = Bmh3Crypto.sha256(DiscoveryExchange.encode(record))
             return verified
         } catch (error: Bmh3Failure) {
             failed = true

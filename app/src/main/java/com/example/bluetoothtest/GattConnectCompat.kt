@@ -87,13 +87,20 @@ internal object GattConnectCompat {
         val result = AtomicReference<T?>()
         val abandoned = java.util.concurrent.atomic.AtomicBoolean(false)
         val done = CountDownLatch(1)
+        // Review T11: the posted call's "abandoned?" check and its hand-over, and the waiter's "abandon, then take a late
+        // result", are one step each, so a client created between them is either returned or closed, never leaked.
+        val handOver = Any()
         val posted = post {
             val created = runCatching(call).getOrNull()
-            if (abandoned.get() && created != null) {
-                onLate(created)
-            } else {
-                result.set(created)
+            val late = synchronized(handOver) {
+                if (abandoned.get()) {
+                    true
+                } else {
+                    result.set(created)
+                    false
+                }
             }
+            if (late && created != null) onLate(created)
             done.countDown()
         }
         if (!posted) {
@@ -101,9 +108,11 @@ internal object GattConnectCompat {
             return call()
         }
         if (!done.await(timeoutMs, TimeUnit.MILLISECONDS)) {
-            abandoned.set(true)
             // The posted call may have finished between the timeout and the flag: take its result then.
-            val late = result.getAndSet(null)
+            val late = synchronized(handOver) {
+                abandoned.set(true)
+                result.getAndSet(null)
+            }
             if (late != null) return late
             log("GATT connect: arm=main | main looper did not run the call within $timeoutMs ms")
             return null

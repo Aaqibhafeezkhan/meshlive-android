@@ -458,6 +458,15 @@ class RelayChildQueue(
 
     fun thinnedFrameCount(): Long = lock.withLock { thinnedFrames }
 
+    /**
+     * Every media record this queue has dropped so far: bounded-age sheds (including video dropped while the recovery
+     * keyframe is awaited), temporal-layer thinning and relay-child-thinning drops. Any of them lowers the queue's age
+     * without the link draining it (the pacer's drain guard, switch audit B3).
+     */
+    fun droppedMediaCount(): Long = lock.withLock {
+        (mediaAgeBound?.shedder?.shedFrames ?: 0L) + thinnedFrames + layerThinnedFrames + layerPausedFrames
+    }
+
     fun hasQueuedAudio(): Boolean = lock.withLock { packets.any { it.envelope.isAudio } }
 
     /**

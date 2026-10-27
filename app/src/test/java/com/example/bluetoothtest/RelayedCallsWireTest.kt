@@ -255,10 +255,13 @@ class RelayedCallsWireTest {
 
     @Test
     fun featureResolutionFollowsTheOtherExperiments() {
-        assertTrue(RelayedCallsFeature.resolve(true, { it == "test_relayed_calls" }, false) { false })
-        assertFalse(RelayedCallsFeature.resolve(true, { false }, true) { true })
-        assertTrue(RelayedCallsFeature.resolve(false, { false }, true) { it == RelayedCallsFeature.PREF })
-        assertFalse(RelayedCallsFeature.resolve(false, { true }, false) { true })
+        val spec = RelayedCallsFeature.spec
+        assertTrue(FeatureCatalog.resolve(spec, true, { it == "test_relayed_calls" }, { false }, advancedSettings = false))
+        assertFalse(FeatureCatalog.resolve(spec, true, { false }, { true }, advancedSettings = true))
+        assertTrue(FeatureCatalog.resolve(spec, false, { false }, { if (it == RelayedCallsFeature.PREF) true else null }, advancedSettings = true))
+        // The Advanced gating is the spec's own option: the switch is an Advanced row, so the experiment never runs hidden.
+        assertTrue(spec.advancedOnly)
+        assertFalse(FeatureCatalog.resolve(spec, false, { true }, { true }, advancedSettings = false))
         assertEquals(2, RelayedCallsFeature.resolveMaxRelays(false, 4))
         assertEquals(4, RelayedCallsFeature.resolveMaxRelays(true, 4))
         assertEquals(2, RelayedCallsFeature.resolveMaxRelays(true, 5))

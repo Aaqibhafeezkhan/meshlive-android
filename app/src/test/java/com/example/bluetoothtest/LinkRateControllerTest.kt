@@ -383,6 +383,23 @@ class PeerDeliveryEstimateTest {
     }
 
     @Test
+    fun aReportFromBeforeTheFirstArrivalIsNoRateSample() {
+        // Older endpoints and the Windows app report "0 bytes at 0 ms" before the first media; their
+        // clock starts with the link, here 10 s of ringing before this sender's first write.
+        val estimate = PeerDeliveryEstimate()
+        estimate.onReport(LinkDelivery(0, 0))
+        estimate.writeEvery100Ms(10_000, 12_000)
+        // Writes 10 000..10 900 arrived, the last 60 ms after it was written.
+        estimate.onReport(LinkDelivery(80_000, 10_960))
+        // One arrival is no rate yet; the old first interval spanned the ring and read 58 kbps.
+        assertEquals(0, estimate.deliveredKbps())
+        assertEquals(0, estimate.queueMs())
+        estimate.onReport(LinkDelivery(160_000, 11_960))
+        assertEquals(640, estimate.deliveredKbps())
+        assertEquals(0, estimate.queueMs())
+    }
+
+    @Test
     fun sparseReportsUseTheirOwnIntervalNotAnExpiredSpan() {
         // Review 2026-10-09: 800 kbps established, then reports 3 s apart showing 100 kbps kept 800.
         val estimate = PeerDeliveryEstimate()
@@ -463,6 +480,25 @@ class CallDeliveryReportsTest {
         assertEquals(false, reports.onPeerHeartbeat(null))
         assertNull(reports.deliveryFor(callKnown = true, relayHops = 0, snapshot))
         assertNull(reports.accepted(LinkCapacityReport(600, false, 0, LinkDelivery(5, 6))))
+    }
+
+    @Test
+    fun noDeliveryIsReportedBeforeTheFirstMediaArrivedSoTheRingIsNeverQueue() {
+        // w2-pcs22-video-1 (2026-10-27): the counter starts at the endpoint handshake. A report written
+        // after the Windows caller's first media write, but before that media arrived, said "0 bytes at
+        // 0 ms"; the caller mapped it to its first write and read the 9.7 s ring as 10.4 s of queue.
+        var nowNs = 0L
+        val received = LinkDeliveryCounter { nowNs }
+        val reports = CallDeliveryReports(enabled = true)
+        assertEquals(true, reports.onPeerHeartbeat(null))
+        nowNs = 10_000_000_000L
+        assertNull(reports.deliveryFor(callKnown = true, relayHops = 0, received::snapshot))
+        nowNs = 10_350_000_000L
+        received.add(8_000)
+        assertEquals(LinkDelivery(8_000, 10_350), reports.deliveryFor(callKnown = true, relayHops = 0, received::snapshot))
+        // Held at the last arrival between packets.
+        nowNs = 11_000_000_000L
+        assertEquals(LinkDelivery(8_000, 10_350), reports.deliveryFor(callKnown = true, relayHops = 0, received::snapshot))
     }
 }
 

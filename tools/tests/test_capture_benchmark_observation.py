@@ -5,7 +5,9 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -131,9 +133,14 @@ class ObservationCaptureTest(unittest.TestCase):
             kwargs["stderr"].flush()
             return process
 
+        # A scripted clock local to the recorder module: patching the global time module with a finite list let any
+        # other thread's monotonic() call (pytest, logging, a slow host) consume the values and end the loop early or
+        # with StopIteration. After the script the clock stays past the deadline.
+        clock_values = iter([0, 0])
+        scripted = SimpleNamespace(monotonic=lambda: next(clock_values, 11), monotonic_ns=time.monotonic_ns,
+                                   sleep=lambda _seconds: None)
         with patch.object(capture.subprocess, "Popen", side_effect=no_frames), \
-             patch.object(capture.time, "monotonic", side_effect=[0, 0, 11]), \
-             patch.object(capture.time, "sleep"), \
+             patch.object(capture, "time", scripted), \
              patch.object(capture.subprocess, "run", return_value=self.probe()):
             with self.assertRaisesRegex(ValueError, "video output"):
                 recorder.start()

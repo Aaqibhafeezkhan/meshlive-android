@@ -546,15 +546,12 @@ internal class RelayRecoveryBackoff {
 
 /**
  * Relay-child skip-to-keyframe setting: a DEBUG benchmark launch uses its extra; otherwise the stored
- * Advanced choice applies while Advanced settings are on, and the default (on) while they are off.
+ * choice (default on), with or without the Advanced view. Before the 2026-10-27 switch audit (B14) the
+ * choice counted only while Advanced was on, so a user's OFF silently reverted to on when Advanced was
+ * turned off; rotating IDs and the neutral name already kept their stored choice that way.
  */
 internal fun relayChildMediaAgeSetting(
     benchmarkLaunch: Boolean,
     benchmarkExtra: Boolean,
-    advancedSettings: Boolean,
     storedChoice: Boolean,
-): Boolean = when {
-    benchmarkLaunch -> benchmarkExtra
-    advancedSettings -> storedChoice
-    else -> true
-}
+): Boolean = if (benchmarkLaunch) benchmarkExtra else storedChoice

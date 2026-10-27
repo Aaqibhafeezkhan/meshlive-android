@@ -60,7 +60,6 @@ data class CocAutoGattSettings(
         const val EXTRA_ENABLED = "test_coc_auto_gatt"
         const val EXTRA_THRESHOLD = "test_coc_gatt_threshold"
         const val PREF_ENABLED = "experimental_coc_auto_gatt"
-        const val PREF_THRESHOLD = "experimental_coc_gatt_threshold"
 
         fun clampThreshold(value: Int) = value.coerceIn(MIN_THRESHOLD, MAX_THRESHOLD)
 
@@ -68,14 +67,15 @@ data class CocAutoGattSettings(
          * The shared feature rule ([FeatureCatalog.resolve]): a DEBUG benchmark launch (any `test_`
          * extra) uses only its own extras, default off, so a stored choice never leaks into a measured
          * case. Every other launch uses the user's explicit choice ([storedEnabled], null when never
-         * touched) or the shipped default, with no dependence on Manual settings or the build type.
+         * touched) or the shipped default, with no dependence on Manual settings or the build type. The
+         * threshold of a user launch is [DEFAULT_THRESHOLD]: it has no setting (the stored
+         * `experimental_coc_gatt_threshold` it read until the 2026-10-27 switch audit was never written).
          */
         fun resolve(
             benchmarkLaunch: Boolean,
             extraEnabled: Boolean,
             extraThreshold: Int,
             storedEnabled: Boolean?,
-            storedThreshold: Int,
             leakyStack: Boolean,
         ): CocAutoGattSettings {
             val enabled = FeatureCatalog.resolve(
@@ -87,7 +87,7 @@ data class CocAutoGattSettings(
             return if (benchmarkLaunch) {
                 CocAutoGattSettings(enabled, clampThreshold(extraThreshold))
             } else {
-                CocAutoGattSettings(enabled, clampThreshold(storedThreshold), thresholdActive = leakyStack)
+                CocAutoGattSettings(enabled, DEFAULT_THRESHOLD, thresholdActive = leakyStack)
             }
         }
     }

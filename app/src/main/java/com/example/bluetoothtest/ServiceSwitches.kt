@@ -18,7 +18,7 @@ import android.content.Intent
  * - `test_stop_scans_on_exit=false`  control arm: do not stop the app's BLE scanners when the session service ends
  *   or the task is removed (default true; the stop is the Android 10 scanner-leak mitigation).
  * - `test_boot_resume=true`  Experimental, default off: start the connectedDevice foreground service after the phone
- *   restarts or the app is updated ([BootResume]). A user setting (opt-in) does the same in a release build.
+ *   restarts or the app is updated ([BootResume]). A release opt-in is not built (PLAN, Q-N2).
  */
 internal object SwitchDefaults {
     /** Flip to promote the wake lock; Q-N5 (sideload flavour only) decides who flips it. */
@@ -53,7 +53,7 @@ internal object ServiceSwitches {
             field = value || !BuildConfig.DEBUG
         }
 
-    /** DEBUG launch-extra arm of the boot-resume switch; a release build uses the user's setting ([BootResume]). */
+    /** DEBUG launch-extra arm of the boot-resume switch; a release build keeps it off ([BootResume]). */
     @Volatile var bootResume: Boolean = SwitchDefaults.BOOT_RESUME
         set(value) {
             field = if (BuildConfig.DEBUG) value else SwitchDefaults.BOOT_RESUME

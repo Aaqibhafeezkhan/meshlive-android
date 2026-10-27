@@ -56,6 +56,9 @@ class ReceiverStreamForwarder(
     private val connecting = AtomicBoolean(false)
     private val terminalSeen = AtomicBoolean(false)
     private val withdrawing = AtomicBoolean(false)
+
+    /** DEBUG setup timing: when the current child was added, until its first queued media (0 = not waiting). */
+    private val childJoinedAtNs = AtomicLong(0L)
     @Volatile private var withdrawalReason: StreamRouteWithdrawal? = null
     private val logicalStreamToken = StreamRouteToken.logicalFrom(
         streamToken,
@@ -87,20 +90,16 @@ class ReceiverStreamForwarder(
      * direct child between all frames, the base layer only, or audio only. Video streams only.
      */
     private val relayChildThinning = DebugTunables.relayChildThinning && !header.isAudioOnly
-    /** Relay child re-anchoring (default on; see RelayChildReanchor.kt). Attempts are per child. */
-    private val reanchorEnabled = DebugTunables.relayChildReanchor
+    /** Relay child re-anchoring, the relay-side starved-link close (default on; RelayRecoveryConfig.starvationClose). */
+    private val reanchorEnabled = RelayRecoveryConfig.current().starvationClose
+    /** The pacer seed and per-child queue configuration (PacerSeedPolicy.kt), read when the forwarder starts. */
+    private val pacerConfig = PacerQueueConfig.current()
+    private val childQueuePolicy = RelayChildQueuePolicy.of(pacerConfig, header.isAudioOnly)
     /**
      * Experimental time-based child queue target (Q31, DebugTunables.relayTimeQueue, off by default; video
      * streams only): the shed budget follows the child's measured drain and its jitter inside a latency budget.
      */
-    private val timeQueueConfig = if (DebugTunables.relayTimeQueue && !header.isAudioOnly) {
-        RelayTimeQueueConfig(
-            latencyBudgetMs = DebugTunables.timeQueueBudgetMs,
-            floorMs = DebugTunables.timeQueueFloorMs,
-        )
-    } else {
-        null
-    }
+    private val timeQueueConfig = childQueuePolicy.timeQueue
     private val reanchorBudget = RelayReanchorBudget()
     /**
      * Set when the stall watch closes a starved child on purpose (re-anchor), so the writer's
@@ -170,6 +169,17 @@ class ReceiverStreamForwarder(
 
     fun onEnvelope(envelope: MeshEnvelope): RelayResult {
         val result = core.receive(envelope)
+        if (BuildConfig.DEBUG && result.queuedChildren.isNotEmpty()) {
+            // DEBUG setup timing: a joined child waits for a keyframe from upstream (its queue starts at one).
+            val joinedAtNs = childJoinedAtNs.get()
+            if (joinedAtNs != 0L && childJoinedAtNs.compareAndSet(joinedAtNs, 0L)) {
+                Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK relay_child_join: event=first_media | waitMs=${(System.nanoTime() - joinedAtNs) / 1_000_000L} | " +
+                        "audioOnly=${header.isAudioOnly}",
+                )
+            }
+        }
         if (envelope.flags and MeshEnvelope.FLAG_TERMINAL != 0) {
             terminalSeen.set(true)
             stopPresence()
@@ -261,9 +271,10 @@ class ReceiverStreamForwarder(
                     adapter,
                     { peer ->
                         if (discovery !== newDiscovery || child != null) return@BleL2capDiscovery
-                        // Experimental (test_relay_hold_in_place): a child this relay will not dial is dropped here, before the
-                        // presence is stopped, so the offer and the scan are not restarted for every sighting.
-                        if (DebugTunables.relayHoldInPlace && deferChildSighting(peer)) return@BleL2capDiscovery
+                        // Default on (test_relay_hold_in_place=false is the control arm): a child this relay will not dial is
+                        // dropped here, before the presence is stopped, so the offer and the scan are not restarted for every
+                        // sighting.
+                        if (deferChildSighting(peer)) return@BleL2capDiscovery
                         if (!connecting.compareAndSet(false, true)) return@BleL2capDiscovery
                         stopPresence()
                         connectChild(peer)
@@ -347,37 +358,37 @@ class ReceiverStreamForwarder(
     private val dialDeferLog = DialDeferLog()
 
     /**
-     * True when [peer] is marked by the establishment tracker or inside the stall/refusal hold-off: the sighting is dropped
-     * ([RelayChildDialGate]) and logged with the same text `connectChild` uses, at most once per [RelayChildDialGate.LOG_EVERY_MS].
+     * True when the relay holds in place ([RelayRecoveryConfig.holdInPlace]) and [peer] is marked by the establishment tracker
+     * or inside the stall/refusal hold-off: the sighting is dropped ([RelayChildDialGate]) and logged with the same text
+     * `connectChild` uses, at most once per [RelayChildDialGate.LOG_EVERY_MS].
      */
     private fun deferChildSighting(peer: BleL2capPeer): Boolean {
+        val recovery = RelayChildRecoveryPolicy.live()
+        if (!recovery.config.holdInPlace) return false
         val childKey = AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix)
         val nowMs = android.os.SystemClock.elapsedRealtime()
-        val heldMs = if (DebugTunables.relayStallHoldoff) RelayChildStall.holdoff.remainingMs(childKey, nowMs) else 0L
-        val verdict = RelayChildDialGate.verdict(
-            fallbackOn = DebugTunables.relayEstablishFallback,
-            marked = DebugTunables.relayEstablishFallback && RelayChildEstablishment.tracker.isMarked(childKey, nowMs),
-            holdoffOn = DebugTunables.relayStallHoldoff,
-            heldMs = heldMs,
-        )
-        if (verdict == RelayChildDialGate.Verdict.DIAL) {
+        val decision = recovery.dialDecision(childKey, nowMs)
+        if (decision.verdict == RelayChildDialGate.Verdict.DIAL) {
             dialDeferLog.reset(childKey)
             return false
         }
         val covered = dialDeferLog.onDeferred(childKey, nowMs)
-        if (covered > 0) {
-            val line = if (verdict == RelayChildDialGate.Verdict.DEFER_MARKED) {
-                "BENCHMARK relay_parent_fallback: reason=establishment | side=relay | child=$childKey | action=skip_connect"
-            } else {
-                "BENCHMARK relay_child_stall: child=$childKey | action=holdoff | remainingMs=$heldMs"
-            }
-            Log.i("BluetoothVideo", "$line | held_in_place=true | sightings=$covered")
-        }
+        if (covered > 0) Log.i("BluetoothVideo", "${dialDeferLine(childKey, decision)} | held_in_place=true | sightings=$covered")
         return true
     }
 
+    /** The line for a deferred dial: the same text in the discovery callback and at the start of `connectChild`. */
+    private fun dialDeferLine(childKey: String, decision: RelayChildRecoveryPolicy.DialDecision): String =
+        if (decision.verdict == RelayChildDialGate.Verdict.DEFER_MARKED) {
+            "BENCHMARK relay_parent_fallback: reason=establishment | side=relay | child=$childKey | action=skip_connect"
+        } else {
+            "BENCHMARK relay_child_stall: child=$childKey | action=holdoff | remainingMs=${decision.heldMs}"
+        }
+
     private fun connectChild(peer: BleL2capPeer) {
         val writerThread = thread(start = false, name = "ReceiverNodeChildConnect") {
+            // One recovery policy for this attempt: the dial decision, the stall guard and the failure classification.
+            val recovery = RelayChildRecoveryPolicy.live()
             var attemptPhy: BlePhyPreference? = null
             var hopAuthenticated = false
             // Set once the child link (socket / GATT) is up, before the hop handshake (Experimental relay_establish_keep_2m).
@@ -390,26 +401,12 @@ class ReceiverStreamForwarder(
             try {
                 if (closed.get() || terminalSeen.get()) return@thread
                 val childKey = AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix)
-                if (DebugTunables.relayEstablishFallback &&
-                    RelayChildEstablishment.tracker.isMarked(childKey, android.os.SystemClock.elapsedRealtime())
-                ) {
-                    // Offer withdrawn for this child: it times out and falls back to another parent.
-                    Log.i(
-                        "BluetoothVideo",
-                        "BENCHMARK relay_parent_fallback: reason=establishment | side=relay | child=$childKey | action=skip_connect",
-                    )
+                // A marked child (offer withdrawn: it times out and falls back to another parent) or one inside a stall or
+                // refusal hold-off (still tearing down its dead link and receiver) is not dialled.
+                val dial = recovery.dialDecision(childKey, android.os.SystemClock.elapsedRealtime())
+                if (dial.verdict != RelayChildDialGate.Verdict.DIAL) {
+                    Log.i("BluetoothVideo", dialDeferLine(childKey, dial))
                     return@thread
-                }
-                if (DebugTunables.relayStallHoldoff) {
-                    val heldMs = RelayChildStall.holdoff.remainingMs(childKey, android.os.SystemClock.elapsedRealtime())
-                    if (heldMs > 0L) {
-                        // The stall guard just closed this child's link: it is still tearing down the dead link and its receiver.
-                        Log.i(
-                            "BluetoothVideo",
-                            "BENCHMARK relay_child_stall: child=$childKey | action=holdoff | remainingMs=$heldMs",
-                        )
-                        return@thread
-                    }
                 }
                 val device = peer.device
                 // Classic: the shared connector authenticates the link while choosing a candidate.
@@ -463,7 +460,7 @@ class ReceiverStreamForwarder(
                         childLinkPhy(peer.announcement.nodeIdPrefix).also { attemptPhy = it },
                         gattPriority,
                         onStatus,
-                        establishBudget = DebugTunables.relayEstablishBudget,
+                        establishBudget = RelayRecoveryConfig.current().establishBudget,
                     )
                 } else {
                     null
@@ -474,7 +471,7 @@ class ReceiverStreamForwarder(
                 val linkInput = gatt?.inputStream ?: socket?.inputStream
                     ?: error("Downstream Bluetooth input is unavailable")
                 // Relay child stall guard (LE only): see RelayChildStallGuard.
-                val guard = if (DebugTunables.relayChildStallGuard && transport != BluetoothTransportOption.CLASSIC_RFCOMM) {
+                val guard = if (recovery.config.stallGuard && transport != BluetoothTransportOption.CLASSIC_RFCOMM) {
                     RelayChildStallGuard(android.os.SystemClock.elapsedRealtime())
                 } else {
                     null
@@ -490,7 +487,7 @@ class ReceiverStreamForwarder(
                                 Thread.sleep(RelayChildStallGuard.POLL_MS)
                                 val silentMs = watch.stalledFor(android.os.SystemClock.elapsedRealtime()) ?: continue
                                 stalled.set(true)
-                                RelayChildStall.holdoff.onStall(
+                                recovery.onStallClosed(
                                     AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix),
                                     android.os.SystemClock.elapsedRealtime(),
                                 )
@@ -561,7 +558,7 @@ class ReceiverStreamForwarder(
                     ) { "Downstream identity changed between discovery and connection" }
                 }
                 hopAuthenticated = true
-                RelayChildEstablishment.tracker.onSuccess(AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix))
+                recovery.onHopAuthenticated(AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix))
                 AdaptivePhyMemory.bind(device.address, transport, secure.peerNodeId.shortLabel())
                 // test_coc_phy_after_connect (default off): PHY only now, before the end-to-end handshake.
                 control?.requestPhyAfterConnect("relay")
@@ -576,8 +573,10 @@ class ReceiverStreamForwarder(
                 require(endpoint.peerNodeId == secure.peerNodeId) {
                     "Downstream link and media identities do not match"
                 }
+                // Security review 2026-10-27 (item 14): no stream goes on to a blocked person through this phone.
+                require(!PersonPolicy.blockedNode(endpoint.peerNodeId)) { "Downstream viewer refused" }
                 guard?.let { done ->
-                    RelayChildStall.holdoff.onSuccess(AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix))
+                    recovery.onHandshakeComplete(AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix))
                     done.complete(android.os.SystemClock.elapsedRealtime())
                     Log.i(
                         "BluetoothVideo",
@@ -651,6 +650,7 @@ class ReceiverStreamForwarder(
                 pendingControlConnection = null
                 if (terminalSeen.get()) throw IOException("The upstream stream already ended")
                 val bootstrap = core.addChild(endpoint.peerNodeId)
+                if (BuildConfig.DEBUG) childJoinedAtNs.set(System.nanoTime())
                 if (closed.get()) throw IOException("Forwarding was turned off")
                 child = connection
                 onChildCountChanged(1)
@@ -739,7 +739,7 @@ class ReceiverStreamForwarder(
                 // Always measured and logged; the switch only decides whether it feeds the drain.
                 val sustainedMeter = SustainedDeliveryMeter()
                 var pushedSustainedKbps = 0
-                val paceHeadOnly = DebugTunables.relayPaceHeadOnly
+                val paceHeadOnly = childQueuePolicy.paceHeadOnly
                 var paceHeldNs = 0L
                 var paceExemptWrites = 0L
                 var paceExemptWaitNs = 0L
@@ -907,7 +907,7 @@ class ReceiverStreamForwarder(
                             encodedEnvelope,
                         )
                         connection.pacer.onSent(wireBytes, writeStartedNs)
-                        if (DebugTunables.seedRaiseDrainGuard) {
+                        if (pacerConfig.drainGuard) {
                             connection.pacer.noteWrite(credit.sleptNs, System.nanoTime() - writeStartedNs)
                         }
                         val terminal = envelope.flags and MeshEnvelope.FLAG_TERMINAL != 0
@@ -920,7 +920,14 @@ class ReceiverStreamForwarder(
                         val nowNs = System.nanoTime()
                         val queueDepth = core.queueDepth(endpoint.peerNodeId)
                         val backlogAgeMs = core.backlogAgeMs(endpoint.peerNodeId)
-                        sustainedMeter.onWritten(nowNs, wireBytes, queueDepth > 0, credit.sleptNs)
+                        sustainedMeter.onWritten(
+                            nowNs,
+                            wireBytes,
+                            queueDepth > 0,
+                            credit.sleptNs,
+                            // The Experimental lead cap held this writer: keep the last drain instead of letting it expire (B3).
+                            leadCapped = credit.sleptNs > 0L && connection.pacer.leadCapMs() > 0L,
+                        )
                         val sustainedKbps = sustainedMeter.estimateKbps(nowNs) ?: 0
                         if (sustainedDrainChanged(pushedSustainedKbps, sustainedKbps)) {
                             pushedSustainedKbps = sustainedKbps
@@ -979,7 +986,7 @@ class ReceiverStreamForwarder(
                                 val pacer = connection.pacer
                                 Log.i(
                                     "BluetoothVideo",
-                                    "BENCHMARK relay_pacing: headOnly=$paceHeadOnly | leadCap=${DebugTunables.relayPaceLeadCap} | " +
+                                    "BENCHMARK relay_pacing: headOnly=$paceHeadOnly | leadCap=${childQueuePolicy.leadCap} | " +
                                         "capMs=${pacer.leadCapMs()} | paceKbps=${pacer.bytesPerSecond * 8 / 1_000} | " +
                                         "measured=${pacer.measured} | paceLeadMs=${pacer.paceLeadMs()} | " +
                                         "modelLeadMs=${pacer.modelLeadMs()} | childLate=${connection.linkLate} | " +
@@ -1024,55 +1031,36 @@ class ReceiverStreamForwarder(
                 Thread.currentThread().interrupt()
             } catch (error: Exception) {
                 if (!closed.get() && !terminalSeen.get()) {
-                    val failureKind = classifyRelayChildFailure(
-                        hopAuthenticated, error.message, stalled.get(), DebugTunables.relayStallSeparate,
+                    // The attempt is classified once (RelayChildRecoveryPolicy): the tracker, the refusal hold-off and the PHY
+                    // after the failure all follow from that one classification.
+                    val childKey = AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix)
+                    val outcome = recovery.onAttemptFailed(
+                        childKey,
+                        android.os.SystemClock.elapsedRealtime(),
+                        hopAuthenticated,
+                        error.message,
+                        stalled.get(),
+                        budgetExhausted = error is EstablishmentBudgetExhausted,
+                        attemptPhy = attemptPhy,
+                        reachedConnection = childLinkConnected || error is LinkReachedSetupFailure,
                     )
-                    if (DebugTunables.relayEstablishFallback && failureKind != RelayChildFailureKind.NONE) {
-                        val childKey = AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix)
-                        val nowMs = android.os.SystemClock.elapsedRealtime()
-                        val stallKind = failureKind == RelayChildFailureKind.STALL
-                        val marked = if (stallKind) {
-                            RelayChildEstablishment.tracker.onStall(childKey, nowMs)
-                        } else {
-                            // A refusal round also holds the next dial to this child off (it is rediscovered every second while it
-                            // advertises in burst mode, and used to spend both failures in 3 s).
-                            if (DebugTunables.relayRefusalEscalation) RelayChildStall.holdoff.onStall(childKey, nowMs)
-                            RelayChildEstablishment.tracker.onFailure(
-                                childKey,
-                                nowMs,
-                                DebugTunables.relayEstablishBudget || DebugTunables.relayRefusalEscalation,
-                            )
-                        }
-                        if (marked) {
-                            Log.i(
-                                "BluetoothVideo",
-                                "BENCHMARK relay_parent_fallback: reason=establishment | side=relay | child=$childKey | " +
-                                    "action=withdraw_offer | kind=${if (stallKind) "stall" else "refusal"} | " +
-                                    "failures=${if (stallKind) EstablishmentFailureTracker.STALL_THRESHOLD else EstablishmentFailureTracker.THRESHOLD} | " +
-                                    "markMs=${RelayChildEstablishment.tracker.remainingMs(childKey, nowMs)}",
-                            )
-                        } else if (stallKind) {
-                            Log.i(
-                                "BluetoothVideo",
-                                "BENCHMARK relay_parent_fallback: reason=establishment | side=relay | child=$childKey | " +
-                                    "action=count_stall | kind=stall",
-                            )
-                        }
-                    }
-                    // Establishment never uses the 2M PHY (it runs on the advertising PHY), so a swap after an
-                    // exhausted 0x3E budget changes nothing (RelayEstablishBudget).
-                    val budgetExhausted = DebugTunables.relayEstablishBudget && error is EstablishmentBudgetExhausted
-                    val setupPhy = if (budgetExhausted) {
-                        RelayChildSetupPhy.UNCHANGED
-                    } else {
-                        relayChildSetupPhyDecision(
-                            DebugTunables.phySetupStallGuard,
-                            attemptPhy,
-                            hopAuthenticated,
-                            DebugTunables.relayEstablishKeep2M,
-                            reachedConnection = childLinkConnected || error is LinkReachedSetupFailure,
+                    val stallKind = outcome.kind == RelayChildFailureKind.STALL
+                    if (outcome.marked) {
+                        Log.i(
+                            "BluetoothVideo",
+                            "BENCHMARK relay_parent_fallback: reason=establishment | side=relay | child=$childKey | " +
+                                "action=withdraw_offer | kind=${if (stallKind) "stall" else "refusal"} | " +
+                                "failures=${if (stallKind) EstablishmentFailureTracker.STALL_THRESHOLD else EstablishmentFailureTracker.THRESHOLD} | " +
+                                "markMs=${outcome.markMs}",
+                        )
+                    } else if (outcome.counted && stallKind) {
+                        Log.i(
+                            "BluetoothVideo",
+                            "BENCHMARK relay_parent_fallback: reason=establishment | side=relay | child=$childKey | " +
+                                "action=count_stall | kind=stall",
                         )
                     }
+                    val setupPhy = outcome.setupPhy
                     if (setupPhy != RelayChildSetupPhy.UNCHANGED) {
                         val node = AdaptivePhyMemory.prefixLabel(peer.announcement.nodeIdPrefix)
                         val errorName = ((error as? LinkReachedSetupFailure)?.cause ?: error).javaClass.simpleName
@@ -1152,7 +1140,7 @@ class ReceiverStreamForwarder(
                     linkPhy,
                     "forwarder-connect",
                     DebugTunables.forwarderCocPriority ?: BleConnectionPriority.HIGH,
-                    establishBudget = DebugTunables.relayEstablishBudget,
+                    establishBudget = RelayRecoveryConfig.current().establishBudget,
                 ) {
                     pendingControlConnection = it
                 }
@@ -1180,27 +1168,21 @@ class ReceiverStreamForwarder(
                                 // The child's own link is late: capacity evidence for this relay only.
                                 if (report.linkLate) linkLoadSaturatedByChild.set(true)
                                 connection.linkLate = report.linkLate
-                                connection.pacer.setLeadCapNs(relayLeadCapNs(DebugTunables.relayPaceLeadCap, report.linkLate))
+                                connection.pacer.setLeadCapNs(childQueuePolicy.leadCapNs(report.linkLate))
                                 core.setChildAddedDelayMs(connection.endpoint.peerNodeId, report.addedDelayMs)
-                                // On-time report from an unmeasured child: hold the seeded pace (see LinkPacer.holdSeed).
-                                if (report.arrivalKbps <= 0 && !report.linkLate && DebugTunables.onTimeReports) {
+                                // On-time report from an unmeasured child: hold the seeded pace (PacerSeedPolicy, LinkPacer.holdSeed).
+                                if (report.arrivalKbps <= 0 && !report.linkLate && pacerConfig.onTimeReports) {
                                     val peer = connection.endpoint.peerNodeId
-                                    val before = connection.pacer.seedKbps
-                                    val backlogMs = if (DebugTunables.onTimeSeedRaise) core.backlogAgeMs(peer) else -1L
-                                    if (connection.pacer.holdSeed(backlogMs, DebugTunables.seedRaiseDrainGuard) &&
-                                        connection.pacer.seedKbps > before
-                                    ) {
-                                        Log.i(
-                                            "BluetoothVideo",
-                                            "BENCHMARK pacer_seed_raise: role=relay_tx | peer=${peer.shortLabel()} | " +
-                                                "fromKbps=$before | toKbps=${connection.pacer.seedKbps} | backlogMs=$backlogMs",
-                                        )
-                                    }
-                                    connection.pacer.lastDrainGuardBlock?.let {
-                                        Log.i(
-                                            "BluetoothVideo",
-                                            it.benchmarkLine("relay_tx", connection.nodeId.shortLabel(), connection.pacer.seedKbps),
-                                        )
+                                    PacerSeedPolicy.onTimeReport(
+                                        connection.pacer,
+                                        pacerConfig,
+                                        backlogMs = { core.backlogAgeMs(peer) },
+                                        droppedMedia = { core.droppedMedia(peer) },
+                                    )?.let { hold ->
+                                        if (hold.raised) Log.i("BluetoothVideo", hold.raiseLine("relay_tx", peer.shortLabel()))
+                                        hold.guardBlock?.let {
+                                            Log.i("BluetoothVideo", it.benchmarkLine("relay_tx", connection.nodeId.shortLabel(), hold.toKbps))
+                                        }
                                     }
                                 }
                                 // Experimental join probe: the child's first rate within the window seeds the pace.
@@ -1303,12 +1285,14 @@ class ReceiverStreamForwarder(
         activeChild?.let(::detachChild)
         val activeWriter = childWriterThread
         if (activeWriter != null && activeWriter !== Thread.currentThread()) {
-            val timeoutMs = if (withdrawalReason != null) {
-                ROUTE_WITHDRAWAL_ACK_TIMEOUT_MS + 1_000L
-            } else {
-                GRACEFUL_CHILD_CLOSE_TIMEOUT_MS
-            }
-            runCatching { activeWriter.join(timeoutMs) }
+            // Review S3: an upstream loss (no terminal record, no withdrawal) closes the child link at once.
+            val timeoutMs = ForwarderChildClose.writerWaitMs(
+                withdrawing = withdrawalReason != null,
+                terminalForwarded = terminalSeen.get(),
+                withdrawalAckMs = ROUTE_WITHDRAWAL_ACK_TIMEOUT_MS + 1_000L,
+                gracefulMs = GRACEFUL_CHILD_CLOSE_TIMEOUT_MS,
+            )
+            if (timeoutMs > 0L) runCatching { activeWriter.join(timeoutMs) }
         }
         activeChild?.close()
         pendingControlConnection?.close()

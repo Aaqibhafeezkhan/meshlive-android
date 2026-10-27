@@ -42,13 +42,28 @@ internal data class RecentCall(
  * Home "Recent": the last 50 ended calls, newest first. Legacy entries keep unknown directions.
  * Stored only on this phone (app-private preferences, cleared by Emergency wipe). Names are not
  * stored: the row asks PeerLabels at display time (contact label or handle).
+ *
+ * Review 2026-10-27 (finding 6): the list holds node prefixes and, for a caller that showed its real key, the full
+ * fingerprint (so its row can block the person), also for people who are not verified contacts. It was plain text in the
+ * preferences file. It is sealed now with the verified-contacts Keystore key ([cipher]); the plain `calls_v2`/`calls_v1`
+ * values of earlier builds are read once, written back sealed and removed. A sealed value that fails authentication (damage,
+ * another phone's key) is replaced by the next write; a temporary Keystore or storage failure is never written over (Recent
+ * reads as empty and records nothing until it opens again, or until the user clears the history, [clear]). Every write is
+ * non-throwing (review 2026-10-27, finding 1: a throw on the call-end path crashed the app, also during an emergency wipe).
  */
 internal object RecentCalls {
     /** Listed in EmergencyWipe.KNOWN_PREFERENCES. */
     const val PREFERENCES = "recent_calls"
+    private const val SEALED_KEY = "calls_sealed_v1"
     private const val KEY = "calls_v2"
     private const val OLD_KEY = "calls_v1"
     const val MAX_ENTRIES = 50
+
+    /** Production: the verified-contacts at-rest cipher; JVM tests install their own. */
+    @Volatile internal var cipher: () -> AtRestCipher = { IdentityVerification.atRestCipher() }
+
+    /** A sealed value that could not be opened for a reason that may pass (Keystore busy, storage error). */
+    private class TemporarilyUnreadable : IllegalStateException("Recent calls cannot be opened now")
 
     /** "gold fox", "gold fox 42", "gold fox-7a7d" and "gold fox 42-7a7d": a generated name, lower case, no commas. */
     private val STRANGER_NAME = Regex("[a-z]{3,7} [a-z]{3,7}( [0-9]{2})?(-[0-9a-f]{4})?")
@@ -56,21 +71,77 @@ internal object RecentCalls {
     @Synchronized
     fun load(context: Context): List<RecentCall> = project(loadStored(context), DebugTunables.completeRecentCalls)
 
+    /** True while a stored history exists that this phone cannot open now (the screen offers to clear it). */
+    @Synchronized
+    fun isUnreadable(context: Context): Boolean = runCatching { readStored(context) }.exceptionOrNull() is TemporarilyUnreadable
+
+    /** Deletes the whole history, including one that cannot be opened ("Clear history"). */
+    @Synchronized
+    fun clear(context: Context): Boolean = runCatching {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit().clear().commit()
+    }.getOrDefault(false)
+
     /** Storage always retains the full history, even while displaying the five-person control arm. */
-    private fun loadStored(context: Context): List<RecentCall> {
+    private fun loadStored(context: Context): List<RecentCall> = runCatching { readStored(context) }.getOrDefault(emptyList())
+
+    /**
+     * The stored calls. A value that fails authentication reads as empty (the next write replaces it); any other failure to
+     * open throws [TemporarilyUnreadable] (nothing is written over it).
+     */
+    private fun readStored(context: Context): List<RecentCall> {
         val prefs = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        if (!prefs.contains(KEY)) {
-            prefs.edit().putString(KEY, encode(decode(prefs.getString(OLD_KEY, null)))).apply()
+        prefs.getString(SEALED_KEY, null)?.let { stored ->
+            val bytes = runCatching { java.util.Base64.getDecoder().decode(stored) }.getOrNull() ?: return emptyList()
+            val plain = try {
+                cipher().open(bytes)
+            } catch (damaged: javax.crypto.AEADBadTagException) {
+                return emptyList()
+            } catch (tooShort: IllegalArgumentException) {
+                return emptyList()
+            } catch (other: Exception) {
+                throw TemporarilyUnreadable()
+            }
+            return decode(String(plain, Charsets.UTF_8))
         }
-        return decode(prefs.getString(KEY, null))
+        if (!prefs.contains(KEY) && !prefs.contains(OLD_KEY)) return emptyList()
+        // An earlier build's plain text: written back sealed, then removed (kept only if sealing fails now).
+        val legacy = if (prefs.contains(KEY)) decode(prefs.getString(KEY, null)) else decode(prefs.getString(OLD_KEY, null))
+        store(context, legacy)
+        return legacy
     }
 
-    @Synchronized
-    fun record(context: Context, call: RecentCall) {
-        val prefs = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        val updated = add(loadStored(context), call)
-        prefs.edit().putString(KEY, encode(updated)).apply()
+    /** Seals and stores [calls], removing any plain value. False (nothing written) during an emergency wipe or on failure. */
+    private fun store(context: Context, calls: List<RecentCall>): Boolean {
+        if (WipeGuard.active) return false
+        return runCatching {
+            val sealed = cipher().seal(encode(calls).toByteArray(Charsets.UTF_8))
+            context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
+                .putString(SEALED_KEY, java.util.Base64.getEncoder().encodeToString(sealed))
+                .remove(KEY)
+                .remove(OLD_KEY)
+                .commit()
+        }.getOrElse { error ->
+            runCatching { android.util.Log.w("BluetoothVideo", "recent_calls: not stored (${error.javaClass.simpleName})") }
+            false
+        }
     }
+
+    /** Applies [change] to the stored list and stores it; false when nothing was stored. Never throws. */
+    private fun update(context: Context, change: (List<RecentCall>) -> List<RecentCall>?): Boolean {
+        if (WipeGuard.active) return false
+        val current = try {
+            readStored(context)
+        } catch (error: Exception) {
+            runCatching { android.util.Log.w("BluetoothVideo", "recent_calls: not recorded (${error.javaClass.simpleName})") }
+            return false
+        }
+        val updated = change(current) ?: return false
+        return store(context, updated)
+    }
+
+    /** Records one ended call; false when it could not be stored (never throws: this runs as a call ends). */
+    @Synchronized
+    fun record(context: Context, call: RecentCall): Boolean = update(context) { add(it, call) }
 
     /**
      * The stranger shown as [strangerName] has just been verified as [fingerprintHex]: their entry becomes an ordinary entry
@@ -78,13 +149,8 @@ internal object RecentCalls {
      * when no such stranger entry is stored.
      */
     @Synchronized
-    fun promoteStranger(context: Context, strangerName: String, fingerprintHex: String): Boolean {
-        val prefs = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        val existing = loadStored(context)
-        val updated = promote(existing, strangerName, fingerprintHex) ?: return false
-        prefs.edit().putString(KEY, encode(updated)).apply()
-        return true
-    }
+    fun promoteStranger(context: Context, strangerName: String, fingerprintHex: String): Boolean =
+        update(context) { promote(it, strangerName, fingerprintHex) }
 
     /**
      * Pure part of [promoteStranger]: the stranger entry keeps its place, time and call type and takes the person's prefix
@@ -108,11 +174,8 @@ internal object RecentCalls {
 
     /** A call declined by "Block unknown callers" (nobody is named). */
     @Synchronized
-    fun recordBlocked(context: Context, atMs: Long) {
-        val prefs = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        val updated = add(loadStored(context), RecentCall("", false, atMs, blocked = true, direction = CallDirection.INCOMING, result = CallResult.DECLINED))
-        prefs.edit().putString(KEY, encode(updated)).apply()
-    }
+    fun recordBlocked(context: Context, atMs: Long): Boolean =
+        update(context) { add(it, RecentCall("", false, atMs, blocked = true, direction = CallDirection.INCOMING, result = CallResult.DECLINED)) }
 
     /** A non-destructive display projection: the old Recent recorded active calls and anonymous blocked calls. */
     fun project(calls: List<RecentCall>, complete: Boolean): List<RecentCall> = if (complete) calls else

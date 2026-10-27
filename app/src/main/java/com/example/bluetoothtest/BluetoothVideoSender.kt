@@ -29,6 +29,8 @@ class BluetoothVideoSender(
     private val onStatus: (String) -> Unit,
     private val onDisconnected: () -> Unit,
     private val onRemoteKeyFrameNeeded: () -> Unit = {},
+    /** A keyframe that bypasses the recovery back-off (Experimental [RelayJoinKeyFrame]); defaults to the normal request. */
+    private val onRemoteJoinKeyFrame: () -> Unit = onRemoteKeyFrameNeeded,
     private val thermalStatusProvider: () -> Int = { PowerManager.THERMAL_STATUS_NONE },
     private val debugDirectGattHeartbeat: Boolean = true,
     private val debugGattWriteTiming: Boolean = false,
@@ -116,7 +118,7 @@ class BluetoothVideoSender(
     private class PhyLossProbe(
         val address: String,
         val openedAtMs: Long,
-        val requestedTwoM: Boolean,
+        @Volatile var requestedTwoM: Boolean,
         val gatt: GattVideoConnection?,
         @Volatile var node: String?,
     ) {
@@ -149,11 +151,9 @@ class BluetoothVideoSender(
     // Experimental stream delivery reports (version 3; both phones must run this build): what the
     // child received of what this link wrote. Used only under this phone's own switch.
     private val childDeliveryReports = DebugTunables.streamDeliveryReports
-    private val onTimeReports = DebugTunables.onTimeReports
-    private val onTimeSeedRaise = DebugTunables.onTimeSeedRaise
-    // Experimental (default off): join probe seed and seed-raise drain guard, see LinkPacer.
-    private val joinProbeSeed = DebugTunables.joinProbeSeed
-    private val seedRaiseDrainGuard = DebugTunables.seedRaiseDrainGuard
+    // The pacer seed policy (PacerSeedPolicy.kt): on-time reports, the raise, the Experimental drain guard and join probe.
+    private val pacerConfig = PacerQueueConfig.current()
+    private val joinProbeSeed = pacerConfig.joinProbeSeed
     @Volatile private var childDelivery = PeerDeliveryEstimate()
     private val pacer = LinkPacer()
     @Volatile private var linkTransport: BluetoothTransportOption? = null
@@ -308,7 +308,7 @@ class BluetoothVideoSender(
                     phyLossProbe = PhyLossProbe(
                         address = device.address,
                         openedAtMs = SystemClock.elapsedRealtime(),
-                        requestedTwoM = linkPhy == BlePhyPreference.TWO_M,
+                        requestedTwoM = streamRequestedTwoM(linkPhy, deferPhy, deferredRequested = false),
                         gatt = activeGattConnection,
                         node = expectedPeerNodeIdPrefix?.takeIf { selectedRotatingRequest == null }
                             ?.let(AdaptivePhyMemory::prefixLabel),
@@ -375,6 +375,7 @@ class BluetoothVideoSender(
                 if (deferPhy && activeGattConnection != null) {
                     val wanted = phyAfterAuth(linkPhy, AdaptivePhyMemory.isBad(transport, session.peerNodeId.shortLabel()))
                     val requested = wanted == BlePhyPreference.TWO_M && activeGattConnection.requestPhy(wanted)
+                    phyLossProbe?.requestedTwoM = streamRequestedTwoM(linkPhy, deferPhy = true, deferredRequested = requested)
                     Log.i(
                         "BluetoothVideo",
                         "BENCHMARK phy_after_auth: link=stream | node=${session.peerNodeId.shortLabel()} | wanted=${wanted.label} | " +
@@ -409,6 +410,8 @@ class BluetoothVideoSender(
                         require(audioLiveConfig != null || endpoint.peerCapabilities.decodeCodecMask and codec.capabilityMask != 0) {
                             "Final receiver cannot decode ${codec.displayName.substringBefore(" - ")}"
                         }
+                        // Security review 2026-10-27 (item 14): a blocked person neither watches nor forwards this stream.
+                        require(!PersonPolicy.blockedNode(endpoint.peerNodeId)) { "Viewer refused" }
                         endToEndSession = endpoint
                         require(rotatingSelection == null || endpoint.peerNodeId == session.peerNodeId) {
                             "Peer identity changed between discovery and connection"
@@ -608,7 +611,7 @@ class BluetoothVideoSender(
                         )
                     }
                     pacer.onSent(wireBytes, writeStartedNs)
-                    if (seedRaiseDrainGuard) pacer.noteWrite(heldNs, System.nanoTime() - writeStartedNs)
+                    if (pacerConfig.drainGuard) pacer.noteWrite(heldNs, System.nanoTime() - writeStartedNs)
                     if (packet === lastLargePacket) {
                         burstDrain.onLargeFrameWritten(System.nanoTime())
                         lastLargePacket = null
@@ -1055,6 +1058,9 @@ class BluetoothVideoSender(
         session: SecureBluetoothSession,
         contentSession: EndToEndVideoSession,
     ) {
+        // Experimental test_relay_join_key_frame (off): a relay child's request after a calm gap is a likely downstream join.
+        val joinKeyFrame = RelayJoinKeyFrame(SystemClock.elapsedRealtime())
+        val childRelays = session.peerCapabilities.maxChildren > 0
         controlThread = thread(name = "BluetoothSourceControl") {
             try {
                 while (running.get()) {
@@ -1070,7 +1076,17 @@ class BluetoothVideoSender(
                             }
                         }
                         // An audio-only stream has no keyframes: the request is ignored, never passed to an encoder.
-                        SourceControlMessage.KEY_FRAME_REQUEST -> if (audioLive == null) onRemoteKeyFrameNeeded()
+                        SourceControlMessage.KEY_FRAME_REQUEST -> if (audioLive == null) {
+                            val forced = joinKeyFrame.onRequest(
+                                SystemClock.elapsedRealtime(), DebugTunables.relayJoinKeyFrame, childRelays,
+                            )
+                            if (BuildConfig.DEBUG) android.util.Log.i(
+                                "BluetoothVideo",
+                                "BENCHMARK relay_join_key_frame: childRelays=$childRelays | forced=$forced | " +
+                                    "switch=${DebugTunables.relayJoinKeyFrame}",
+                            )
+                            if (forced) onRemoteJoinKeyFrame() else onRemoteKeyFrameNeeded()
+                        }
                         SourceControlMessage.STREAM_END_ACK -> {
                             endAcknowledgements?.countDown()
                             return@thread
@@ -1115,14 +1131,17 @@ class BluetoothVideoSender(
         if (kbps <= 0) {
             // On-time report: media reaches the child without lateness, so the link carries the offered
             // rate; hold the seeded pace instead of decaying it blind (DebugTunables.onTimeReports).
-            if (onTimeReports && !report.linkLate && System.nanoTime() >= childLateUntilNs) {
-                val before = pacer.seedKbps
-                val backlogMs = if (onTimeSeedRaise) oldestPacketAgeMs(System.nanoTime()).toLong() else -1L
-                if (pacer.holdSeed(backlogMs, seedRaiseDrainGuard) && pacer.seedKbps > before) {
-                    Log.i("BluetoothVideo", "BENCHMARK pacer_seed_raise: role=stream_tx | fromKbps=$before | toKbps=${pacer.seedKbps} | backlogMs=$backlogMs")
-                }
-                pacer.lastDrainGuardBlock?.let {
-                    Log.i("BluetoothVideo", it.benchmarkLine("stream_tx", secureSession?.peerNodeId?.shortLabel() ?: "?", pacer.seedKbps))
+            if (pacerConfig.onTimeReports && !report.linkLate && System.nanoTime() >= childLateUntilNs) {
+                PacerSeedPolicy.onTimeReport(
+                    pacer,
+                    pacerConfig,
+                    backlogMs = { oldestPacketAgeMs(System.nanoTime()).toLong() },
+                    droppedMedia = { shedder.shedFrames },
+                )?.let { hold ->
+                    if (hold.raised) Log.i("BluetoothVideo", hold.raiseLine("stream_tx", null))
+                    hold.guardBlock?.let {
+                        Log.i("BluetoothVideo", it.benchmarkLine("stream_tx", secureSession?.peerNodeId?.shortLabel() ?: "?", hold.toKbps))
+                    }
                 }
             }
             return

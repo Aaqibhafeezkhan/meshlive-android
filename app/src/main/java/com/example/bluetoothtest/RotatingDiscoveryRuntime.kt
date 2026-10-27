@@ -96,6 +96,14 @@ object RotatingDiscovery {
                     if (consistent) activeVault?.reconcile(verified.map { it.fingerprint.nodeId }.toSet())
                 }
             }
+            // Security review 2026-10-27, item 8: a contact blocked while rotating IDs were off (the vault did not exist)
+            // loses the lease it holds now, as a block made while they were on does.
+            // Kept pending until both the vault and the block list can be read (reviewer review finding 5).
+            runCatching {
+                activeVault?.requestBlockedReconcile {
+                    if (BlockedPeople.isUnreadable(app)) null else BlockedPeople.list(app).map { it.fingerprint.nodeId }.toSet()
+                }
+            }
             requestRecognitionRebuild()
         }
     }
@@ -375,6 +383,9 @@ object RotatingDiscovery {
      * Contacts whose lease-derived ID equals the announcement (a version 5 call offer matches role 0, a
      * stream offer role 1). A hit is only a hint: the UI shows it unconfirmed and nothing connects from it.
      */
+    /** Design OR: the contact's search window (role-0 IDs by epoch) under the recognition policy, or null. */
+    internal fun seekWindow(contactPrefixHex: String): RelaySeekSelectors.Window? = recognition.seekWindow(contactPrefixHex)
+
     fun recognize(announcement: DiscoveryAnnouncement): List<RecognitionTable.Hit> {
         if (!announcement.rotating || announcement.isWindowOffer) return emptyList() // window IDs belong to no lease
         val role = when {

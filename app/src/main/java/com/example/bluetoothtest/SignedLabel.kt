@@ -9,8 +9,8 @@ import java.security.MessageDigest
 import java.util.UUID
 
 /**
- * Peer labels: optional names, call subjects and stream titles. Promoted 2026-10-11 to the Settings >
- * Features switch "Names and titles"; the shipped default is [CallFeatureDefaults.NAMES_AND_TITLES]. A
+ * Peer labels: optional names, call subjects and stream titles. Promoted 2026-10-11; since 2026-10-17 a
+ * constant with no Settings switch, [CallFeatureDefaults.NAMES_AND_TITLES]. A
  * DEBUG benchmark launch uses only `test_peer_labels`. Naming design phase 1 with review fixes R1-R10
  * (PROTOCOL "Peer labels").
  *
@@ -21,8 +21,6 @@ import java.util.UUID
  */
 object PeerLabelFeature {
     const val EXTRA = "test_peer_labels"
-    /** New key since 2026-10-17 (no Settings switch any more): no stored 0.2.0 choice applies. */
-    const val PREF = "experimental_peer_labels_v2"
     const val PREF_NAME = "peer_label_name"
 
     /** End-to-end hello transport-mask bit 5: "accepts and sends LABELS (BME1 type 10)". Never in link hellos. */
@@ -34,8 +32,8 @@ object PeerLabelFeature {
      * Naming v2 (Design G, G1): the PUBLIC stream title pages are a separate switch from the in-session names and subjects
      * ([enabled]). A title is a title, not a person, and the Go-live dialog says it is public. The in-session stream title
      * (the signed label a joining viewer receives) still needs [enabled]; the advert pages and reading others' pages need
-     * this. Default off like [enabled]; a user who explicitly switched the old combined "Names and titles" on keeps both
-     * (one-time migration, [NamingMigration]); a DEBUG benchmark launch with `test_peer_labels` keeps both too.
+     * this. A constant like [enabled] ([NamingFeatures.TITLE_PAGES]); a DEBUG benchmark launch with `test_peer_labels`
+     * keeps both.
      */
     @Volatile var titlePagesEnabled = false
 

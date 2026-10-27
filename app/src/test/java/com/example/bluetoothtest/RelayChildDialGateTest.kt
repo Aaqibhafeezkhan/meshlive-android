@@ -108,7 +108,14 @@ class RelayChildDialGateTest {
     }
 
     @Test
-    fun theExperimentIsOffByDefaultAndOnlyAvailableInDebugBuilds() {
-        assertFalse(DebugTunables.relayHoldInPlace)
+    fun holdInPlaceIsOnByDefaultAndTheControlArmIsDebugOnly() {
+        // Connection review B1 (2026-10-27): promoted to default on; =false is the DEBUG control arm.
+        assertTrue(DebugTunables.relayHoldInPlace)
+        try {
+            DebugTunables.relayHoldInPlace = false
+            assertFalse(DebugTunables.relayHoldInPlace)
+        } finally {
+            DebugTunables.relayHoldInPlace = true
+        }
     }
 }

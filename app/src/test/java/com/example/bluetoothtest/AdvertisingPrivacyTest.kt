@@ -111,14 +111,16 @@ class AdvertisingPrivacyTest {
 
     @Test
     fun theNeutralNameOptionIsOffByDefaultAndABenchmarkLaunchNeedsItsOwnExtra() {
+        val spec = NeutralNameOption.spec
         val none = { _: String -> false }
+        val unset = { _: String -> null as Boolean? }
         // A normal launch follows the stored choice; the default is off.
-        assertFalse(NeutralNameOption.resolve(false, none, none))
-        assertTrue(NeutralNameOption.resolve(false, none) { it == NeutralNameOption.PREF })
+        assertFalse(FeatureCatalog.resolve(spec, false, none, unset))
+        assertTrue(FeatureCatalog.resolve(spec, false, none) { if (it == NeutralNameOption.PREF) true else null })
         // A benchmark launch ignores the stored choice and renames only with the extra or its alias.
-        assertFalse(NeutralNameOption.resolve(true, none) { true })
-        assertTrue(NeutralNameOption.resolve(true, { it == NeutralNameOption.EXTRA }, none))
-        assertTrue(NeutralNameOption.resolve(true, { it == "test_rotating_neutral_name" }, none))
+        assertFalse(FeatureCatalog.resolve(spec, true, none) { true })
+        assertTrue(FeatureCatalog.resolve(spec, true, { it == NeutralNameOption.EXTRA }, unset))
+        assertTrue(FeatureCatalog.resolve(spec, true, { it == "test_rotating_neutral_name" }, unset))
         assertEquals("neutral_bluetooth_name", NeutralNameOption.PREF)
     }
 

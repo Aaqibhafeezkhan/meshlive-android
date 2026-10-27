@@ -23,6 +23,8 @@
 
     <!-- Find PCs (PcAnnouncement.kt, Design QW; Experimental) -->
     <string name="feat_find_pcs">Find PCs (experimental)</string>
+    <string name="feat_pc_streams">PC live streams (experimental)</string>
+    <string name="feat_pc_streams_description">With Find PCs on, let computers join your live stream and show live streams from computers. Needs a phone that can receive longer Bluetooth announcements. Identity checks and encryption stay the same.</string>
     <string name="feat_find_pcs_description">Also look for the short announcement a Windows PC sends, so a PC that runs MeshLive can appear in the call list. Searching uses one more scan filter and also listens for longer adverts, and works only on a phone whose Bluetooth supports them. Needs rotating call IDs to be on. Your own announcement and every security check stay the same.</string>
 
     <!-- Share app nearby (OfflineAppShare.kt, phone test T9) -->
@@ -37,6 +39,6 @@
     <string name="feat_bmh3_description">Adds privacy protection when connecting to other phones. Older versions or phones with this protection turned off may not connect. Accepting a call can still let the other person recognise your phone.</string>
     <!-- Pseudonymous stranger identities on top of the BMH3 handshake (Bmh3Pseudonyms.kt, phone test T15). On by default since 0.2.0-beta. -->
     <string name="feat_bmh3_pseudonyms">New identity for each stranger</string>
-    <string name="feat_bmh3_pseudonyms_description">Uses a temporary ID with people you haven\'t verified. Verified contacts, and people whose calls you accept, receive your usual ID. Both phones need compatible settings. Some relayed calls and message exchanges require verified contacts; livestream viewers can still recognise the broadcaster\'s phone.</string>
+    <string name="feat_bmh3_pseudonyms_description">Uses a temporary ID with people you haven\'t verified. Verified contacts, and whoever holds a call you accept (which may be a relaying phone), receive your usual ID. Both phones need compatible settings. Message exchanges require verified contacts; livestream viewers can still recognise the broadcaster\'s phone.</string>
     <string name="call_verify_after_reveal">You can verify this person once they have answered and their identity is confirmed.</string>
 </resources>

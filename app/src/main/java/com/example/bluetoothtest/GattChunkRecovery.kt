@@ -228,7 +228,8 @@ internal class RollingBytes(windowNs: Long = 1_000_000_000L, private val buckets
 }
 
 /**
- * Experimental lost-chunk recovery for one GATT connection (`test_gatt_chunk_recovery`, default off; DECISIONS "Design
+ * Lost-chunk recovery for one GATT connection (default on since 2026-10-21, `test_gatt_chunk_recovery=false` is the control
+ * arm; DECISIONS "Design
  * GR" option C after review 1). The sender keeps a [ResendHistory] whenever this switch is on and answers NACKs; the
  * reader ([GattRecoveryReader], owned by the [GattBytePipe]) asks for missing chunks only after the peer's HELLO.
  *
@@ -455,7 +456,7 @@ internal class GattChunkRecovery(
     }
 
     companion object {
-        /** Null unless the Experimental DEBUG switch `test_gatt_chunk_recovery` is on: no behaviour change by default. */
+        /** Null when `test_gatt_chunk_recovery=false` turned the (default-on) recovery off. */
         fun forLink(link: String): GattChunkRecovery? = if (DebugTunables.gattChunkRecovery) GattChunkRecovery(link) else null
     }
 }

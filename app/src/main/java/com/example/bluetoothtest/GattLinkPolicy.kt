@@ -170,6 +170,7 @@ internal object GattLinkPolicy {
         validation = PolicyValidation.UPSTREAM_DOCUMENTED,
         fallback = "The write is retried every 2 ms for up to 500 ms, then the link fails (the registry's gatt-write-busy-retry, the shipped default).",
         legacySwitches = listOf("test_gatt_busy_wedge=legacy"),
+        arm = PolicyArm("test_gatt_busy_wedge=recover") { GattSwitches.busyWedgeRecovery },
     )
 
     val STALE_CONNECTED_CALLBACK = DevicePolicyEntry(
@@ -514,6 +515,47 @@ internal object GattLinkPolicy {
             "when the listener was rebuilt for another reason.",
     )
 
+    /**
+     * Q-MTK (owner approved 2026-10-27): a MediaTek phone relaying a call over GATT corrupts single bytes inside queued
+     * notifications; helper duty stays on LE CoC. PLAN keeps the protocol fix (per-chunk integrity + a GR1 re-request).
+     */
+    val MEDIATEK_GATT_RELAY_HELPER = DevicePolicyEntry(
+        id = "mediatek-call-relay-gatt-helper-off",
+        title = "MediaTek: call-relay helper duty over LE CoC only, never over GATT",
+        matcher = DeviceMatcher(socFamilies = setOf(SocFamily.MEDIATEK)),
+        effects = listOf(CallRelayHelperCocOnly),
+        behaviour = "A MediaTek phone (Build.SOC_MANUFACTURER MediaTek on API 31+, else Build.HARDWARE mt<digits>) whose " +
+            "call endpoint is GATT does not help with other people's calls: its call offer carries no helper flag, its " +
+            "link hello signs no relay mark, and a SETUP or route search arriving over GATT is refused. Callers then " +
+            "pick another helper for a GATT route. Over LE CoC it helps as before; its own direct calls over GATT are " +
+            "unchanged. The Settings status line reads \"Helping: paused (CoC only on this phone)\".",
+        sources = listOf(
+            PolicySource(AOSP_SOURCE, "$A10_BT/btif/src/btif_gatt_server.cc",
+                "Android 10: a notification's onNotificationSent is reported when the value is queued in the stack, not " +
+                    "when the controller sent it, so the app cannot see what a vendor controller does with queued data"),
+            PolicySource(VENDOR_DOC, "https://github.com/zephyrproject-rtos/zephyr/security/advisories",
+                "Analogue only, not a MediaTek document: a Zephyr Bluetooth host advisory on reassembly shared between " +
+                    "connections, the class of defect that only a phone holding two links at once (a relay) exercises"),
+        ),
+        sourceStatus = PARTIAL,
+        evidence = listOf(
+            "benchmarks/runs/relay-showcase-20261026/trace-u* (A15s MT6765 Android 10 as GATT middle)",
+            "benchmarks/runs/relay-showcase-20261026/trace-v* (control and test_gatt_byte_window=3072 + kbps 120)",
+            "benchmarks/runs/relay-showcase-20261026/trace-w* (test_gatt_payload=244)",
+        ),
+        confidence = LOW,
+        confidenceNote = "Local phones only, no MediaTek document: the A15s as GATT middle held 0/8 in every arm (control, " +
+            "test_gatt_byte_window=3072 with kbps 120, test_gatt_payload=244); the M31's HCI log showed contiguous chunks " +
+            "with single bytes changed inside queued notifications. Never on single-link calls (228 A15s direct GATT calls, " +
+            "0 desyncs). Xiaomi Redmi 12 (also MediaTek) 3/10 as GATT middle; non-MediaTek middles 0/72; the A15s as CoC " +
+            "middle held 7/8. The family-wide matcher rests on two MediaTek phones; no data from other MediaTek phones.",
+        reviewed = "2026-10-27",
+        origin = "Q-MTK (2026-10-27): relayed calls through a MediaTek GATT middle broke with record desyncs.",
+        area = PolicyArea.BLUETOOTH_TRANSPORT,
+        validation = PolicyValidation.LOCALLY_REPRODUCED,
+        fallback = "The phone offers helper duty over GATT as on every other family (and its GATT relays fail as measured).",
+    )
+
     val entries: List<DevicePolicyEntry> = listOf(
         LINK_SLOT_LIMIT,
         REGISTRATION_POOL_EXHAUSTION,
@@ -530,6 +572,7 @@ internal object GattLinkPolicy {
         CONNECT_GATT_ON_MAIN,
         GATT_CACHE_REFRESH,
         SERVER_CONNECTION_UNTRACKED,
+        MEDIATEK_GATT_RELAY_HELPER,
     )
 
     private fun policy(): ResolvedDevicePolicy = DeviceFamilyPolicy.current()

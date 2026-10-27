@@ -13,6 +13,8 @@ class RelayRoute(
     val relays: Int,
     /** Rotating IDs: [target] and [helperPrefix] are role-0 RDIs (SETUP message 4, link openings). */
     val rotating: Boolean = false,
+    /** Design OR (DEBUG prototype): this request is a `SEEK` of an on-demand search, not a SETUP of a known route. */
+    val seek: RelaySeekRoute? = null,
 )
 
 /** A helper's decision on a SETUP it read. */
@@ -24,6 +26,19 @@ sealed class RelayAdmission {
     class Accept(val nextHop: BleL2capPeer, val nextBudget: Int, val hopPrefix: ByteArray?, val rotating: Boolean = false) : RelayAdmission()
 
     class Refuse(val reason: RelaySetupFailure) : RelayAdmission()
+
+    /**
+     * Design OR (DEBUG prototype): no table route, but this phone searches on demand for [target] (a plain SETUP handled as
+     * a search, budget clamped to 2).
+     */
+    class Search(val target: ByteArray, val budget: Int) : RelayAdmission()
+}
+
+/** Design OR: a helper's admission of a search (the relay duty is held by [owner] when accepted). */
+sealed class SeekAdmission {
+    class Accept(val owner: Any, val allowanceMs: Long) : SeekAdmission()
+
+    class Refuse(val reason: RelaySetupFailure, val detail: String) : SeekAdmission()
 }
 
 /**
@@ -47,6 +62,8 @@ interface RelayHelperHost {
         budget: Int,
         transport: BluetoothTransportOption,
         rotating: Boolean = false,
+        /** Amendment CP: the per-parent limiter key of a pseudonymous parent ([RelayIdentityPolicy.limiterKey]); null = the parent's prefix. */
+        parentKey: String? = null,
     ): RelayAdmission
 
     /** A relayed call started / ended on this phone (notification and busy state). */
@@ -55,6 +72,22 @@ interface RelayHelperHost {
 
     /** A caller's outcome for a route (table skip and protection). */
     fun routeOutcome(route: RelayRoute, ready: Boolean, reason: RelaySetupFailure?)
+
+    /** Design OR: the `RELAY_SEEK` bits a new link responder block signs now, or null (off, out of scope, busy, exhausted). */
+    fun seekFeatures(): Int? = null
+
+    /** Design OR: takes the relay duty and checks scope and budgets for a search of [budget]; an allowance or a refusal. */
+    fun admitSeek(budget: Int, requestedMs: Int, transport: BluetoothTransportOption): SeekAdmission =
+        SeekAdmission.Refuse(RelaySetupFailure.REFUSED, "off")
+
+    /** Design OR: the search of [owner] ended (budgets charged or credited; the duty is released with the relay). */
+    fun seekFinished(owner: Any, startedMs: Long, ready: Boolean) = Unit
+
+    /** Design OR: an on-demand low-latency scan until [untilMs] (elapsedRealtime) or [done]; ms scanned, 0 when refused. */
+    fun seekScan(owner: Any, untilMs: Long, done: () -> Boolean): Long = 0L
+
+    /** Design OR: one outgoing dial or handshake of a search, charged to the phone-wide budgets. */
+    fun seekCharge(owner: Any, dial: Boolean) = Unit
 }
 
 /**
@@ -83,8 +116,16 @@ object RelayedCallsRuntime {
         return true
     }
 
+    /**
+     * Design OR (DEBUG prototype): every cost-0 version 5 call offer any scan of this phone heard, by advertiser address,
+     * for the caller's first hops, a helper's opportunistic cache and its search. Kept 30 s, at most 128 addresses; empty
+     * while the on-demand switches are off.
+     */
+    internal val seekOffers = RecentCallOffers(::nowMs)
+
     /** A scanned cost-0 call offer (before the per-address duplicate filter), when the experiment is on. */
     internal fun onScanOffer(peer: BleL2capPeer, address: String, rssi: Int?) {
+        if (RelaySeekFeature.active() && peer.announcement.rotating) seekOffers.record(peer, address, rssi ?: -127)
         val current = (if (peer.announcement.rotating) rotatingTable else table) ?: return
         if (!RelayedCallsFeature.enabled) return
         offersSeen++
@@ -128,6 +169,49 @@ object RelayedCallsRuntime {
     }
 
     internal fun nowMs(): Long = SystemClock.elapsedRealtime()
+
+    /**
+     * A helper's freshest sighting of the next hop's own connectable offer (the helper [hopPrefix], else the [target]), seen
+     * at or after [seenAfterMs] (elapsedRealtime), or null: the next hop's current address after it re-advertised (relay hop
+     * 1M retry).
+     */
+    fun freshOffer(hopPrefix: ByteArray?, target: ByteArray, rotating: Boolean, seenAfterMs: Long): BleL2capPeer? {
+        val current = (if (rotating) rotatingTable else table) ?: return null
+        return current.rediscoverHop(hopPrefix, target, seenAfterMs)?.peer
+    }
+}
+
+/** Recent cost-0 version 5 call offers by advertiser address (Design OR); thread-safe, bounded, expiring. */
+internal class RecentCallOffers(private val clock: () -> Long, private val keepMs: Long = 30_000L, private val capacity: Int = 128) {
+    private val byAddress = LinkedHashMap<String, SeenOffer<BleL2capPeer>>()
+
+    @Synchronized
+    fun record(peer: BleL2capPeer, address: String, rssi: Int) {
+        val now = clock()
+        val previous = byAddress.remove(address)
+        val sameId = previous?.rdi?.contentEquals(peer.announcement.nodeIdPrefix) == true
+        byAddress[address] = SeenOffer(
+            peer, address, peer.announcement, rssi,
+            firstSeenMs = if (sameId) previous!!.firstSeenMs else now,
+            lastSeenMs = now,
+            count = if (sameId) previous!!.count + 1 else 1,
+        )
+        trim(now)
+    }
+
+    @Synchronized
+    fun since(sinceMs: Long): List<SeenOffer<BleL2capPeer>> {
+        trim(clock())
+        return byAddress.values.filter { it.lastSeenMs >= sinceMs }
+    }
+
+    private fun trim(now: Long) {
+        byAddress.entries.removeAll { now - it.value.lastSeenMs > keepMs }
+        while (byAddress.size > capacity) byAddress.remove(byAddress.keys.first())
+    }
+
+    @Synchronized
+    fun clear() = byAddress.clear()
 }
 
 /**

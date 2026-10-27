@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "revision": "2026-10-14.2",
+  "revision": "2026-10-27.1",
   "generated_by": "app/src/test/java/com/example/bluetoothtest/DeviceFamilyPolicyTest.kt (run :app:testDebugUnitTest with DEVICE_POLICY_UPDATE=1 to rewrite); source of truth: app/src/main/java/com/example/bluetoothtest/DevicePolicyRegistry.kt",
   "off_switch": "DEBUG launch extra test_device_policy_off=<id>[,<id>...] or all",
   "entries": [
@@ -864,7 +864,8 @@
       "reviewed": "2026-10-09",
       "off_switch": "test_device_policy_off=android-14-gatt-mtu-517",
       "legacy_switches": [],
-      "origin": "Proposal (not implemented)"
+      "origin": "Proposal (not implemented)",
+      "superseded_by": "gatt-mtu-fixed-517"
     },
     {
       "id": "ble-scan-start-quota",
@@ -915,7 +916,8 @@
       "reviewed": "2026-10-09",
       "off_switch": "test_device_policy_off=ble-scan-start-quota",
       "legacy_switches": [],
-      "origin": "Proposal (not implemented)"
+      "origin": "Proposal (not implemented)",
+      "superseded_by": "le-scan-start-quota"
     },
     {
       "id": "background-restriction-visible",
@@ -961,7 +963,8 @@
       "reviewed": "2026-10-09",
       "off_switch": "test_device_policy_off=background-restriction-visible",
       "legacy_switches": [],
-      "origin": "Proposal (not implemented)"
+      "origin": "Proposal (not implemented)",
+      "superseded_by": "bg-background-restricted"
     },
     {
       "id": "one-ui-never-sleeping-apps",
@@ -2476,7 +2479,8 @@
       "reviewed": "2026-10-14",
       "off_switch": "test_device_policy_off=android13-14-gatt-client-wedged-after-busy",
       "legacy_switches": ["test_gatt_busy_wedge=legacy"],
-      "origin": "Backlog G-03 (WRONG): BluetoothTransportPolicy gatt-write-busy-retry spun 2 ms for 500 ms on a stuck client."
+      "origin": "Backlog G-03 (WRONG): BluetoothTransportPolicy gatt-write-busy-retry spun 2 ms for 500 ms on a stuck client.",
+      "arm": "test_gatt_busy_wedge=recover"
     },
     {
       "id": "gatt-stale-connected-callback",
@@ -3028,6 +3032,52 @@
       "off_switch": "test_device_policy_off=android11-gatt-server-connection-untracked",
       "legacy_switches": [],
       "origin": "Offline analysis of the S22-ASUS edge-case and long-call runs, 2026-10-21."
+    },
+    {
+      "id": "mediatek-call-relay-gatt-helper-off",
+      "title": "MediaTek: call-relay helper duty over LE CoC only, never over GATT",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": null,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": ["MEDIATEK"],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "SoC [MEDIATEK]",
+      "component": null,
+      "effects": ["call-relay helper duty over LE CoC only (never over GATT)"],
+      "behaviour": "A MediaTek phone (Build.SOC_MANUFACTURER MediaTek on API 31+, else Build.HARDWARE mt<digits>) whose call endpoint is GATT does not help with other people's calls: its call offer carries no helper flag, its link hello signs no relay mark, and a SETUP or route search arriving over GATT is refused. Callers then pick another helper for a GATT route. Over LE CoC it helps as before; its own direct calls over GATT are unchanged. The Settings status line reads \"Helping: paused (CoC only on this phone)\".",
+      "sources": [
+        {
+          "kind": "AOSP_SOURCE",
+          "reference": "https://android.googlesource.com/platform/system/bt/+/refs/heads/android10-release/btif/src/btif_gatt_server.cc",
+          "note": "Android 10: a notification's onNotificationSent is reported when the value is queued in the stack, not when the controller sent it, so the app cannot see what a vendor controller does with queued data"
+        },
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/zephyrproject-rtos/zephyr/security/advisories",
+          "note": "Analogue only, not a MediaTek document: a Zephyr Bluetooth host advisory on reassembly shared between connections, the class of defect that only a phone holding two links at once (a relay) exercises"
+        }
+      ],
+      "source_status": "PARTIAL",
+      "area": "BLUETOOTH_TRANSPORT",
+      "validation": "LOCALLY_REPRODUCED",
+      "fallback": "The phone offers helper duty over GATT as on every other family (and its GATT relays fail as measured).",
+      "evidence": ["benchmarks/runs/relay-showcase-20261026/trace-u* (A15s MT6765 Android 10 as GATT middle)", "benchmarks/runs/relay-showcase-20261026/trace-v* (control and test_gatt_byte_window=3072 + kbps 120)", "benchmarks/runs/relay-showcase-20261026/trace-w* (test_gatt_payload=244)"],
+      "confidence": "LOW",
+      "confidence_note": "Local phones only, no MediaTek document: the A15s as GATT middle held 0/8 in every arm (control, test_gatt_byte_window=3072 with kbps 120, test_gatt_payload=244); the M31's HCI log showed contiguous chunks with single bytes changed inside queued notifications. Never on single-link calls (228 A15s direct GATT calls, 0 desyncs). Xiaomi Redmi 12 (also MediaTek) 3/10 as GATT middle; non-MediaTek middles 0/72; the A15s as CoC middle held 7/8. The family-wide matcher rests on two MediaTek phones; no data from other MediaTek phones.",
+      "reviewed": "2026-10-27",
+      "off_switch": "test_device_policy_off=mediatek-call-relay-gatt-helper-off",
+      "legacy_switches": [],
+      "origin": "Q-MTK (2026-10-27): relayed calls through a MediaTek GATT middle broke with record desyncs."
     },
     {
       "id": "bg-battery-optimization",
@@ -5159,52 +5209,6 @@
       "origin": "new experiment (T-03); extends low-ram-sender-queue"
     },
     {
-      "id": "adpf-hint-session",
-      "title": "ADPF performance hint session for the visible call",
-      "status": "proposed",
-      "matcher": {
-        "sdk_min": 31,
-        "sdk_max": null,
-        "hardware": [],
-        "boards": [],
-        "board_prefixes": [],
-        "soc_families": [],
-        "soc_model_prefixes": [],
-        "manufacturers": [],
-        "skins": [],
-        "stack_lineages": [],
-        "controller": null,
-        "codec_component_prefixes": []
-      },
-      "matcher_text": "API >= 31",
-      "component": null,
-      "effects": ["PerformanceHintManager session for the encode threads while an activity is visible"],
-      "behaviour": "Proposed (Experimental, test_adpf_hint=true): while an activity is visible (process importance FOREGROUND or VISIBLE) the encode threads get a PerformanceHintManager session with target 1/fps and the measured work time per frame; closed when the process leaves the screen. Never for the screen-off relay: the platform pauses sessions below IMPORTANT_FOREGROUND. createHintSession returning null (no vendor support) ends the attempt for the process; nothing is inferred from the SoC.",
-      "sources": [
-        {
-          "kind": "AOSP_SOURCE",
-          "reference": "https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/os/PerformanceHintManager.java",
-          "note": "createHintSession(tids, targetNs) returns null when unsupported and throws on an empty tid list or non-positive target; HintManagerService pauses a session while the uid's process state is above IMPORTANT_FOREGROUND (as read in research note cpu-power.md section 5; the AOSP files were not re-fetched for this entry)"
-        },
-        {
-          "kind": "API_REFERENCE",
-          "reference": "https://developer.android.com/reference/android/os/PerformanceHintManager",
-          "note": "PerformanceHintManager, API 31; Session.updateTargetWorkDuration, reportActualWorkDuration, close"
-        }
-      ],
-      "source_status": "PARTIAL",
-      "area": "MEMORY_THERMAL",
-      "validation": "EXPERIMENTAL",
-      "fallback": "No hint session; the encode-time governor alone adapts the preset",
-      "evidence": ["none: no hint session has been created on an owned phone"],
-      "confidence": "LOW",
-      "confidence_note": "The API is documented; vendor support varies, the pause rule is read from the research note on HintManagerService, and the benefit and power cost for the libaom threads are unmeasured.",
-      "reviewed": "2026-10-14",
-      "off_switch": "test_device_policy_off=adpf-hint-session",
-      "legacy_switches": ["DEBUG test_adpf_hint=true enables the code path (default off)"],
-      "origin": "new experiment (T-04)"
-    },
-    {
       "id": "native-simd-safe-mode",
       "title": "Mask libaom SIMD kernels after a native crash at encoder start",
       "status": "proposed",
@@ -5595,7 +5599,7 @@
     {
       "id": "bluetooth-process-restart-recovery",
       "title": "Rebuild BLE scanners after Bluetooth off/on or a Bluetooth process restart",
-      "status": "proposed",
+      "status": "implemented",
       "matcher": {
         "sdk_min": null,
         "sdk_max": null,
@@ -5785,47 +5789,6 @@
       "off_switch": "test_device_policy_off=scan-hardware-filter-fallback",
       "legacy_switches": [],
       "origin": "Backlog S-06: ScanFailurePolicy handles failures, not a scan that runs and reports nothing."
-    },
-    {
-      "id": "scan-pause-during-connect",
-      "title": "Pause discovery scans while the app dials a link (Experimental)",
-      "status": "proposed",
-      "matcher": {
-        "sdk_min": null,
-        "sdk_max": null,
-        "hardware": [],
-        "boards": [],
-        "board_prefixes": [],
-        "soc_families": [],
-        "soc_model_prefixes": [],
-        "manufacturers": [],
-        "skins": [],
-        "stack_lineages": [],
-        "controller": null,
-        "codec_component_prefixes": []
-      },
-      "matcher_text": "every phone",
-      "component": null,
-      "effects": ["ScanGate.pauseFor(ms) stops continuous scanners for the dial window and restarts them through the gate"],
-      "behaviour": "Scanning while a connection is established competes for the radio; Android 14+ already downgrades LOW_LATENCY to BALANCED for about 6 s during connects. The diagnostic half is always on: discovery statistics windows that overlap an own connect attempt are tagged. The pause itself is Experimental, default off: `test_scan_pause_during_connect=true`.",
-      "sources": [
-        {
-          "kind": "AOSP_SOURCE",
-          "reference": "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/heads/android14-release/android/app/src/com/android/bluetooth/gatt/ScanManager.java#1341",
-          "note": "the stack downgrades scan intensity itself during connection establishment"
-        }
-      ],
-      "source_status": "PARTIAL",
-      "area": "BLUETOOTH_TRANSPORT",
-      "validation": "EXPERIMENTAL",
-      "fallback": "Discovery keeps scanning during dials.",
-      "evidence": ["none: no A/B of child establish rate with and without a concurrent scan"],
-      "confidence": "LOW",
-      "confidence_note": "RxAndroidBle FAQ and controller scan-window reasoning are old and mixed; the A14+ stack already mitigates.",
-      "reviewed": "2026-10-14",
-      "off_switch": "test_device_policy_off=scan-pause-during-connect",
-      "legacy_switches": [],
-      "origin": "Backlog S-07: discovery kept scanning during dials."
     },
     {
       "id": "hyperos-deepdoze-scan-block",
@@ -6024,7 +5987,8 @@
       "reviewed": "2026-10-14",
       "off_switch": "test_device_policy_off=fgs-session-wake-lock",
       "legacy_switches": [],
-      "origin": "Device-family backlog B-04: no partial wake lock existed (grep: only a proximity lock in PrivateCallAudioSession)."
+      "origin": "Device-family backlog B-04: no partial wake lock existed (grep: only a proximity lock in PrivateCallAudioSession).",
+      "arm": "test_session_wake_lock=true"
     },
     {
       "id": "boot-resume-after-restart",
@@ -6075,7 +6039,8 @@
       "reviewed": "2026-10-14",
       "off_switch": "test_device_policy_off=boot-resume-after-restart",
       "legacy_switches": [],
-      "origin": "Device-family backlog B-06: a relay phone that reboots stays off the mesh until someone opens the app."
+      "origin": "Device-family backlog B-06: a relay phone that reboots stays off the mesh until someone opens the app.",
+      "arm": "test_boot_resume=true"
     },
     {
       "id": "android15-audio-focus-requires-top-or-fgs",
@@ -7015,7 +6980,8 @@
       "reviewed": "2026-10-14",
       "off_switch": "test_device_policy_off=coc-echo-verification",
       "legacy_switches": ["test_coc_echo_verify=true"],
-      "origin": "Family batch C (BACKLOG C-01..C-07, aosp-bt-versions MTU-02/COC-01/COC-04/CONN-08)."
+      "origin": "Family batch C (BACKLOG C-01..C-07, aosp-bt-versions MTU-02/COC-01/COC-04/CONN-08).",
+      "arm": "test_coc_echo_verify=true"
     },
     {
       "id": "android16-bluetooth-socket-settings-coc",
@@ -8676,9 +8642,9 @@
         "stack_lineage": "PLATFORM_SYSTEM_BT",
         "codec_components": []
       },
-      "active": ["gatt-context-map-race", "le-coc-server-leak", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-close-before-registration-leak", "android13-14-gatt-client-wedged-after-busy", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "android11-gatt-server-connection-untracked", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-power-save-mode", "bg-oem-oppo", "bg-system-bluetooth-app", "bg-phone-updated", "bg-incoming-call-popup", "bg-killer-package-scan", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "android10-11-location-switch-scan-gate", "scan-silence-watchdog", "android10-scanner-leak-on-process-death", "android10-11-background-scan-needs-location-fgs", "fgs-session-wake-lock", "boot-resume-after-restart", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-android10-address-type-precondition", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-credit-stall-classification", "coc-echo-verification", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
+      "active": ["gatt-context-map-race", "le-coc-server-leak", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-close-before-registration-leak", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "android11-gatt-server-connection-untracked", "mediatek-call-relay-gatt-helper-off", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-power-save-mode", "bg-oem-oppo", "bg-system-bluetooth-app", "bg-phone-updated", "bg-incoming-call-popup", "bg-killer-package-scan", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "android10-11-location-switch-scan-gate", "scan-silence-watchdog", "bluetooth-process-restart-recovery", "android10-scanner-leak-on-process-death", "android10-11-background-scan-needs-location-fgs", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-android10-address-type-precondition", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-credit-stall-classification", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
       "component_rules": {},
-      "matching_proposals": ["android-10-11-le-coc-security-id-budget", "android-11-coc-small-sdu-coalescing", "pre-android-13-coc-congested-write-loss", "ble-scan-start-quota", "background-restriction-visible", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "userspace32-tier", "native-armeabi-v7a-optional-build", "bluetooth-process-restart-recovery", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "scan-pause-during-connect", "oem-screenoff-scan-pause-vivo-poco-oppo", "audio-capture-source-fallback-chain", "opus-complexity-governor", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
+      "matching_proposals": ["android-10-11-le-coc-security-id-budget", "android-11-coc-small-sdu-coalescing", "pre-android-13-coc-congested-write-loss", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "userspace32-tier", "native-armeabi-v7a-optional-build", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "oem-screenoff-scan-pause-vivo-poco-oppo", "audio-capture-source-fallback-chain", "opus-complexity-governor", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
     },
     {
       "alias": "a55",
@@ -8698,12 +8664,12 @@
         "stack_lineage": "BLUETOOTH_MODULE",
         "codec_components": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"]
       },
-      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-stale-connected-callback", "gatt-link-silence-detector", "bluetooth-audio-airtime-coexistence", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "scan-silence-watchdog", "fgs-session-wake-lock", "boot-resume-after-restart", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-socket-error-codes", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-echo-verification", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "camera-privacy-toggle-notice", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-stale-connected-callback", "gatt-link-silence-detector", "bluetooth-audio-airtime-coexistence", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "scan-silence-watchdog", "bluetooth-process-restart-recovery", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-socket-error-codes", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "camera-privacy-toggle-notice", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
       "component_rules": {
         "codec2-encoder-tie-break": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"],
         "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder"]
       },
-      "matching_proposals": ["android-14-gatt-mtu-517", "ble-scan-start-quota", "background-restriction-visible", "one-ui-never-sleeping-apps", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "android16-bond-loss-dialog", "samsung-gatt-direct-connect-5s", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "adpf-hint-session", "native-simd-safe-mode", "userspace32-tier", "bluetooth-process-restart-recovery", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "scan-pause-during-connect", "audio-capture-source-fallback-chain", "call-audio-mode-change-wait", "call-usb-headset-mode-normal", "opus-complexity-governor", "android16-bluetooth-socket-settings-coc", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "exynos-vendor-qp-range", "encoder-key-latency", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
+      "matching_proposals": ["one-ui-never-sleeping-apps", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "android16-bond-loss-dialog", "samsung-gatt-direct-connect-5s", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "native-simd-safe-mode", "userspace32-tier", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "audio-capture-source-fallback-chain", "call-audio-mode-change-wait", "call-usb-headset-mode-normal", "opus-complexity-governor", "android16-bluetooth-socket-settings-coc", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "exynos-vendor-qp-range", "encoder-key-latency", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
     },
     {
       "alias": "asus",
@@ -8723,12 +8689,12 @@
         "stack_lineage": "PLATFORM_SYSTEM_BT",
         "codec_components": ["c2.android.vp9.encoder"]
       },
-      "active": ["qcom-legacy-gatt-call", "qcom-legacy-coc-call", "qcom-legacy-classic-call", "qcom-msmnile-call", "qcom-legacy-call-vp9-software-decoder", "qcom-legacy-call-relay-gatt-acknowledged-writes", "qcom-msmnile-classic-source-balanced-scan", "gatt-context-map-race", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-close-before-registration-leak", "android13-14-gatt-client-wedged-after-busy", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "android11-gatt-server-connection-untracked", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-oem-asus", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "android10-11-location-switch-scan-gate", "scan-silence-watchdog", "android10-scanner-leak-on-process-death", "android10-11-background-scan-needs-location-fgs", "fgs-session-wake-lock", "boot-resume-after-restart", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-credit-stall-classification", "coc-echo-verification", "camera-session-wait-closed", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
+      "active": ["qcom-legacy-gatt-call", "qcom-legacy-coc-call", "qcom-legacy-classic-call", "qcom-msmnile-call", "qcom-legacy-call-vp9-software-decoder", "qcom-legacy-call-relay-gatt-acknowledged-writes", "qcom-msmnile-classic-source-balanced-scan", "gatt-context-map-race", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-close-before-registration-leak", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "android11-gatt-server-connection-untracked", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-oem-asus", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "android10-11-location-switch-scan-gate", "scan-silence-watchdog", "bluetooth-process-restart-recovery", "android10-scanner-leak-on-process-death", "android10-11-background-scan-needs-location-fgs", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-credit-stall-classification", "camera-session-wait-closed", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
       "component_rules": {
         "codec2-encoder-tie-break": ["c2.android.vp9.encoder"],
         "aosp-codec2-opus-decoder-first": ["c2.android.vp9.encoder"]
       },
-      "matching_proposals": ["android-10-11-le-coc-security-id-budget", "android-11-coc-small-sdu-coalescing", "pre-android-13-coc-congested-write-loss", "ble-scan-start-quota", "background-restriction-visible", "asus-auto-start-manager", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "native-simd-safe-mode", "userspace32-tier", "bluetooth-process-restart-recovery", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "scan-pause-during-connect", "audio-capture-source-fallback-chain", "opus-complexity-governor", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "encoder-key-latency", "qualcomm-wcn399x-dual-role-unvalidated", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
+      "matching_proposals": ["android-10-11-le-coc-security-id-budget", "android-11-coc-small-sdu-coalescing", "pre-android-13-coc-congested-write-loss", "asus-auto-start-manager", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "native-simd-safe-mode", "userspace32-tier", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "audio-capture-source-fallback-chain", "opus-complexity-governor", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "encoder-key-latency", "qualcomm-wcn399x-dual-role-unvalidated", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
     },
     {
       "alias": "m31",
@@ -8748,9 +8714,9 @@
         "stack_lineage": "PLATFORM_SYSTEM_BT",
         "codec_components": ["OMX.Exynos.VP9.Encoder"]
       },
-      "active": ["le-coc-eatt-stranded-channels", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-close-before-registration-leak", "android13-14-gatt-client-wedged-after-busy", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "scan-silence-watchdog", "fgs-session-wake-lock", "boot-resume-after-restart", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-credit-stall-classification", "coc-mtu-exchange-before-traffic", "coc-echo-verification", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "camera-privacy-toggle-notice", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
+      "active": ["le-coc-eatt-stranded-channels", "app-bluetooth-toggle-allowed", "decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-close-before-registration-leak", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "scan-silence-watchdog", "bluetooth-process-restart-recovery", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-credit-stall-classification", "coc-mtu-exchange-before-traffic", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "camera-privacy-toggle-notice", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
       "component_rules": {},
-      "matching_proposals": ["pre-android-13-coc-congested-write-loss", "ble-scan-start-quota", "background-restriction-visible", "one-ui-never-sleeping-apps", "omx-encoder-qp-bounds-ignored", "omx-exynos-vp9-framerate-bitrate-adjuster", "omx-exynos-framerate-adjuster-arm", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "samsung-gatt-direct-connect-5s", "android12-gatt-disconnect-status-zero", "exynos9611-dual-role-equal-interval-child-starvation", "att-payload-ll-packing", "android12-le-acl-segment-miscount", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "adpf-hint-session", "native-simd-safe-mode", "userspace32-tier", "bluetooth-process-restart-recovery", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "scan-pause-during-connect", "audio-capture-source-fallback-chain", "audio-off-main-thread-commands", "call-audio-mode-change-wait", "call-usb-headset-mode-normal", "opus-complexity-governor", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "exynos-vendor-qp-range", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
+      "matching_proposals": ["pre-android-13-coc-congested-write-loss", "one-ui-never-sleeping-apps", "omx-encoder-qp-bounds-ignored", "omx-exynos-vp9-framerate-bitrate-adjuster", "omx-exynos-framerate-adjuster-arm", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "samsung-gatt-direct-connect-5s", "android12-gatt-disconnect-status-zero", "exynos9611-dual-role-equal-interval-child-starvation", "att-payload-ll-packing", "android12-le-acl-segment-miscount", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "native-simd-safe-mode", "userspace32-tier", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "audio-capture-source-fallback-chain", "audio-off-main-thread-commands", "call-audio-mode-change-wait", "call-usb-headset-mode-normal", "opus-complexity-governor", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "exynos-vendor-qp-range", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
     },
     {
       "alias": "s22",
@@ -8770,12 +8736,12 @@
         "stack_lineage": "BLUETOOTH_MODULE",
         "codec_components": ["c2.android.av1.encoder", "c2.android.vp9.encoder"]
       },
-      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-stale-connected-callback", "gatt-link-silence-detector", "bluetooth-audio-airtime-coexistence", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "scan-silence-watchdog", "fgs-session-wake-lock", "boot-resume-after-restart", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-socket-error-codes", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-echo-verification", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "camera-privacy-toggle-notice", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-stale-connected-callback", "gatt-link-silence-detector", "bluetooth-audio-airtime-coexistence", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "scan-silence-watchdog", "bluetooth-process-restart-recovery", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-socket-error-codes", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "camera-privacy-toggle-notice", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
       "component_rules": {
         "codec2-encoder-tie-break": ["c2.android.av1.encoder", "c2.android.vp9.encoder"],
         "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder", "c2.android.vp9.encoder"]
       },
-      "matching_proposals": ["android-14-gatt-mtu-517", "ble-scan-start-quota", "background-restriction-visible", "one-ui-never-sleeping-apps", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "android16-bond-loss-dialog", "samsung-gatt-direct-connect-5s", "android15-qcom-coc-connect-stall", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "adpf-hint-session", "native-simd-safe-mode", "userspace32-tier", "bluetooth-process-restart-recovery", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "scan-pause-during-connect", "audio-capture-source-fallback-chain", "call-audio-mode-change-wait", "call-usb-headset-mode-normal", "opus-complexity-governor", "android16-bluetooth-socket-settings-coc", "camera-device-reopen-one-ui-qualcomm-api36", "camera-timebase-inconsistent", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "encoder-key-latency", "qualcomm-android16-first-frames-suspect", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
+      "matching_proposals": ["one-ui-never-sleeping-apps", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "android16-bond-loss-dialog", "samsung-gatt-direct-connect-5s", "android15-qcom-coc-connect-stall", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "native-simd-safe-mode", "userspace32-tier", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "audio-capture-source-fallback-chain", "call-audio-mode-change-wait", "call-usb-headset-mode-normal", "opus-complexity-governor", "android16-bluetooth-socket-settings-coc", "camera-device-reopen-one-ui-qualcomm-api36", "camera-timebase-inconsistent", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "encoder-key-latency", "qualcomm-android16-first-frames-suspect", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
     },
     {
       "alias": "s24",
@@ -8795,12 +8761,12 @@
         "stack_lineage": "BLUETOOTH_MODULE",
         "codec_components": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"]
       },
-      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-stale-connected-callback", "gatt-link-silence-detector", "bluetooth-audio-airtime-coexistence", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "scan-silence-watchdog", "fgs-session-wake-lock", "boot-resume-after-restart", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-socket-error-codes", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-echo-verification", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "camera-privacy-toggle-notice", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-stale-connected-callback", "gatt-link-silence-detector", "bluetooth-audio-airtime-coexistence", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-samsung", "bg-system-bluetooth-app", "bg-phone-updated", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "scan-silence-watchdog", "bluetooth-process-restart-recovery", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-socket-error-codes", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "camera-privacy-toggle-notice", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
       "component_rules": {
         "codec2-encoder-tie-break": ["c2.exynos.vp9.encoder", "c2.android.av1.encoder"],
         "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder"]
       },
-      "matching_proposals": ["android-14-gatt-mtu-517", "ble-scan-start-quota", "background-restriction-visible", "one-ui-never-sleeping-apps", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "android16-bond-loss-dialog", "samsung-gatt-direct-connect-5s", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "adpf-hint-session", "native-simd-safe-mode", "userspace32-tier", "bluetooth-process-restart-recovery", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "scan-pause-during-connect", "audio-capture-source-fallback-chain", "call-audio-mode-change-wait", "call-usb-headset-mode-normal", "opus-complexity-governor", "android16-bluetooth-socket-settings-coc", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "exynos-vendor-qp-range", "encoder-key-latency", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
+      "matching_proposals": ["one-ui-never-sleeping-apps", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "android16-bond-loss-dialog", "samsung-gatt-direct-connect-5s", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "native-simd-safe-mode", "userspace32-tier", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "audio-capture-source-fallback-chain", "call-audio-mode-change-wait", "call-usb-headset-mode-normal", "opus-complexity-governor", "android16-bluetooth-socket-settings-coc", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "exynos-vendor-qp-range", "encoder-key-latency", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
     },
     {
       "alias": "xiaomi",
@@ -8820,12 +8786,12 @@
         "stack_lineage": "BLUETOOTH_MODULE",
         "codec_components": ["c2.android.av1.encoder"]
       },
-      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-xiaomi", "bg-system-bluetooth-app", "bg-phone-updated", "bg-incoming-call-popup", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "scan-silence-watchdog", "fgs-session-wake-lock", "boot-resume-after-restart", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-socket-error-codes", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "coc-echo-verification", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "camera-privacy-toggle-notice", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
+      "active": ["decoder-init-fallback", "codec-exception-recoverable-reinit", "decoder-no-output-watchdog", "decoder-bounded-release", "yuv-image-crop-rect", "le-scan-start-quota", "gatt-mtu-fixed-517", "gatt-write-busy-retry", "le-connect-retry-link-statuses", "gatt-link-slot-limit", "gatt-registration-pool-exhaustion", "gatt-stale-connected-callback", "gatt-link-silence-detector", "gatt-one-client-per-remote", "bluetooth-audio-airtime-coexistence", "mediatek-call-relay-gatt-helper-off", "bg-battery-optimization", "bg-background-restricted", "bg-standby-bucket", "bg-unused-app-restrictions", "bg-power-save-mode", "bg-fgs-start-fallback", "bg-oem-xiaomi", "bg-system-bluetooth-app", "bg-phone-updated", "bg-incoming-call-popup", "bg-killer-package-scan", "bg-process-exit", "bg-scan-paused-by-maker", "thermal-status-ladder", "low-ram-sender-queue", "trim-memory-release", "bounded-control-queues", "memory-tier-log", "native-16kb-page-alignment", "native-simd-runtime-detection", "peer-label-title-advertising-set", "scan-silence-watchdog", "bluetooth-process-restart-recovery", "android15-audio-focus-requires-top-or-fgs", "audio-effect-default-state-logging", "audio-capture-silence-watchdog", "audio-echo-risk-hint", "call-route-set-result-and-reassert", "opus-encoder-native-fallback", "coc-connect-bounded", "coc-socket-error-codes", "classic-connect-runtime-guard", "classic-pairing-request-logging", "classic-rfcomm-peer-cap", "camera-stream-combination-validation", "camera-open-error-retry", "camera-frame-stall-watchdog", "camera-privacy-toggle-notice", "encoder-init-fallback", "advertising-start-non-throwing", "advertising-set-budget-learned", "advertising-set-watchdog-restart", "advertising-slots-stuck-report", "advertising-legacy-payload-28-bytes", "advertising-multi-adv-flag-not-trusted", "le-priority-request-supervision-log", "dual-role-probe-log"],
       "component_rules": {
         "codec2-encoder-tie-break": ["c2.android.av1.encoder"],
         "aosp-codec2-opus-decoder-first": ["c2.android.av1.encoder"]
       },
-      "matching_proposals": ["android-14-gatt-mtu-517", "ble-scan-start-quota", "background-restriction-visible", "hyperos-autostart-and-no-restrictions", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "adpf-hint-session", "native-simd-safe-mode", "userspace32-tier", "native-armeabi-v7a-optional-build", "bluetooth-process-restart-recovery", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "scan-pause-during-connect", "hyperos-deepdoze-scan-block", "oem-screenoff-scan-pause-vivo-poco-oppo", "audio-capture-source-fallback-chain", "call-audio-mode-change-wait", "opus-complexity-governor", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "encoder-key-latency", "advertising-android15-slot-leak-quiesce", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
+      "matching_proposals": ["hyperos-autostart-and-no-restrictions", "decoder-stall-recovery-arm", "decoder-low-latency-ladder-arm", "decoder-realtime-priority-arm", "att-payload-ll-packing", "gatt-connect-on-main-looper", "gatt-refresh-before-discovery", "thermal-headroom-forecast", "thermal-native-speed-floor", "thermal-battery-temperature-fallback", "memory-tier-sizing", "native-simd-safe-mode", "userspace32-tier", "native-armeabi-v7a-optional-build", "le-scan-timeout-renewal", "scan-hardware-filter-fallback", "hyperos-deepdoze-scan-block", "oem-screenoff-scan-pause-vivo-poco-oppo", "audio-capture-source-fallback-chain", "call-audio-mode-change-wait", "opus-complexity-governor", "encoder-size-alignment", "encoder-size-support-false-negative", "encoder-explicit-colour-keys", "encoder-key-latency", "advertising-android15-slot-leak-quiesce", "link-lost-after-change-rollback", "le-priority-interval-reassert"]
     }
   ]
 }

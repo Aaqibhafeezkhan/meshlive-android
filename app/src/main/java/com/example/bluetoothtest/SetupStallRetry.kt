@@ -19,9 +19,19 @@ internal object SetupRetryAclWait {
     /** Longest wait; the measured linger was 1.1-3.7 s. */
     const val BOUND_MS = 5_000L
 
+    /**
+     * Review T1 (2026-10-27): Android 10/11 stacks never deliver the ACL broadcast for an unnamed random-address peer
+     * (RemoteDevices drops it before the intent), so the wait always ran its full bound: 9 of 9 retries on the A15s
+     * logged `waitedMs=5003 | dropped=false`. There it is a short fixed pause instead, run while the retry rescans.
+     */
+    const val LEGACY_STACK_BOUND_MS = 1_500L
+    const val LEGACY_STACK_MAX_SDK = 30
+
+    fun boundMs(sdkInt: Int): Long = if (sdkInt <= LEGACY_STACK_MAX_SDK) LEGACY_STACK_BOUND_MS else BOUND_MS
+
     /** Waits for [watch] (always released); logs `BENCHMARK setup_retry_acl_wait`. True when the ACL dropped. */
     fun await(
-        watch: GattLinkLifetime.AclDownWatch,
+        watch: AclDownWatch,
         boundMs: Long = BOUND_MS,
         nowMs: () -> Long = SystemClock::elapsedRealtime,
         log: (String) -> Unit = { runCatching { Log.i("BluetoothVideo", it) } },
@@ -45,25 +55,13 @@ internal object SetupRetryAclWait {
  * More dials for the 1M call-setup retry after a 2M stall (default on; DEBUG `test_stall_retry_dials=false` is the control
  * arm). A fast HCI 0x3E failure (GATT 133 within 1.5 s, [ConnectDurationClass.FAST_ESTABLISH_FAILURE]) right after a
  * stall is the peer's link still being torn down, not an absent peer; the ordinary rule (2 GATT open attempts 500 ms apart)
- * gave up 1.1 s into a 10 s remainder. Inside [within] such a failure is redialed up to [MAX_ATTEMPTS] dials in total,
+ * gave up 1.1 s into a 10 s remainder. Inside the stall retry's [SetupDeadline] such a failure is redialed up to [MAX_ATTEMPTS] dials in total,
  * [SPACING_MS] apart, while the next dial still starts before the early-loss deadline. Every other failure, and every other
- * connect path (no thread-local deadline), keeps the ordinary rule.
+ * connect path, keeps the ordinary rule ([ConnectAttempts] applies it).
  */
 internal object StallRetryDials {
     const val MAX_ATTEMPTS = 4
     const val SPACING_MS = 1_500L
-
-    private val deadline = ThreadLocal<Long?>()
-
-    fun <T> within(deadlineElapsedMs: Long, block: () -> T): T {
-        val previous = deadline.get()
-        deadline.set(deadlineElapsedMs)
-        try {
-            return block()
-        } finally {
-            deadline.set(previous)
-        }
-    }
 
     sealed interface Verdict {
         /** Not a stall retry or not a fast 0x3E failure: the ordinary retry rule decides. */
@@ -75,12 +73,15 @@ internal object StallRetryDials {
         data class Dial(val delayMs: Long, val remainingMs: Long) : Verdict
     }
 
-    /** After dial [attemptsUsed] failed with [failureClass]: what the stall-retry budget says. */
+    /**
+     * After dial [attemptsUsed] failed with [failureClass]: what the stall-retry budget says. [deadlineMs] is the stall
+     * retry's [SetupDeadline] ([SetupDeadline.ExtraDials.STALL_RETRY]), null on every other connect.
+     */
     fun next(
         failureClass: ConnectDurationClass?,
         attemptsUsed: Int,
-        nowMs: Long = SystemClock.elapsedRealtime(),
-        deadlineMs: Long? = deadline.get(),
+        nowMs: Long,
+        deadlineMs: Long?,
     ): Verdict {
         if (deadlineMs == null || failureClass != ConnectDurationClass.FAST_ESTABLISH_FAILURE) return Verdict.NotApplicable
         val remainingMs = deadlineMs - nowMs

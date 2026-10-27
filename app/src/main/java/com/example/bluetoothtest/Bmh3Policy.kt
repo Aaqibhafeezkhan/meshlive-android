@@ -96,7 +96,8 @@ object Bmh3Choice {
  * Node prefixes (6 bytes) that completed a BMH3 handshake with this phone, newest last, at most [capacity], each
  * valid for [ttlMs] after its last success. A later version 2 offer with a pinned prefix is contacted with BMH3 even
  * when its hint was stripped; the expiry bounds how long a peer that turned the feature off stays unreachable.
- * The storage is a file in no-backup storage, which the emergency wipe deletes with the rest of the app data.
+ * The storage is a sealed file in no-backup storage ([SealedTextFile]), which the emergency wipe deletes with the rest of
+ * the app data. Only version 2 offers outside pseudonym mode are pinned ([Bmh3AttemptPlan.pinAllowed]).
  */
 class Bmh3Pins(
     private val storage: Storage,
@@ -105,6 +106,7 @@ class Bmh3Pins(
     private val clockMs: () -> Long = System::currentTimeMillis,
 ) {
     interface Storage {
+        /** The stored text or null; throws when it cannot be read now (then nothing is loaded and nothing written). */
         fun read(): String?
         fun write(value: String)
     }
@@ -113,16 +115,26 @@ class Bmh3Pins(
     private val entries = LinkedHashMap<String, Long>()
     private var loaded = false
 
+    /**
+     * False while the storage cannot be read now (security review 2026-10-27, item 6): the memory stays unloaded, nothing
+     * is written over the stored pins, and the next access retries.
+     */
     @Synchronized
-    private fun load() {
-        if (loaded) return
+    private fun load(): Boolean {
+        if (loaded) return true
+        val text = try {
+            storage.read()
+        } catch (error: Exception) {
+            return false
+        }
         loaded = true
-        storage.read()?.lineSequence()?.forEach { line ->
+        text?.lineSequence()?.forEach { line ->
             val parts = line.split(' ')
             val at = parts.getOrNull(1)?.toLongOrNull()
             if (parts.size == 2 && parts[0].length == HEX_CHARS && parts[0].all(::isHex) && at != null) entries[parts[0]] = at
         }
         expire()
+        return true
     }
 
     private fun expire() {
@@ -135,16 +147,34 @@ class Bmh3Pins(
 
     private fun save() = storage.write(entries.entries.joinToString("\n") { "${it.key} ${it.value}" })
 
+    enum class PinState { PINNED, UNPINNED, UNKNOWN }
+
+    /**
+     * reviewer review 2026-10-27 (finding 8): a pin store that cannot be read now is UNKNOWN, never "not pinned". The caller
+     * then treats the prefix as pinned (BMH3 for that attempt), so a stripped hint plus a passing Keystore failure cannot
+     * make this phone send its identity in a first BMH2 hello.
+     */
+    @Synchronized
+    fun pinState(prefix: ByteArray): PinState {
+        if (!load()) return PinState.UNKNOWN
+        expire()
+        return if (hex(prefix) in entries) PinState.PINNED else PinState.UNPINNED
+    }
+
+    /** Loads (and so migrates an earlier build's plain file); true when loaded. */
+    @Synchronized
+    fun warmUp(): Boolean = load()
+
     @Synchronized
     fun isPinned(prefix: ByteArray): Boolean {
-        load()
+        if (!load()) return false
         expire()
         return hex(prefix) in entries
     }
 
     @Synchronized
     fun pin(prefix: ByteArray) {
-        load()
+        if (!load()) return
         val key = hex(prefix)
         entries.remove(key)
         entries[key] = clockMs()
@@ -154,7 +184,7 @@ class Bmh3Pins(
 
     @Synchronized
     fun clear() {
-        load()
+        loaded = true
         entries.clear()
         save()
     }
@@ -167,7 +197,9 @@ class Bmh3Pins(
     private fun isHex(c: Char): Boolean = c in '0'..'9' || c in 'a'..'f'
 
     companion object {
+        /** The plaintext file of builds before 2026-10-27: migrated once into [SEALED_FILE_NAME] and deleted. */
         const val FILE_NAME = "hidden-identity-pins.txt"
+        const val SEALED_FILE_NAME = "hidden-identity-pins.bin"
         const val TTL_MS = 30L * 24 * 3_600_000L
         private const val CLOCK_SLACK_MS = 24L * 3_600_000L
         private const val HEX_CHARS = DiscoveryAnnouncement.NODE_PREFIX_BYTES * 2
@@ -180,12 +212,14 @@ class Bmh3Pins(
  * [refillMs]. An exhausted bucket makes the next caller wait for its token, at most [maxWaitMs]; beyond that the
  * connection closes silently. A lease holder (tag matched) never spends a token. Unlike the escalating RV8 tarpit
  * this delays nobody while the rate is ordinary, and it does not punish contacts who cannot yet prove they are one.
+ * Review 2026-10-27 (finding 13): the clock is the monotonic elapsed time ([MonotonicClock]); with the wall clock a time
+ * change (a user, a network time update, a test harness) could refill the bucket at once or stall it for hours.
  */
 class Bmh3SigningBudget(
     private val capacity: Int = 8,
     private val refillMs: Long = 4_000L,
     private val maxWaitMs: Long = 4_000L,
-    private val clockMs: () -> Long = System::currentTimeMillis,
+    private val clockMs: () -> Long = MonotonicClock::elapsedMs,
     private val sleep: (Long) -> Unit = Thread::sleep,
 ) {
     private var tokens = capacity.toDouble()
@@ -214,6 +248,21 @@ class Bmh3SigningBudget(
 }
 
 /**
+ * Milliseconds of `SystemClock.elapsedRealtime()` (monotonic, counts deep sleep, unaffected by wall-clock changes). A JVM
+ * test has no Android runtime, so there the same monotonic source is `System.nanoTime()`.
+ */
+internal object MonotonicClock {
+    private val source: () -> Long = try {
+        android.os.SystemClock.elapsedRealtime()
+        ({ android.os.SystemClock.elapsedRealtime() })
+    } catch (_: Throwable) {
+        ({ System.nanoTime() / 1_000_000L })
+    }
+
+    fun elapsedMs(): Long = source()
+}
+
+/**
  * Where the contact tags come from. Phase 1 has none in a release build (every responder is Everyone mode, every
  * initiator sends a random tag). The DEBUG fixed test lease stands in for real presence leases in phone test T14;
  * wiring the real lease keys (`PresenceLeases`, the recognition hit's epoch and contact) is Phase 2.
@@ -238,8 +287,11 @@ internal object Bmh3ContactTags {
         toAdvertOwner: Boolean = true,
     ): Bmh3ContactTag? {
         selected ?: return null
+        // A relay hop never carries a tag, not even the DEBUG test lease: a tag makes the initiator present its real key
+        // (rule P), which must never go toward a relay (review CP-1 item 4).
+        if (!toAdvertOwner) return null
         Bmh3Feature.testLeaseKey?.let { return Bmh3ContactTag(Bmh3Crypto.contactTagKey(it), bindingFor(selected, wallEpoch)) }
-        if (source == null || !toAdvertOwner || !selected.rotating) return null
+        if (source == null || !selected.rotating) return null
         val grant = source.leaseFor(selected) ?: return null
         return Bmh3ContactTag(Bmh3Crypto.contactTagKey(grant.leaseKey), bindingFor(selected, wallEpoch), expectedPeer = grant.contact)
     }
@@ -280,6 +332,13 @@ internal object Bmh3Policy {
     /** The shared replay cache and signing budget of this process (PROTOCOL "Responder cost guards"). */
     val replayCache = Bmh3ReplayCache()
     val signingBudget = Bmh3SigningBudget()
+
+    /**
+     * Review 2026-10-27 (finding 13): the Meet screen's code attempts sign with the real key, so they get their own small
+     * bucket ([QrCodeDisplay]). Strangers draining the shared bucket can no longer delay a scan, and a held code (a
+     * photographed screen) can no longer drain the bucket every other connection uses. Three per code is the attempt cap.
+     */
+    val meetBudget = Bmh3SigningBudget(capacity = QrCodeDisplay.MAX_ATTEMPTS, refillMs = 10_000L)
 
     /** The throwaway keys of this process (PROTOCOL "Pseudonym keys"). */
     val pseudonymKeys = Bmh3PseudonymKeys()
@@ -334,8 +393,23 @@ internal object Bmh3Policy {
          * presents its real key, a pseudonym answer is refused and the answerer's fingerprint must equal the code's.
          */
         qrScan: Bvmid2Payload? = null,
+        /**
+         * Review 2026-10-27 (finding 8): the verified-contact check of a real-key answerer at the LINK layer of a direct
+         * connection ([PeerIdentityGate.admit]; throws on `MISMATCH`). It used to run only at the end-to-end layer, after
+         * this phone had already presented its real key to the link peer. The end-to-end layer runs it in its own driver.
+         */
+        admitLinkPeer: (Bmh3Peer) -> Unit = { peer -> PeerIdentityGate.admit(peer.nodeId, peer.spki) },
+        /** Amendment CP: the link toward a relay presents a declared throwaway ([relayLinkOptions]). */
+        relayEdges: Boolean = false,
+        /** Amendment CP: the selected first hop's own offer, checked when the hop answers with a real key. */
+        relayHop: DiscoveryAnnouncement? = null,
+        /** Experimental contact-helper arm: [relayHop] recognised as exactly one contact; real/real with a tag. */
+        contactHelper: DiscoveryAnnouncement? = null,
     ): Bmh3InitiatorOptions {
         val towardRelay = layer == Layer.LINK && selected != null && selected.routeCost > 0
+        if (towardRelay && relayEdges && qrScan == null) {
+            return relayLinkOptions(relayHop, contactHelper, wallEpoch, leaseSource, entropy, throwawayIdentity, pinResult, log)
+        }
         if (qrScan != null) {
             return Bmh3InitiatorOptions(
                 contactTag = QrScanPolicy.tag(qrScan),
@@ -354,6 +428,9 @@ internal object Bmh3Policy {
                 // A pseudonymous answerer cannot open the selected ID yet (its salt stays with it until the user accepts);
                 // the binding runs on its reveal. This phone presents a pseudonym too then: Bmh3Initiator refuses a real
                 // key toward a throwaway, so skipping the binding here can never hand a real identity to an unbound peer.
+                // A real-key answerer of a direct link: a verified contact's prefix with another key closes the link here,
+                // before this phone's msg3 (its real key, when it holds the contact's lease) leaves.
+                if (layer == Layer.LINK && !towardRelay && !peer.pseudonymous) admitLinkPeer(peer)
                 if (selected != null && !peer.pseudonymous) checkSelected(selected, layer, peer)
                 if (!peer.pseudonymous) pinResult?.invoke(peer)
             },
@@ -368,6 +445,66 @@ internal object Bmh3Policy {
             log = log,
         )
     }
+
+    /**
+     * Amendment CP, the caller's link toward its first helper. Default: no tag, a throwaway that declares PSEUDONYM, fresh per
+     * connection (never the end-to-end attempt pseudonym, so the helper cannot link the two layers), nothing pinned or
+     * admitted; a hop that answers with a real key must open [hop], a hop that declared a throwaway is not bound (its only
+     * powers are those of any relay). Experimental [contactHelper]: tag that helper's own offer and require its real key
+     * and opening; a throwaway answer fails this candidate (no anonymous retry).
+     */
+    fun relayLinkOptions(
+        hop: DiscoveryAnnouncement?,
+        contactHelper: DiscoveryAnnouncement?,
+        wallEpoch: Long,
+        leaseSource: Bmh3LeaseSource?,
+        entropy: Bmh3Entropy = SecureBmh3Entropy,
+        throwawayIdentity: () -> SigningIdentity = { KeyPairSigningIdentity(generateEcKeyPair()) },
+        pinResult: ((Bmh3Peer) -> Unit)? = null,
+        log: (String) -> Unit = {},
+    ): Bmh3InitiatorOptions {
+        if (contactHelper != null) {
+            val tag = Bmh3ContactTags.initiatorTag(contactHelper, wallEpoch, leaseSource, toAdvertOwner = true)
+            if (tag != null) {
+                return Bmh3InitiatorOptions(
+                    contactTag = tag,
+                    checkResponder = { peer ->
+                        if (peer.pseudonymous) throw Bmh3Failure("contact helper answered with a throwaway")
+                        checkSelected(contactHelper, Layer.LINK, peer)
+                        pinResult?.invoke(peer)
+                    },
+                    entropy = entropy,
+                    log = log,
+                )
+            }
+        }
+        return relayHopOptions(hop, entropy, throwawayIdentity, log)
+    }
+
+    /**
+     * Amendment CP, any initiator of a relay edge without a contact tag (a caller toward its first helper, a helper toward
+     * the next helper or the target): a fresh declared throwaway, no tag, no pin, no admission; [hop] (cost 0: the next
+     * phone's own offer) is checked only when the answer is a real key.
+     */
+    fun relayHopOptions(
+        hop: DiscoveryAnnouncement?,
+        entropy: Bmh3Entropy = SecureBmh3Entropy,
+        throwawayIdentity: () -> SigningIdentity = { KeyPairSigningIdentity(generateEcKeyPair()) },
+        log: (String) -> Unit = {},
+    ): Bmh3InitiatorOptions = Bmh3InitiatorOptions(
+        contactTag = null,
+        checkResponder = { peer -> if (!peer.pseudonymous && hop != null) checkSelected(hop, Layer.LINK, peer) },
+        entropy = entropy,
+        strangerIdentity = throwawayIdentity(),
+        log = log,
+    )
+
+    /**
+     * Amendment CP: whether a relay edge toward [hop] speaks BMH3. With pseudonym mode on (or BMH3-only) always: an
+     * unauthenticated version 2 advert must never draw a BMH2 hello (review CP-1 item 1); otherwise the direct-call choice.
+     */
+    fun relayHopUsesBmh3(bmh3Enabled: Boolean, only: Boolean, pseudonymMode: Boolean, hop: DiscoveryAnnouncement, pinned: Boolean): Boolean =
+        bmh3Enabled && Bmh3Choice.decide(true, only || pseudonymMode, hop, pinned).bmh3
 
     /**
      * A call listener's options. [opening] are the role-0 entries pinned when the connection was accepted (version 5
@@ -395,6 +532,11 @@ internal object Bmh3Policy {
          */
         qrDisplay: QrCodeDisplay? = null,
         qrGate: QrConnectionGate? = null,
+        /**
+         * The phone is call-ready only because the Meet screen is open (security review 2026-10-27, item 10): a BMH2 hello
+         * is refused and an untagged msg1 is closed before this phone draws a key or signs anything.
+         */
+        screenOnlyReachable: Boolean = qrDisplay?.screenOnlyReachable == true,
     ): Bmh3ResponderOptions {
         val contactsOnly = Bmh3Feature.contactsOnly
         // Rule P fails closed (review PR4): in pseudonym mode every untagged connection meets a throwaway, with or
@@ -411,7 +553,13 @@ internal object Bmh3Policy {
                 listOfNotNull(qrCheck),
             opening = openingValue(opening),
             replayCache = scoped?.replayCache ?: replayCache,
-            beforeReply = { matched -> if (!matched) connectionBudget.spend() },
+            beforeReply = { matched ->
+                if (screenOnlyReachable && qrGate?.linkReserved != true) {
+                    log("bmh3: event=qr_screen_only_refused")
+                    throw Bmh3Failure("qr screen only")
+                }
+                if (!matched) connectionBudget.spend()
+            },
             admitInitiator = { peer, matched ->
                 val qrAttempt = qrGate?.linkReserved == true
                 if (qrDisplay?.screenOnlyReachable == true && !qrAttempt) {
@@ -428,10 +576,117 @@ internal object Bmh3Policy {
                 }
             },
             // A BMH2 hello is answered with the real key: refused in pseudonym mode, as in Contacts-only (review PR1).
-            acceptBmh2 = !contactsOnly && stranger == null,
+            acceptBmh2 = !contactsOnly && stranger == null && !screenOnlyReachable,
             entropy = entropy,
             strangerIdentity = stranger,
             log = log,
         )
+    }
+}
+
+/**
+ * One BMH3 decision per outgoing attempt (review 2026-10-27, finding 11 and S1). The link handshake, the end-to-end
+ * handshake and a Classic connector's handshake of one attempt used to decide separately, each with its own fresh caller
+ * throwaway: a Classic call showed the callee two different strangers (the callee then took the call for a relayed one),
+ * and a pin written by the link layer could change the end-to-end layer's choice. The plan fixes the choice
+ * ([Bmh3Choice]), the caller's throwaway and whether a success may be pinned once, before the first byte.
+ *
+ * Pinning (finding 6): a pin exists only to keep speaking BMH3 to a **version 2** advert whose hint was stripped. A
+ * rotating (version 5) offer is always BMH3 anyway, and in pseudonym mode every stranger link is a throwaway, so a pin
+ * there would only be a list of the contacts this phone called. A success is pinned only for a version 2 offer with
+ * pseudonym mode off.
+ */
+internal class Bmh3AttemptPlan(
+    val selected: DiscoveryAnnouncement?,
+    val decision: Bmh3Choice.Decision,
+    /** Rule P is in force for this attempt: strangers meet [callerAlias]. */
+    val pseudonymMode: Boolean,
+    /** The caller's one throwaway for every handshake of this attempt (null outside pseudonym mode). */
+    val callerAlias: SigningIdentity?,
+    private val qrScan: Bvmid2Payload? = null,
+    /** Records a pin (the peer's node prefix); null when this attempt must not pin ([pinAllowed]). */
+    private val pin: ((ByteArray) -> Unit)? = null,
+    private val leaseSource: Bmh3LeaseSource? = null,
+    private val log: (String) -> Unit = {},
+    /** Amendment CP (LE only): the relayed route this attempt's link opens, kept in the plan so no layer drops it. */
+    val relayRoute: RelayRoute = RelayRoute.NONE,
+) {
+    /**
+     * The relayed-route fields of Amendment CP: the link toward the first helper presents a declared fresh throwaway and
+     * binds a real-key helper to its own offer ([Bmh3Policy.relayLinkOptions]); [contactHelper] is the experimental
+     * contact-helper arm. Only the LINK handshake toward a relay (route cost above 0) uses them.
+     */
+    class RelayRoute(val relayEdges: Boolean, val relayHop: DiscoveryAnnouncement?, val contactHelper: DiscoveryAnnouncement?) {
+        companion object {
+            val NONE = RelayRoute(false, null, null)
+        }
+    }
+
+    /** True when the attempt's handshakes speak BMH3 (null options otherwise: BMH2 exactly as before). */
+    val bmh3: Boolean get() = qrScan != null || decision.bmh3
+
+    private val pinResult: ((Bmh3Peer) -> Unit)? = pin?.let { record -> { peer -> runCatching { record(peer.nodeId.toByteArray()) } } }
+
+    /** The options of [layer]'s handshake, or null for BMH2. */
+    fun initiator(layer: Bmh3Policy.Layer): Bmh3InitiatorOptions? {
+        if (qrScan != null) return Bmh3Policy.initiatorOptions(selected, layer, log = log, pinResult = pinResult, qrScan = qrScan)
+        if (!decision.bmh3) return null
+        return Bmh3Policy.initiatorOptions(
+            selected,
+            layer,
+            log = log,
+            pinResult = pinResult,
+            leaseSource = leaseSource,
+            pseudonyms = pseudonymMode,
+            strangerIdentity = callerAlias,
+            relayEdges = relayRoute.relayEdges,
+            relayHop = relayRoute.relayHop,
+            contactHelper = relayRoute.contactHelper,
+        )
+    }
+
+    companion object {
+        fun pinAllowed(selected: DiscoveryAnnouncement?, pseudonymMode: Boolean): Boolean =
+            selected != null && !selected.rotating && !pseudonymMode
+
+        /**
+         * [enabled]/[only] are the BMH3 switches, [pinned] whether [selected]'s prefix is pinned, [pseudonymMode] whether
+         * rule P applies. [newAlias] mints the caller throwaway (only in pseudonym mode).
+         */
+        fun create(
+            enabled: Boolean,
+            only: Boolean,
+            selected: DiscoveryAnnouncement?,
+            pinned: Boolean,
+            pseudonymMode: Boolean,
+            qrScan: Bvmid2Payload? = null,
+            pin: (ByteArray) -> Unit = {},
+            leaseSource: Bmh3LeaseSource? = null,
+            log: (String) -> Unit = {},
+            newAlias: () -> SigningIdentity = Bmh3Policy.pseudonymKeys::fresh,
+            relayRoute: RelayRoute = RelayRoute.NONE,
+        ): Bmh3AttemptPlan {
+            // In pseudonym mode the caller never speaks BMH2 either: a BMH2 hello hands the real key to whoever answers,
+            // before any ring (PROTOCOL "BMH2 is refused"). Cost: phones with BMH3 off cannot be called.
+            val decision = if (qrScan != null) Bmh3Choice.Decision(true, Bmh3Choice.Reason.ONLY) else {
+                Bmh3Choice.decide(enabled, only || pseudonymMode, selected, pinned)
+            }
+            if (qrScan == null) log(Bmh3Log.choice(decision.version, decision.reason.name.lowercase()))
+            val alias = if (qrScan == null && decision.bmh3 && pseudonymMode) newAlias() else null
+            return Bmh3AttemptPlan(
+                selected,
+                decision,
+                pseudonymMode = qrScan == null && pseudonymMode,
+                callerAlias = alias,
+                qrScan = qrScan,
+                pin = pin.takeIf { pinAllowed(selected, pseudonymMode) },
+                leaseSource = leaseSource,
+                log = log,
+                relayRoute = relayRoute,
+            )
+        }
+
+        /** No BMH3 at all (the switch is off): every handshake of the attempt is BMH2. */
+        val OFF = Bmh3AttemptPlan(null, Bmh3Choice.Decision(false, Bmh3Choice.Reason.OFF), pseudonymMode = false, callerAlias = null)
     }
 }

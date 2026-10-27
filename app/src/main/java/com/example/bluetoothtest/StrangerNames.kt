@@ -268,11 +268,14 @@ internal class CopiedIdTracker(
         touched[key] = nowMs
         if (touched.size > MAX_KEYS) prune(nowMs)
         val list = perKey.getOrPut(key) { mutableListOf() }
-        val own = list.firstOrNull { it.address == address }?.also { it.lastMs = nowMs; it.form = form }
+        // A sighting without a form (bytes that did not parse) never erases the form an address already showed.
+        val own = list.firstOrNull { it.address == address }?.also { it.lastMs = nowMs; if (form != null) it.form = form }
             ?: Seen(address, nowMs, nowMs, form).also { list += it }
         val overlap = requireOverlap()
         val recent = list.filter { nowMs - it.lastMs <= simultaneousMs }
-        val other = !(pcPairExempt() && pcTwin(recent)) && list.any {
+        // Superseded addresses leave only the twin test; the overlap scan below still sees every address.
+        val exempt = pcPairExempt() && pcTwin(recent.filterNot { superseded(it, list) })
+        val other = !exempt && list.any {
             it.address != address && nowMs - it.lastMs <= simultaneousMs &&
                 // The other address was heard after this one appeared: both on the air, not one replacing the other.
                 (!overlap || it.lastMs > own.firstMs)
@@ -291,6 +294,7 @@ internal class CopiedIdTracker(
      * Q-PC-COPIED-ID option A (Design CI): a Windows PC sends its compact call offer as one legacy and one extended set
      * from two addresses. Exactly two recent addresses, one legacy and one extended, with byte-identical compared ADs
      * (Flags and the UUID lists, which carry 0x180A) are one sender. A third address or any difference still counts.
+     * Addresses that a newer address of the same form replaced ([superseded]) are left out of this test only (T5).
      */
     private fun pcTwin(recent: List<Seen>): Boolean {
         if (recent.size != 2) return false
@@ -298,6 +302,17 @@ internal class CopiedIdTracker(
         val fa = a.form ?: return false
         val fb = b.form ?: return false
         return fa.legacy != fb.legacy && (if (fa.legacy) fb else fa).extendedSecondaryPhy && fa.compared == fb.compared
+    }
+
+    /**
+     * Design CI T5: [old] was replaced, not joined. Another address with the same non-null form (the same kind and the same
+     * compared bytes) was first heard strictly after [old] was last heard; for example, Windows restarted one of its two
+     * sets with a new random address. History is kept: if [old] is heard again after the newer one appeared, the two
+     * interleave and [old] counts again.
+     */
+    private fun superseded(old: Seen, all: List<Seen>): Boolean {
+        val form = old.form ?: return false
+        return all.any { it !== old && it.form == form && it.firstMs > old.lastMs }
     }
 
     /** True when the warning is currently due for [rdiHex] at any route cost. */

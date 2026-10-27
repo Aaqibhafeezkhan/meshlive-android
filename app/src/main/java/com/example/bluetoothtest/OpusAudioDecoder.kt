@@ -36,10 +36,14 @@ class OpusAudioDecoder(
     concealment: Boolean = false,
     /** Audio-only live (Design AL): the 0..1 level of each decoded chunk, for the listening meter. */
     private val onLevel: ((Float) -> Unit)? = null,
+    /** DEBUG stream viewers: `BENCHMARK stream_audio_stats` counters (null for calls and release builds). */
+    private val streamAudioStats: StreamAudioStats? = null,
 ) : Closeable {
     private data class PcmPacket(
         val bytes: ByteArray,
         val presentationTimeUs: Long,
+        /** Native PLC/FEC audio standing in for a missing unit: not a received unit played. */
+        val concealed: Boolean = false,
     )
 
     private val running = AtomicBoolean(true)
@@ -237,6 +241,7 @@ class OpusAudioDecoder(
     fun offer(packet: StreamProtocol.Packet): Boolean {
         failure.get()?.let { throw IllegalStateException("Audio pipeline failed", it) }
         if (!running.get()) return false
+        streamAudioStats?.onUnitArrived(packet.presentationTimeUs)
         if (packets.offer(packet, BACKPRESSURE_WAIT_MS, TimeUnit.MILLISECONDS)) return true
         throw IllegalStateException("Audio decoder stopped consuming for $BACKPRESSURE_WAIT_MS ms")
     }
@@ -280,7 +285,7 @@ class OpusAudioDecoder(
                         val fec = plan.fecForLast && index == plan.concealFrames - 1
                         val pcm = if (fec) decoder.recoverFromFec(payload, frameSamples) else decoder.conceal(frameSamples)
                         if (fec) nativeFecFrames.incrementAndGet() else nativePlcFrames.incrementAndGet()
-                        emitNativePcm(pcm, plan.firstConcealPtsUs + index * plan.frameUs, trim = false)
+                        emitNativePcm(pcm, plan.firstConcealPtsUs + index * plan.frameUs, trim = false, concealed = true)
                     }
                     val concealEvents = nativePlcFrames.get() + nativeFecFrames.get()
                     if (concealEvents <= CONCEAL_LOG_FIRST || concealEvents % CONCEAL_LOG_EVERY == 0L) {
@@ -318,7 +323,7 @@ class OpusAudioDecoder(
             "fec_frames=${nativeFecFrames.get()} | fec_packets=${nativeFecPackets.get()} | " +
             "uncovered_gaps=${nativeUncoveredGaps.get()}"
 
-    private fun emitNativePcm(pcm: ByteArray, presentationTimeUs: Long, trim: Boolean) {
+    private fun emitNativePcm(pcm: ByteArray, presentationTimeUs: Long, trim: Boolean, concealed: Boolean = false) {
         var bytes = pcm
         if (trim && nativePreSkipRemaining > 0) {
             val skipBytes = minOf(bytes.size, nativePreSkipRemaining * bytesPerAudioFrame)
@@ -328,7 +333,7 @@ class OpusAudioDecoder(
         if (bytes.isEmpty()) return
         require(bytes.size <= MAX_PCM_OUTPUT_BYTES) { "Decoded audio is too large (${bytes.size} bytes)" }
         // Backpressure, not loss: playback drains this queue in real time.
-        if (!pcmPackets.offer(PcmPacket(bytes, presentationTimeUs), BACKPRESSURE_WAIT_MS, TimeUnit.MILLISECONDS)) {
+        if (!pcmPackets.offer(PcmPacket(bytes, presentationTimeUs, concealed), BACKPRESSURE_WAIT_MS, TimeUnit.MILLISECONDS)) {
             throw IllegalStateException("Audio playback stopped consuming for $BACKPRESSURE_WAIT_MS ms")
         }
     }
@@ -411,6 +416,7 @@ class OpusAudioDecoder(
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
         try {
             while (running.get()) {
+                streamAudioStats?.tick(::streamAudioCounters)?.let { Log.i("BluetoothVideo", it) }
                 val concealer = concealer
                 if (concealer == null) {
                     val packet = pcmPackets.poll(ACTIVE_POLL_MS, TimeUnit.MILLISECONDS) ?: continue
@@ -420,6 +426,7 @@ class OpusAudioDecoder(
                     // its start deadline. The playout clock grows its delay for late media (calls within
                     // their conversational bound) and the playback speed follows it.
                     writePcm(packet.bytes, packet.bytes.size, packet.presentationTimeUs)
+                    if (!packet.concealed) streamAudioStats?.onUnitPlayed(packet.presentationTimeUs)
                     startAudioIfReady()
                     continue
                 }
@@ -436,6 +443,7 @@ class OpusAudioDecoder(
                 if (concealed > 0) logConcealEvent(concealer, concealed)
                 lastChunkRms = rmsOf(samples)
                 writePcm(bytes, bytes.size, packet.presentationTimeUs)
+                if (!packet.concealed) streamAudioStats?.onUnitPlayed(packet.presentationTimeUs)
                 concealer.observe(samples)
                 startAudioIfReady()
             }
@@ -646,7 +654,19 @@ class OpusAudioDecoder(
         runCatching { audioTrack.setVolume(if (muted) 0f else (DebugTunables.playbackGain ?: 1f)) }
     }
 
+    /** This decoder's cumulative counters for [StreamAudioStats]. */
+    private fun streamAudioCounters(): StreamAudioDecoderCounters = StreamAudioDecoderCounters(
+        concealedFrames = nativePlcFrames.get() + nativeFecFrames.get(),
+        concealedMs = concealer?.let { it.concealedSamples * 1_000L / header.audioSampleRate } ?: 0L,
+        senderGaps = senderGaps.get(),
+        gapSilenceMs = senderGapSilenceTotalMs.get(),
+        drops = drops.get(),
+        underruns = runCatching { audioTrack.underrunCount.toLong() }.getOrNull()?.takeIf { it >= 0L },
+    )
+
     override fun close() {
+        // Before the track is released: the final line still reads its underrun count (written once).
+        streamAudioStats?.finish(streamAudioCounters())?.let { Log.i("BluetoothVideo", it) }
         if (!running.getAndSet(false)) return
         // A timed, serialized audio command (AudioTrack.stop/release can stall on some Exynos phones);
         // `test_audio_off_main` runs it off the caller's main thread.

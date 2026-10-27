@@ -19,6 +19,13 @@ internal object LeChildInterval {
         if (address != null) gatts[address] = gatt
     }
 
+    /** Review T9: a closed client leaves the map (only its own entry: a newer client to the same peer stays). */
+    fun unregister(address: String?, gatt: BluetoothGatt) {
+        if (address != null) gatts.remove(address, gatt)
+    }
+
+    internal fun registeredCount(): Int = gatts.size
+
     fun requestLater(address: String?, units: Int, delayMs: Long = 2_000L) {
         Handler(Looper.getMainLooper()).postDelayed({ request(address, units) }, delayMs)
     }

@@ -113,6 +113,7 @@ Signing certificate SHA-256 (also in each release's notes and `signing-cert.sha2
   notification and over the lock screen, and the camera pausing while the phone is at your ear. On Android 14
   and newer some phones turn off full-screen call alerts for apps that are not the phone's dialer; the Calls
   screen then asks once ("Allow full-screen incoming calls") and Settings keeps the link to Android's page.
+- **A call can move to a new Bluetooth link.** On a direct Bluetooth LE (GATT) call, if one direction goes quiet (you can be heard but cannot hear, or the other way round), the app can set up a new link to the same person by itself and keep the same call going, with the same keys. It is not a redial and it never calls anyone else. If the new link cannot be set up within about 12 seconds, the call ends as before. Relayed, Classic and L2CAP calls are not moved.
 - **Experimental: store-and-forward messages** (text, voice notes, photos between accepted contacts) and **calls
   through up to four relays**.
 - **Names and titles.** An optional name (Settings > Your ID) and an optional stream title on Go live. Leave them
@@ -121,8 +122,8 @@ Signing certificate SHA-256 (also in each release's notes and `signing-cert.sha2
 - **Audio-only live (radio).** Go live with sound only: announcements, an event, a neighbourhood
   channel. It uses a fraction of the Bluetooth capacity of video, reaches more phones, and keeps playing with the
   screen off. Choose it from Go live.
-- **Privacy by default .** Rotating discovery IDs, an identity-hiding call handshake and throwaway
-  identities for strangers are on; each has a switch in Settings.
+- **Privacy by default .** A rotating Bluetooth ID ("Private Bluetooth ID"), an identity-hiding call handshake ("Hide my ID from strangers") and throwaway
+  identities for strangers ("New identity for each stranger") are on; each has a switch under Settings > Privacy > Advanced privacy.
 - **Offline app sharing.** Hand the installed APK to a nearby phone (see [No internet at all](#no-internet-at-all)).
 - **Delete everything.** Delete the app's keys and data from inside the app (type DELETE to confirm; an optional
   triple-tap gesture).
@@ -207,11 +208,12 @@ enable Bluetooth.
   by default) and Read receipts (off; both of you must turn them on). A banner appears when something stops messages: a person who is not yet a
   contact, a safety number you still need to compare, keys that changed (nothing is sent until you compare again or accept the new keys), or
   an older app on their side. A new message gives one notification per conversation (channel "Messages" in the system settings, where you choose its sound); a locked phone shows only "New message" unless you allowed names on the lock screen, and the text appears only on an unlocked phone. Tap it to open that conversation; "Mark as read" appears when the notification showed the whole message. Android asks once for permission to show notifications. With the switch off, Contacts keeps its single contact sheet.
-- **Blocking calls.** Settings > Block unknown callers (off by default) declines, without ringing, every call from someone who is not a verified contact; it shows in Recent as "Blocked call", and the caller sees an ordinary decline. Settings > Blocked people lists everyone you blocked and unblocks them; block from a Recent row (press and hold), from a contact, or with "Decline and block" on an incoming call. A blocked person's calls are declined and their live streams hidden. A block follows the person's real ID, which a phone shows before ringing only to its verified contacts and to phones that do not hide their ID; a stranger calls under a one-time ID that changes every call, so for strangers use Block unknown callers.
+- **Blocking calls.** Settings > Block unknown callers (off by default) declines, without ringing, every call from someone who is not a verified contact; it shows in Recent as "Blocked call", and the caller sees an ordinary decline. Settings > Blocked people lists everyone you blocked and unblocks them; block from a Recent row (press and hold), from a contact, or with "Decline and block" on an incoming call. A blocked person's calls are declined, their live streams and radio are hidden (one that is playing stops as soon as the app knows who is sending it), your phone exchanges no messages with theirs, relays nothing for them and sends them none of your streams, and if they were a contact who could recognise your phone nearby, that stops too (your other contacts then recognise your phone again after your next call with each of them). A block follows the person's real ID, which a phone shows before ringing only to its verified contacts and to phones that do not hide their ID; a stranger calls under a one-time ID that changes every call, so for strangers use Block unknown callers. If you answer a stranger who turns out to be someone you blocked, the call ends within a few seconds without your camera or microphone having been on, and Recent shows a blocked call; if you call a stranger who turns out to be someone you blocked, the call ends within a few seconds before your phone shows them who you are (a name you set may already have been shown when their phone rang).
 - **Transport and pairing.** LE GATT is the pairing-free default. Classic needs the two phones paired once in Android
   Bluetooth settings (a mutual bond: discovery is BLE, whose rotating private addresses only a bond can resolve, and
   Android hides a phone's own Classic address from apps), unless both phones turn on the experimental Classic without
-  pairing. LE CoC is experimental. The app does not silently replace the selected transport.
+  pairing. Classic without pairing cannot call a stranger who hides their ID (the app could not tell which phone answered);
+  use LE for that. LE CoC is experimental. The app does not silently replace the selected transport.
 
 | Setting | Meaning |
 | --- | --- |
@@ -244,7 +246,7 @@ Short chains of low-rate video are realistic; long chains of high-rate video are
 four relays in the protocol, but the call relay is still a debug feature.
 
 **Does it work on iPhone?** Not yet. An iOS client is in progress in the sibling repository `MeshLive/meshlive-ios`,
-and an experimental "find iPhones" discovery switch on Android is ready for it. Until then, both phones must run
+and Android's "Find iPhones" discovery switch (on by default) is ready for it. Until then, both phones must run
 Android 10 or newer.
 
 **What about battery?** Bluetooth LE is frugal, but live video keeps the camera, encoder and radio busy, so expect

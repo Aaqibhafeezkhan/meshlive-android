@@ -1,10 +1,8 @@
 package com.example.bluetoothtest
 
-/** Keys of the audio-only live feature: the benchmark launch extra and the user's stored choice. */
+/** Keys of the audio-only live feature: the benchmark launch extra and the remembered Go live choices. */
 object AudioLiveSettings {
     const val EXTRA_ENABLED = "test_audio_live"
-    /** Since 2026-10-17 the feature has no Settings switch; a new key so no 0.2.0 stored choice (on or off) applies. */
-    const val PREF_ENABLED = "feature_audio_live_v2"
 
     /** Remembered Go live choice, quality and first-use disclosure (plain preferences, not a feature switch). */
     const val PREF_LAST_CHOICE = "audio_live_last_choice"
@@ -17,13 +15,14 @@ object AudioLiveSettings {
 
 /**
  * Spec of the audio-only live stream. On for everyone ([AudioLiveFeatureDefaults.ENABLED], 2026-10-17) and no
- * longer shown in Settings (no title: no row; user request 2026-10-17). A benchmark launch reads only
- * `test_audio_live`, so `test_audio_live=false` remains the off arm for comparisons.
+ * longer shown in Settings: a constant with no stored choice (user request 2026-10-17; its `feature_audio_live_v2`
+ * key was read but never written). A benchmark launch reads only `test_audio_live`, so `test_audio_live=false`
+ * remains the off arm for comparisons.
  */
 internal object AudioLiveFeatures {
     val audioLive = FeatureSpec(
         id = "audio_live",
-        prefKey = AudioLiveSettings.PREF_ENABLED,
+        prefKey = null,
         defaultEnabled = AudioLiveFeatureDefaults.ENABLED,
         benchmarkExtra = AudioLiveSettings.EXTRA_ENABLED,
         titleRes = 0,

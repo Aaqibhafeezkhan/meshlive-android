@@ -103,11 +103,8 @@ class UpdateActivity : AppCompatActivity() {
                 .setMessage(R.string.update_ask_message)
                 .setPositiveButton(R.string.update_ask_yes) { _, _ ->
                     UpdateConsent.set(this, prefs, true)
-                    FeatureCatalog.refresh(
-                        DebugTunables.benchmarkLaunch,
-                        { false },
-                        { key -> if (prefs.contains(key)) prefs.getBoolean(key, false) else null },
-                    )
+                    // Keeps the launch's benchmark extras (a DEBUG run would otherwise lose them here).
+                    FeatureCatalog.refreshStoredChoices { key -> if (prefs.contains(key)) prefs.getBoolean(key, false) else null }
                     UpdateJobService.schedule(this, true)
                     render()
                 }

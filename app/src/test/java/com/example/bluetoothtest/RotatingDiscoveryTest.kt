@@ -508,16 +508,16 @@ class RotatingDiscoveryTest {
     @Test
     fun featureFollowsTheUsualLaunchRule() {
         // A DEBUG benchmark launch reads only its extra: not the default, not a stored choice.
-        assertTrue(RotatingDiscoveryFeature.resolve(true, { it == "test_rotating_ids" }) { false })
-        assertFalse(RotatingDiscoveryFeature.resolve(true, { false }) { true })
-        assertFalse(RotatingDiscoveryFeature.resolve(true, { false }) { null })
+        assertTrue(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, true, { it == "test_rotating_ids" }) { false })
+        assertFalse(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, true, { false }) { true })
+        assertFalse(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, true, { false }) { null })
         // A user launch: the stored choice, else the shipped default (on since 0.2.0-beta); extras are ignored.
         assertTrue(RotatingDiscoveryFeature.DEFAULT_ENABLED)
-        assertTrue(RotatingDiscoveryFeature.resolve(false, { false }) { null })
-        assertFalse(RotatingDiscoveryFeature.resolve(false, { false }) { if (it == RotatingDiscoveryFeature.PREF) false else null })
-        assertTrue(RotatingDiscoveryFeature.resolve(false, { false }) { if (it == RotatingDiscoveryFeature.PREF) true else null })
-        assertTrue(RotatingDiscoveryFeature.resolve(false, { false }) { null })
-        assertTrue(RotatingDiscoveryFeature.resolve(false, { false }, { null }))
+        assertTrue(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, false, { false }) { null })
+        assertFalse(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, false, { false }) { if (it == RotatingDiscoveryFeature.PREF) false else null })
+        assertTrue(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, false, { false }) { if (it == RotatingDiscoveryFeature.PREF) true else null })
+        assertTrue(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, false, { false }) { null })
+        assertTrue(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, false, { false }, { null }))
     }
 
     @Test

@@ -246,7 +246,9 @@ internal object ClassicConnector {
                             candidateSession.peerNodeId.toByteArray(),
                             announcedPrefix,
                             verifyLinkPrefix,
-                        )?.let { problem -> throw IllegalArgumentException(problem) }
+                            peerPseudonymous = candidateSession.peerPseudonymous,
+                            resolvedCandidate = openedKind.resolved,
+                        )?.let { problem -> throw ClassicLinkIdentityException(problem) }
                     }
                     verify(candidateSession)
                 },
@@ -259,9 +261,7 @@ internal object ClassicConnector {
                             "error=${error.javaClass.simpleName}: ${error.message} | ${CocSocketErrors.describe(error)}",
                     )
                     // An address that authenticated as someone else is wrong, not just out of reach.
-                    if (candidate.kind == ClassicCandidateKind.LEARNED && error is IllegalArgumentException &&
-                        announcedPrefix != null
-                    ) {
+                    if (announcedPrefix != null && classicLearnedAddressDisproved(candidate.kind, error)) {
                         ClassicAddressBook.forget(announcedPrefix, candidate.device.address)
                     }
                 },
@@ -269,7 +269,7 @@ internal object ClassicConnector {
             )
         }
         ClassicRfcommCap.note(socket)
-        learnClassicPeerAddress(socket, session.peerNodeId, "outgoing")
+        learnClassicPeerAddress(socket, session.peerNodeId, "outgoing", session.peerPseudonymous)
         Log.i(
             "BluetoothVideo",
             "Classic connected | role=${role.label} | kind=${openedKind.label} | address=...${socket.remoteDevice.address.takeLast(5)}",

@@ -35,6 +35,19 @@ internal sealed class RelaySetupMessage {
     class Ready(val setupId: ByteArray, val relays: Int) : RelaySetupMessage()
 
     class Fail(val setupId: ByteArray, val reason: RelaySetupFailure) : RelaySetupMessage()
+
+    /**
+     * Message 5 `SEEK` (Design OR, DEBUG prototype): a search for one target ID, blinded as [token] under [nonce], with a
+     * skip list of two-byte RDI prefixes. Regenerated per hop like SETUP; the nonce, token and skip list travel unchanged.
+     */
+    class Seek(
+        val budget: Int,
+        val remainingMs: Int,
+        val setupId: ByteArray,
+        val nonce: ByteArray,
+        val token: ByteArray,
+        val skip: List<ByteArray> = emptyList(),
+    ) : RelaySetupMessage()
 }
 
 internal object RelaySetupCodec {
@@ -48,6 +61,10 @@ internal object RelaySetupCodec {
 
     /** Rotating IDs: SETUP with a role-0 RDI target; unknown to a reader that did not opt in. */
     const val SETUP_RDI = 4
+
+    /** Design OR: SEEK (33 to 39 bytes); unknown to a reader whose on-demand switches are off. */
+    const val SEEK = 5
+    const val SEEK_BASE_BYTES = 33
 
     fun encode(message: RelaySetupMessage): ByteArray = when (message) {
         is RelaySetupMessage.Setup -> {
@@ -70,13 +87,31 @@ internal object RelaySetupCodec {
             ByteBuffer.allocate(REPLY_BYTES).put(MAGIC).put(FAIL.toByte()).put(message.setupId)
                 .put(message.reason.wire.toByte()).array()
         }
+        is RelaySetupMessage.Seek -> {
+            validateSeek(message)
+            val buffer = ByteBuffer.allocate(SEEK_BASE_BYTES + RelaySeek.SKIP_PREFIX_BYTES * message.skip.size)
+                .put(MAGIC).put(SEEK.toByte()).put(message.budget.toByte()).putInt(message.remainingMs)
+                .put(message.setupId).put(message.nonce).put(message.token).put(message.skip.size.toByte())
+            message.skip.forEach { buffer.put(it) }
+            buffer.array()
+        }
+    }
+
+    private fun validateSeek(message: RelaySetupMessage.Seek) {
+        require(message.budget in 1..RelaySeek.MAX_BUDGET) { "Seek budget" }
+        require(message.remainingMs in RelayedCalls.MIN_REMAINING_MS..RelayedCalls.SETUP_DEADLINE_MS) { "Seek deadline" }
+        require(message.setupId.size == ID_BYTES) { "Setup ID" }
+        require(message.nonce.size == RelaySeek.NONCE_BYTES && message.nonce.any { it.toInt() != 0 }) { "Seek nonce" }
+        require(message.token.size == RelaySeek.TOKEN_BYTES) { "Seek token" }
+        require(message.skip.size <= RelaySeek.MAX_SKIP && message.skip.all { it.size == RelaySeek.SKIP_PREFIX_BYTES }) { "Seek skip list" }
+        require(message.skip.map { it.prefixHex() }.toSet().size == message.skip.size) { "Seek skip list duplicates" }
     }
 
     /**
      * Throws IllegalArgumentException for anything that is not exactly one valid message. [acceptRdi] is true
      * only for a phone with rotating IDs and relayed calls both on; otherwise message 4 is unknown, as before.
      */
-    fun decode(bytes: ByteArray, acceptRdi: Boolean = false): RelaySetupMessage {
+    fun decode(bytes: ByteArray, acceptRdi: Boolean = false, acceptSeek: Boolean = false): RelaySetupMessage {
         require(bytes.size >= 5 && bytes.copyOf(4).contentEquals(MAGIC)) { "Relay setup magic" }
         val buffer = ByteBuffer.wrap(bytes)
         buffer.position(4)
@@ -106,6 +141,20 @@ internal object RelaySetupCodec {
                 val reason = RelaySetupFailure.fromWire(buffer.get().toInt() and 0xff)
                     ?: throw IllegalArgumentException("Relay fail reason")
                 RelaySetupMessage.Fail(id, reason)
+            }
+            SEEK -> {
+                require(acceptSeek) { "Relay setup message $type" }
+                require(bytes.size >= SEEK_BASE_BYTES) { "Relay seek length" }
+                val budget = buffer.get().toInt() and 0xff
+                val remaining = buffer.int
+                val id = ByteArray(ID_BYTES).also(buffer::get)
+                val nonce = ByteArray(RelaySeek.NONCE_BYTES).also(buffer::get)
+                val token = ByteArray(RelaySeek.TOKEN_BYTES).also(buffer::get)
+                val count = buffer.get().toInt() and 0xff
+                require(count <= RelaySeek.MAX_SKIP) { "Seek skip count" }
+                require(bytes.size == SEEK_BASE_BYTES + RelaySeek.SKIP_PREFIX_BYTES * count) { "Relay seek length" }
+                val skip = List(count) { ByteArray(RelaySeek.SKIP_PREFIX_BYTES).also(buffer::get) }
+                RelaySetupMessage.Seek(budget, remaining, id, nonce, token, skip).also(::validateSeek)
             }
             else -> throw IllegalArgumentException("Relay setup message $type")
         }
@@ -138,7 +187,10 @@ internal object RelaySetupAdmission {
         !inputs.featureOn || !inputs.helperAllowed || inputs.paused -> RelaySetupFailure.REFUSED
         inputs.busy -> RelaySetupFailure.BUSY
         inputs.rateLimited -> RelaySetupFailure.REFUSED
-        inputs.parentIsSelf || inputs.parentIsTarget || inputs.targetIsSelf -> RelaySetupFailure.LOOP
+        // A request for this phone's own ID answers like a missing entry: FAIL 6 told the asker that a phone with relay
+        // consent off is one hop away and, with throwaway parents, linked its previous and current IDs (review CP-1).
+        inputs.targetIsSelf -> RelaySetupFailure.NO_ROUTE
+        inputs.parentIsSelf || inputs.parentIsTarget -> RelaySetupFailure.LOOP
         inputs.budget < 1 || inputs.budget > inputs.maxRelays -> RelaySetupFailure.REFUSED
         !inputs.routeAvailable -> RelaySetupFailure.NO_ROUTE
         else -> null
@@ -194,8 +246,15 @@ internal class RelaySetupRateLimiter(
     }
 }
 
-/** The caller (or previous helper) could not set up a relayed route; [message] is shown to the user. */
-class RelaySetupFailedException(val reason: RelaySetupFailure?, message: String) : Exception(message)
+/**
+ * The caller (or previous helper) could not set up a relayed route; [message] is shown to the user. [seekOutcome] (Design OR)
+ * classifies a search request's failure for the caller's rings: "binding", "no_seek" or "ambiguous"; null otherwise.
+ */
+class RelaySetupFailedException(
+    val reason: RelaySetupFailure?,
+    message: String,
+    val seekOutcome: String? = null,
+) : Exception(message)
 
 internal object RelaySetupExchange {
     /**
@@ -226,7 +285,7 @@ internal object RelaySetupExchange {
             val replyId = when (reply) {
                 is RelaySetupMessage.Ready -> reply.setupId
                 is RelaySetupMessage.Fail -> reply.setupId
-                is RelaySetupMessage.Setup -> throw IllegalArgumentException("Setup reply expected")
+                is RelaySetupMessage.Setup, is RelaySetupMessage.Seek -> throw IllegalArgumentException("Setup reply expected")
             }
             require(replyId.contentEquals(setupId)) { "Setup reply for another request" }
             return reply
@@ -253,12 +312,16 @@ internal object RelaySetupExchange {
         remainingMs: Int,
         /** The helper's link `BDO1` entries (rotating route): they must open the helper offer that was chosen. */
         helperOpening: List<OpeningEntry>? = null,
+        /** Amendment CP: a helper that declared a throwaway is not bound to the selected offer (a real key still is). */
+        acceptPseudonymousHelper: Boolean = false,
         closeLink: () -> Unit,
     ): Int {
         if (remainingMs < RelayedCalls.MIN_REMAINING_MS) {
             throw RelaySetupFailedException(RelaySetupFailure.TIMEOUT, RelaySetupFailure.TIMEOUT.userText)
         }
-        val helperIsChosen = if (route.rotating) {
+        val helperIsChosen = if (acceptPseudonymousHelper && link.peerPseudonymous) {
+            true
+        } else if (route.rotating) {
             DiscoverySelectionCheck.check(
                 RelayedCalls.helperOfferFor(route.helperPrefix),
                 RotatingDiscoveryIds.ROLE_CALL_OFFER,
@@ -294,7 +357,56 @@ internal object RelaySetupExchange {
                 reply.relays
             }
             is RelaySetupMessage.Fail -> throw RelaySetupFailedException(reply.reason, reply.reason.userText)
-            is RelaySetupMessage.Setup -> throw RelaySetupFailedException(null, "The helping phone sent an invalid answer")
+            is RelaySetupMessage.Setup, is RelaySetupMessage.Seek ->
+                throw RelaySetupFailedException(null, "The helping phone sent an invalid answer")
+        }
+    }
+
+    /**
+     * Design OR (DEBUG prototype): the caller's side of one search request. The first hop must be the helper selected (its
+     * opening), must have signed the helper marks and the `RELAY_SEEK` bit; then one SEEK and its single READY or FAIL.
+     */
+    fun requestSeek(
+        link: SecureBluetoothSession,
+        route: RelayRoute,
+        seek: RelaySetupMessage.Seek,
+        helperOpening: List<OpeningEntry>?,
+        closeLink: () -> Unit,
+    ): Int {
+        val helperIsChosen = DiscoverySelectionCheck.check(
+            RelayedCalls.helperOfferFor(route.helperPrefix),
+            RotatingDiscoveryIds.ROLE_CALL_OFFER,
+            link.peerNodeId.toByteArray(),
+            helperOpening,
+        ) == DiscoverySelectionCheck.Result.PASS
+        if (!helperIsChosen) {
+            throw RelaySetupFailedException(
+                RelaySetupFailure.CHILD_AUTHENTICATION, "The phone that answered is not the helper that was chosen", "binding",
+            )
+        }
+        if (!RelayedCalls.linkAcceptsSetup(link.peerCapabilities)) {
+            throw RelaySetupFailedException(RelaySetupFailure.REFUSED, RelaySetupFailure.REFUSED.userText)
+        }
+        if (link.peerRelaySeek and RelaySeek.FEATURE_SEEK_V1 == 0) {
+            throw RelaySetupFailedException(null, "The helping phone does not search for routes", "no_seek")
+        }
+        writeMessage(link, seek)
+        val reply = try {
+            awaitReply(link, seek.setupId, seek.remainingMs + SETUP_REPLY_GRACE_MS, closeLink)
+        } catch (error: java.io.IOException) {
+            throw RelaySetupFailedException(null, RelaySetupFailure.TIMEOUT.userText, "ambiguous")
+        } catch (error: IllegalArgumentException) {
+            throw RelaySetupFailedException(null, "The helping phone sent an invalid answer", "ambiguous")
+        }
+        return when (reply) {
+            is RelaySetupMessage.Ready -> {
+                if (reply.relays > seek.budget) {
+                    throw RelaySetupFailedException(null, "The helping phone reported more relays than were asked for")
+                }
+                reply.relays
+            }
+            is RelaySetupMessage.Fail -> throw RelaySetupFailedException(reply.reason, reply.reason.userText)
+            else -> throw RelaySetupFailedException(null, "The helping phone sent an invalid answer", "ambiguous")
         }
     }
 

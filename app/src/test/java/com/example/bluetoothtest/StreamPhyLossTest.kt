@@ -177,6 +177,21 @@ class StreamPhyLossTest {
         assertEquals(BlePhyPreference.ONE_M_ADAPTIVE, phyAfterAuth(BlePhyPreference.ONE_M_ADAPTIVE, peerBadOnTwoM = false))
     }
 
+    @Test
+    fun aPhyAfterAuthLinkLostBeforeItsTwoMRequestIsNotA2MLoss() {
+        // The stack never reported a PHY (empty summary): only what was requested can say 2M.
+        val beforeRequest = streamRequestedTwoM(BlePhyPreference.TWO_M, deferPhy = true, deferredRequested = false)
+        assertEquals("not_two_m", verdict(lostAfterAuthMs = 6_000L, wasTwoM = linkWasTwoM("", beforeRequest)).reason)
+        // Remembered bad after authentication: 1M was kept, nothing to mark again.
+        val keptOneM = phyAfterAuth(BlePhyPreference.TWO_M, peerBadOnTwoM = true) == BlePhyPreference.TWO_M
+        val rememberedBad = streamRequestedTwoM(BlePhyPreference.TWO_M, deferPhy = true, deferredRequested = keptOneM)
+        assertEquals("not_two_m", verdict(lostAfterAuthMs = 6_000L, wasTwoM = linkWasTwoM("", rememberedBad)).reason)
+        // Once 2M was asked for after authentication, an early loss counts as before; and without the arm nothing changes.
+        val requested = streamRequestedTwoM(BlePhyPreference.TWO_M, deferPhy = true, deferredRequested = true)
+        assertTrue(verdict(lostAfterAuthMs = 6_000L, wasTwoM = linkWasTwoM("", requested)).record)
+        assertTrue(streamRequestedTwoM(BlePhyPreference.TWO_M, deferPhy = false, deferredRequested = false))
+    }
+
     // --- call stall memory (b2-weaklink-ab call-a15s-asus-control-r1) ---
 
     @Test

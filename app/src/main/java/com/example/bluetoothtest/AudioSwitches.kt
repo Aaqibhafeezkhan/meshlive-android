@@ -84,10 +84,7 @@ object AudioSwitches {
         }
 
     /** True while the registry entry [id] is not switched off (`test_device_policy_off=id` or `all`, DEBUG only). */
-    fun policyActive(id: String): Boolean {
-        val off = DebugTunables.devicePolicyOff
-        return "all" !in off && id !in off
-    }
+    fun policyActive(id: String): Boolean = !DevicePolicyOff.isOff(id, DebugTunables.devicePolicyOff)
 
     /** Reads the DEBUG launch extras `test_audio_*` and `test_capture_source_fallback`. */
     fun applyExtras(boolExtra: (String, Boolean) -> Boolean) {

@@ -14,12 +14,14 @@ import com.google.android.material.materialswitch.MaterialSwitch
 
 /**
  * Promoted call and message features (2026-10-11, user request to bring the experimental features
- * into the normal app). Each one has exactly one default below and one user switch in Settings >
- * Features; neither depends on the "Manual settings" toggle or on BuildConfig.DEBUG.
+ * into the normal app). Each one has exactly one default below; neither depends on the "Manual
+ * settings" toggle or on BuildConfig.DEBUG. Since 2026-10-17 (design decision) the call features and
+ * names are ON with no Settings switch: they are constants ([FeatureSpec.constant], no stored choice;
+ * the `_v2` keys they read until the 2026-10-27 switch audit were never written), so the constant
+ * decides for every user. Messages and automatic sync stay OFF.
  *
  * Shipping a feature ON is a one-line change here, made only after the phone test named beside it
- * has passed (docs/dev/switches.md register). A user who has touched a switch keeps that explicit choice; an
- * untouched switch follows the constant, so flipping it reaches everyone who never decided.
+ * has passed (docs/dev/switches.md register).
  *
  * DEBUG benchmark launches (any `test_` extra) are unchanged: they read only their own extras,
  * default off, so case IDs and measured behaviour stay valid. The old `test_*` extras are the
@@ -55,22 +57,20 @@ internal object CallFeatureDefaults {
 }
 
 internal enum class CallFeature(
-    /** SharedPreferences key of the user's explicit choice (absent = [defaultOn]). */
-    val prefKey: String,
+    /** SharedPreferences key of the user's explicit choice (absent = [defaultOn]); null: a constant with no switch. */
+    val prefKey: String?,
     /** DEBUG launch extra of benchmark runs (default off). */
     val benchmarkExtra: String,
     val defaultOn: Boolean,
 ) {
-    VOICE_CALLS(IntercomFeatureSettings.PREF_VOICE_CALLS, IntercomFeatureSettings.EXTRA_VOICE_CALLS, CallFeatureDefaults.VOICE_CALLS),
-    RINGBACK("feature_call_ringback_v2", CallUxSettings.EXTRA_RINGBACK, CallFeatureDefaults.RINGBACK),
-    EAR_CAMERA_PAUSE(
-        "feature_call_ear_camera_pause_v2", CallUxSettings.EXTRA_PROXIMITY_CAMERA_PAUSE, CallFeatureDefaults.EAR_CAMERA_PAUSE,
-    ),
-    LOCK_SCREEN_CALLS("feature_call_lock_screen_v2", CallUxSettings.EXTRA_LOCK_SCREEN, CallFeatureDefaults.LOCK_SCREEN_CALLS),
-    CALL_NOTIFICATIONS("feature_call_notifications_v2", CallUxSettings.EXTRA_CALL_STYLE, CallFeatureDefaults.CALL_NOTIFICATIONS),
+    VOICE_CALLS(null, IntercomFeatureSettings.EXTRA_VOICE_CALLS, CallFeatureDefaults.VOICE_CALLS),
+    RINGBACK(null, CallUxSettings.EXTRA_RINGBACK, CallFeatureDefaults.RINGBACK),
+    EAR_CAMERA_PAUSE(null, CallUxSettings.EXTRA_PROXIMITY_CAMERA_PAUSE, CallFeatureDefaults.EAR_CAMERA_PAUSE),
+    LOCK_SCREEN_CALLS(null, CallUxSettings.EXTRA_LOCK_SCREEN, CallFeatureDefaults.LOCK_SCREEN_CALLS),
+    CALL_NOTIFICATIONS(null, CallUxSettings.EXTRA_CALL_STYLE, CallFeatureDefaults.CALL_NOTIFICATIONS),
     MESSAGES(StoreForwardFeature.PREF, StoreForwardFeature.EXTRA, CallFeatureDefaults.MESSAGES),
     AUTO_SYNC(StoreForwardAutoSyncFeature.PREF, StoreForwardAutoSyncFeature.EXTRA, CallFeatureDefaults.AUTO_SYNC),
-    NAMES_AND_TITLES(PeerLabelFeature.PREF, PeerLabelFeature.EXTRA, CallFeatureDefaults.NAMES_AND_TITLES),
+    NAMES_AND_TITLES(null, PeerLabelFeature.EXTRA, CallFeatureDefaults.NAMES_AND_TITLES),
 }
 
 /** The effective value of every promoted feature for this launch. */
@@ -87,16 +87,16 @@ internal data class CallFeatureSet(
 
 internal object CallFeatureResolver {
     /**
-     * One feature. A benchmark launch reads only [CallFeature.benchmarkExtra] (default off, so a stored
-     * choice never leaks into a measured case). Any other launch uses the user's explicit choice when
-     * [stored] has one, otherwise the feature's default.
+     * One feature, by the shared rule ([FeatureCatalog.resolve] on [CallFeatureSpecs.specOf]). A benchmark launch reads only
+     * [CallFeature.benchmarkExtra] (default off, so a stored choice never leaks into a measured case). Any other launch uses
+     * the user's explicit choice when [stored] has one (constants have none), otherwise the feature's default.
      */
     fun enabled(
         feature: CallFeature,
         benchmarkLaunch: Boolean,
         extra: (String) -> Boolean,
         stored: (String) -> Boolean?,
-    ): Boolean = if (benchmarkLaunch) extra(feature.benchmarkExtra) else stored(feature.prefKey) ?: feature.defaultOn
+    ): Boolean = FeatureCatalog.resolve(CallFeatureSpecs.specOf(feature), benchmarkLaunch, extra, stored)
 
     fun resolve(
         benchmarkLaunch: Boolean,
@@ -218,7 +218,7 @@ internal class CallFeatureSettingsBinder(
                 if (row.feature == null) {
                     NotificationPrivacy.setShowPeerNames(context, enabled)
                 } else {
-                    prefs.edit().putBoolean(row.feature.prefKey, enabled).apply()
+                    prefs.edit().putBoolean(requireNotNull(row.feature.prefKey), enabled).apply()
                     if (enabled && row.feature.needsNotifications) host.requestNotificationPermission()
                 }
                 host.onCallFeaturesChanged()

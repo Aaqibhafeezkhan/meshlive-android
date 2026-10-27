@@ -242,7 +242,8 @@ class Bmh3PseudonymTest {
         }.reason)
         // The marker alone parses; an unknown non-critical type is skipped, an unknown critical one fails.
         assertTrue(Bmh3Extensions.parse(area(Bmh3Extensions.TYPE_PSEUDONYM, 0, 0)).pseudonym)
-        assertFalse(Bmh3Extensions.parse(area(5, 0, 2, 0xaa, 0xbb)).pseudonym)
+        // Type 5 is RELAY_SEEK (Design OR) since the on-demand route prototype; 6 is still unknown and non-critical.
+        assertFalse(Bmh3Extensions.parse(area(6, 0, 2, 0xaa, 0xbb)).pseudonym)
         assertEquals("unknown critical extension", assertThrows(Bmh3Failure::class.java) {
             Bmh3Extensions.parse(area(0x81, 0, 0))
         }.reason)
@@ -488,6 +489,110 @@ class Bmh3PseudonymTest {
         assertNotEquals(realI.nodeId, s.callee.peerNodeId)
     }
 
+    /**
+     * Review 2026-10-27 (finding 1, high): the callee revealed itself at Accept but never required the caller's reveal, so a
+     * caller could talk for the whole call as a throwaway. The callee now refuses the caller's media until the caller's
+     * reveal verified, and hangs up when it has not arrived within the deadline.
+     */
+    @Test
+    fun anAnsweredStrangerCallRefusesTheCallersMediaUntilTheCallerRevealedAndEndsWithoutIt() {
+        val realI = newIdentity()
+        val realR = newIdentity()
+        val s = strangerCall(realI, realR)
+        val callee = requireNotNull(s.callee.reveal)
+        val caller = requireNotNull(s.caller.reveal)
+        // Accept: the callee reveals itself; the caller is still a throwaway.
+        val calleeRecord = DiscoveryExchange.decode(callee.sendOwn(realR, listOf(entry))) as DiscoveryExchange.IdentityReveal
+        assertTrue(callee.peerRevealRequired())
+        assertEquals(CallMediaGate.Decision.REFUSE, CallMediaGate.decide(PrivateCallPhase.NEGOTIATING_MEDIA, callee.peerRevealRequired()))
+        assertEquals(CallMediaGate.Decision.REFUSE, CallMediaGate.decide(PrivateCallPhase.ACTIVE, callee.peerRevealRequired()))
+        // A caller that never reveals: the callee ends the call at the deadline, not before.
+        assertFalse(CallerRevealGate.expired(callee.peerRevealRequired(), acceptedAtMs = 1_000L, nowMs = 1_000L + CallerRevealGate.DEADLINE_MS - 1))
+        assertTrue(CallerRevealGate.expired(callee.peerRevealRequired(), acceptedAtMs = 1_000L, nowMs = 1_000L + CallerRevealGate.DEADLINE_MS))
+        // A genuine caller behind relays gets more time (its reveal crosses every hop), bounded whatever it claims.
+        assertFalse(CallerRevealGate.expired(true, acceptedAtMs = 0L, nowMs = CallerRevealGate.DEADLINE_MS, relayHops = 2))
+        assertTrue(CallerRevealGate.expired(true, acceptedAtMs = 0L, nowMs = CallerRevealGate.MAX_DEADLINE_MS, relayHops = 1_000))
+        // An honest caller verifies the callee and reveals itself: media flows and the deadline no longer applies.
+        caller.onPeerReveal(calleeRecord)
+        val callerRecord = DiscoveryExchange.decode(caller.sendOwn(realI, emptyList())) as DiscoveryExchange.IdentityReveal
+        callee.onPeerReveal(callerRecord)
+        assertFalse(callee.peerRevealRequired())
+        assertEquals(CallMediaGate.Decision.ALLOW, CallMediaGate.decide(PrivateCallPhase.ACTIVE, callee.peerRevealRequired()))
+        assertFalse(CallerRevealGate.expired(callee.peerRevealRequired(), acceptedAtMs = 0L, nowMs = Long.MAX_VALUE))
+    }
+
+    /**
+     * Review 2026-10-27 (S2): a real callee (pseudonyms off) answering a pseudonymous caller skipped the link opening while
+     * the caller sent one and waited for the answer, so the call hung. Both sides now agree: a responder skips only when it
+     * presented a throwaway itself.
+     */
+    @Test
+    fun theLinkOpeningRunsOnBothSidesOrNeitherWhoeverPresentedAThrowaway() {
+        fun openings(calleeOptions: Bmh3ResponderOptions): Pair<List<OpeningEntry>?, List<OpeningEntry>?> {
+            val s = call(newIdentity(), newIdentity(), { Bmh3InitiatorOptions(strangerIdentity = newIdentity()) }, { calleeOptions })
+            val result = both(
+                {
+                    if (RelayIdentityPolicy.skipsLinkOpening(true, s.callerLink.ownPseudonymous, s.callerLink.peerPseudonymous)) null
+                    else LinkOpeningExchange.exchange(s.callerLink, caps, emptyList())
+                },
+                {
+                    if (RelayIdentityPolicy.skipsLinkOpening(false, s.calleeLink.ownPseudonymous, s.calleeLink.peerPseudonymous)) null
+                    else LinkOpeningExchange.exchange(s.calleeLink, responderCaps, listOf(entry))
+                },
+            )
+            return result.initiator.getOrThrow() to result.responder.getOrThrow()
+        }
+        // Real callee: both exchange, and the caller gets the callee's opening.
+        val real = openings(Bmh3ResponderOptions())
+        assertEquals(listOf(entry), real.first)
+        assertEquals(emptyList<OpeningEntry>(), real.second)
+        // Pseudonymous callee: neither side sends one (the salt stays with the callee).
+        val stranger = openings(Bmh3ResponderOptions(strangerIdentity = newIdentity(), acceptBmh2 = false))
+        assertNull(stranger.first)
+        assertNull(stranger.second)
+    }
+
+    /**
+     * Security review 2026-10-27 (item 2): the deadline trusted the caller's own hop claim even on a direct call, and a
+     * reveal lost to a link renewal ended the call. A direct call gets no extra time; a resent identical reveal is ignored,
+     * any other second reveal is still refused.
+     */
+    @Test
+    fun aDirectCallGetsNoHopAllowanceAndARenewedLinkMayRepeatTheSameReveal() {
+        assertEquals(0, CallerRevealGate.effectiveHops(direct = true, claimedHops = 3))
+        assertEquals(1, CallerRevealGate.effectiveHops(direct = false, claimedHops = 0))
+        assertEquals(3, CallerRevealGate.effectiveHops(direct = false, claimedHops = 9))
+        val realI = newIdentity()
+        val realR = newIdentity()
+        val s = strangerCall(realI, realR)
+        val callee = requireNotNull(s.callee.reveal)
+        val caller = requireNotNull(s.caller.reveal)
+        val calleeRecord = DiscoveryExchange.decode(callee.sendOwn(realR, listOf(entry))) as DiscoveryExchange.IdentityReveal
+        assertFalse(caller.isRepeatOfVerified(calleeRecord))
+        caller.onPeerReveal(calleeRecord)
+        assertTrue("the same bytes again are a repeat", caller.isRepeatOfVerified(calleeRecord))
+        val forged = DiscoveryExchange.IdentityReveal(calleeRecord.role, calleeRecord.spki, calleeRecord.entries, ByteArray(64) { 1 })
+        assertFalse(caller.isRepeatOfVerified(forged))
+        assertThrows(Bmh3Failure::class.java) { caller.onPeerReveal(forged) }
+    }
+
+    @Test
+    fun aRealCalleeAnsweringAPseudonymousCallerExpectsNoRevealFromIt() {
+        // Pseudonyms off on the callee: it never reveals, so it cannot require the caller's reveal either.
+        val realI = newIdentity()
+        val realR = newIdentity()
+        val s = call(
+            realI, realR,
+            { Bmh3InitiatorOptions(strangerIdentity = newIdentity()) },
+            { Bmh3ResponderOptions() },
+        )
+        val callee = requireNotNull(s.callee.reveal)
+        assertTrue(callee.peerPseudonymous)
+        assertFalse(callee.ownPseudonymous)
+        assertFalse(callee.peerRevealRequired())
+        assertEquals(CallMediaGate.Decision.ALLOW, CallMediaGate.decide(PrivateCallPhase.ACTIVE, callee.peerRevealRequired()))
+    }
+
     @Test
     fun revealOrderRepeatsAndWrongPeersAreProtocolErrors() {
         val realI = newIdentity()
@@ -672,6 +777,139 @@ class Bmh3PseudonymTest {
         assertNull(Bmh3Policy.initiatorOptions(null, Bmh3Policy.Layer.LINK, log = {}, pseudonyms = true).strangerIdentity)
     }
 
+    /**
+     * Review 2026-10-27 (finding 11, S1, finding 5): the link and end-to-end handshakes of one attempt decided separately;
+     * a Classic connector's link got a throwaway of its own, so the callee met two strangers and took the call for a
+     * relayed one. Built from one plan, both layers present the same throwaway and the callee sees one stranger.
+     */
+    @Test
+    fun oneAttemptPlanShowsTheCalleeOneStrangerAtBothLayersWhoeverRunsTheLinkHandshake() {
+        val realI = newIdentity()
+        val realR = newIdentity()
+        val plan = Bmh3AttemptPlan.create(enabled = true, only = false, selected = offer, pinned = false, pseudonymMode = true)
+        assertTrue(plan.bmh3)
+        assertNotNull(plan.callerAlias)
+        val linkPipes = Duplex()
+        val calleeOptions = Bmh3ResponderOptions(strangerIdentity = newIdentity(), acceptBmh2 = false)
+        // The link options are built first (as a Classic connector does before the call endpoint runs), the end-to-end
+        // options later, from the same plan.
+        val linkOptions = requireNotNull(plan.initiator(Bmh3Policy.Layer.LINK))
+        val links = both(
+            { SecureBluetoothHandshake.initiate(linkPipes.bToA.input, linkPipes.aToB.output, realI, caps, bmh3 = linkOptions) },
+            { SecureBluetoothHandshake.respond(linkPipes.aToB.input, linkPipes.bToA.output, realR, responderCaps, bmh3 = calleeOptions) },
+        )
+        val callerLink = links.initiator.getOrThrow()
+        val calleeLink = links.responder.getOrThrow()
+        val ends = both(
+            { EndToEndVideoHandshake.initiate(callerLink, realI, caps, bmh3 = plan.initiator(Bmh3Policy.Layer.ENDPOINT)) },
+            { EndToEndVideoHandshake.respond(calleeLink, realR, responderCaps, bmh3 = calleeOptions) },
+        )
+        val callee = ends.responder.getOrThrow()
+        assertTrue(callee.peerIsPseudonym)
+        assertEquals("the callee's link and end-to-end peers are one stranger (not a relay)", calleeLink.peerNodeId, callee.peerNodeId)
+        assertEquals(requireNotNull(plan.callerAlias).nodeId, callee.peerNodeId)
+        assertEquals(0, realI.signed.get())
+    }
+
+    /**
+     * Review 2026-10-27 (finding 6): every BMH3 success was pinned in a plain file, in pseudonym mode a list of the contacts
+     * this phone called. A pin only serves a version 2 advert whose hint can be stripped: nothing else is pinned.
+     */
+    @Test
+    fun onlyAVersion2OfferOutsidePseudonymModeIsPinned() {
+        val answerer = newIdentity()
+        val prefix = answerer.nodeId.toByteArray().copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES)
+        val v2 = offer.copy(nodeIdPrefix = prefix, version = DiscoveryAnnouncement.FIXED_PREFIX_VERSION)
+        val peer = Bmh3Peer(answerer.publicKeyEncoded, answerer.nodeId, responderCaps, Bmh3Extensions.NONE)
+        fun pinsAfterSuccess(selected: DiscoveryAnnouncement, pseudonymMode: Boolean): List<String> {
+            val pins = mutableListOf<String>()
+            val plan = Bmh3AttemptPlan.create(
+                enabled = true, only = true, selected = selected, pinned = false, pseudonymMode = pseudonymMode,
+                pin = { pins += it.joinToString("") { b -> "%02x".format(b) } },
+            )
+            runCatching { requireNotNull(plan.initiator(Bmh3Policy.Layer.LINK)).checkResponder(peer) }
+            return pins
+        }
+        assertEquals(1, pinsAfterSuccess(v2, pseudonymMode = false).size)
+        assertTrue("pseudonym mode pins nothing", pinsAfterSuccess(v2, pseudonymMode = true).isEmpty())
+        assertFalse("a rotating offer is always BMH3: nothing to pin", Bmh3AttemptPlan.pinAllowed(offer, pseudonymMode = false))
+        assertFalse(Bmh3AttemptPlan.pinAllowed(null, pseudonymMode = false))
+    }
+
+    /**
+     * reviewer review 2026-10-27 (finding 8): a pin store that could not be read counted as "not pinned", so a copied version 2
+     * offer with its hint stripped drew this phone's real key in a BMH2 hello. Unknown now counts as pinned: BMH3.
+     */
+    @Test
+    fun anUnreadablePinStoreNeverLetsAStrippedHintDowngradeToBmh2() {
+        val pins = Bmh3Pins(object : Bmh3Pins.Storage {
+            override fun read(): String? = throw SealedTextUnavailable(null)
+            override fun write(value: String) = Unit
+        })
+        val prefix = byteArrayOf(1, 2, 3, 4, 5, 6)
+        assertEquals(Bmh3Pins.PinState.UNKNOWN, pins.pinState(prefix))
+        val stripped = offer.copy(nodeIdPrefix = prefix, version = DiscoveryAnnouncement.FIXED_PREFIX_VERSION, capabilitySummary = 1)
+        val plan = Bmh3AttemptPlan.create(
+            enabled = true, only = false, selected = stripped,
+            pinned = pins.pinState(prefix) != Bmh3Pins.PinState.UNPINNED, pseudonymMode = false,
+        )
+        assertTrue(plan.bmh3)
+        assertNotNull(plan.initiator(Bmh3Policy.Layer.LINK))
+    }
+
+    /**
+     * Review 2026-10-27 (finding 8): the verified-contact check ran only at the end-to-end layer, after this phone had
+     * already presented its real key at the link. A direct link's real-key answerer that shows a verified contact's prefix
+     * with another key now ends the handshake before this phone signs anything.
+     */
+    @Test
+    fun aMismatchingRealKeyAtTheLinkEndsTheHandshakeBeforeTheCallerSignsAnything() {
+        val realI = newIdentity()
+        val realR = newIdentity()
+        val mismatch = Bmh3Policy.initiatorOptions(
+            null, Bmh3Policy.Layer.LINK, log = {},
+            admitLinkPeer = { throw IdentityMismatchException("a verified contact's prefix with another key") },
+        )
+        val pipes = Duplex()
+        val out = both(
+            { SecureBluetoothHandshake.initiate(pipes.bToA.input, pipes.aToB.output, realI, caps, bmh3 = mismatch) },
+            { SecureBluetoothHandshake.respond(pipes.aToB.input, pipes.bToA.output, realR, responderCaps, bmh3 = Bmh3ResponderOptions()) },
+            onResponderFailure = { pipes.bToA.close() },
+        )
+        assertTrue(generateSequence(out.initiator.exceptionOrNull()) { it.cause }.any { it is IdentityMismatchException })
+        assertEquals("the caller's real key signed nothing", 0, realI.signed.get())
+        // Toward a relay (route cost above 0) the link peer is not the person called: no contact check there.
+        val admitted = mutableListOf<NodeId>()
+        val toRelay = Bmh3Policy.initiatorOptions(offer.copy(routeCost = 1), Bmh3Policy.Layer.LINK, log = {}, admitLinkPeer = { admitted += it.nodeId })
+        toRelay.checkResponder(Bmh3Peer(realR.publicKeyEncoded, realR.nodeId, responderCaps, Bmh3Extensions.NONE))
+        assertTrue(admitted.isEmpty())
+    }
+
+    /**
+     * Security review 2026-10-27 (item 10): while only the Meet screen makes the phone reachable, a connection without the
+     * code's tag is closed before the phone draws a key or signs anything, with pseudonyms on or off, and a BMH2 hello is
+     * refused.
+     */
+    @Test
+    fun theMeetScreenClosesEveryUntaggedConnectionBeforeSigning() {
+        for (pseudonyms in listOf(true, false)) {
+            val realR = newIdentity()
+            val options = Bmh3Policy.responderOptions(
+                opening = emptyList(), fixedPrefix = ByteArray(6), admitInitiator = { _, _ -> true }, log = {},
+                pseudonyms = pseudonyms, screenOnlyReachable = true,
+            )
+            assertFalse(options.acceptBmh2)
+            val pipes = Duplex()
+            val out = both(
+                { SecureBluetoothHandshake.initiate(pipes.bToA.input, pipes.aToB.output, newIdentity(), caps, bmh3 = Bmh3InitiatorOptions()) },
+                { SecureBluetoothHandshake.respond(pipes.aToB.input, pipes.bToA.output, realR, responderCaps, bmh3 = options) },
+                onResponderFailure = { pipes.bToA.close() },
+            )
+            assertTrue(out.responder.isFailure)
+            assertEquals("pseudonyms=$pseudonyms: nothing signed", 0, realR.signed.get())
+        }
+    }
+
     @Test
     fun theCalleeFailsClosedRefusesBmh2AndKeepsPerEpochGuards() {
         val keys = Bmh3PseudonymKeys()
@@ -721,7 +959,8 @@ class Bmh3PseudonymTest {
     @Test
     fun theSwitchIsAChildOfHiddenIdentitiesAndOnByDefaultSinceTheBeta() {
         val spec = ConnectivityFeatures.bmh3Pseudonyms
-        assertEquals("bmh3", spec.dependsOn)
+        // A child of Hidden identities that also needs rotating IDs: greyed out while either is off.
+        assertEquals(listOf("bmh3", RotatingDiscoveryFeature.spec.id), spec.dependsOn)
         assertTrue(spec.defaultEnabled)
         assertEquals("test_bmh3_pseudonyms", spec.benchmarkExtra)
         assertTrue(spec in ConnectivityFeatures.all)

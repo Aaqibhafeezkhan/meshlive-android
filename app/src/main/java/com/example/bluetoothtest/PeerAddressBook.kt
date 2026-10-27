@@ -79,7 +79,6 @@ internal object LeConnectFailureClassifier {
     const val FAST_FAILURE_MS = 20_000L
     const val STALE_TIMEOUT_MS = 25_000L
     const val MAX_FAST_RETRIES = 2
-    const val RETRY_DELAY_MS = 300L
 
     fun classify(elapsedMs: Long, status: Int?, fastRetriesUsed: Int): LeConnectFailureAction = when {
         elapsedMs >= STALE_TIMEOUT_MS && (status == null || status == BluetoothTransportPolicy.GATT_ERROR_133) ->

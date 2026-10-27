@@ -28,7 +28,7 @@ class SavedContactCallsTest {
         assertTrue(NamingFeatureDefaults.BVMID2)
         assertTrue(NamingFeatures.BVMID2.defaultEnabled)
         assertFalse(NamingFeatureDefaults.BVMID1_COMPAT)
-        assertEquals("bvmid2", NamingFeatures.BVMID1_COMPAT.dependsOn)
+        assertEquals(listOf("bvmid2"), NamingFeatures.BVMID1_COMPAT.dependsOn)
     }
 
     // ----- leases in the call in which the user verifies -----

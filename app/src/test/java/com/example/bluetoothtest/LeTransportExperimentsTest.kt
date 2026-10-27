@@ -50,7 +50,7 @@ class LeTransportExperimentsTest {
             assertEquals("Coded S8 (experimental)", BlePhyPreference.TWO_M.label)
             // Legacy advertisements are on LE 1M: never initiate on Coded.
             assertEquals(BluetoothDevice.PHY_LE_1M_MASK, controlInitiatingPhys(BlePhyPreference.TWO_M))
-            assertFalse(DebugTunables.experimentalBle1mPhy)
+            assertFalse(DebugTunables.experimentalBlePhy == ExperimentalBlePhy.LE_1M)
         } finally {
             DebugTunables.experimentalBlePhy = null
         }

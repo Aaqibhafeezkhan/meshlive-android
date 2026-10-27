@@ -649,6 +649,7 @@ internal object DevicePolicyRegistry {
             confidenceNote = "high for the 517 negotiation (Android 14 behaviour-change page) and for the 512-byte limit (spec); " +
                 "the Android 13+ enforcement rests on library maintainer reports (Android-BLE-Library, Nordic; FlutterBluePlus #984, " +
                 "RxAndroidBle) and is not yet reproduced on an owned phone",
+            supersededBy = "gatt-mtu-fixed-517",
         ),
         proposal(
             id = "ble-scan-start-quota",
@@ -680,6 +681,7 @@ internal object DevicePolicyRegistry {
             ),
             evidence = listOf("none: no code-6 scan failure recorded yet"),
             confidence = HIGH,
+            supersededBy = "le-scan-start-quota",
         ),
         proposal(
             id = "background-restriction-visible",
@@ -704,6 +706,7 @@ internal object DevicePolicyRegistry {
             ),
             evidence = listOf("none: not yet logged"),
             confidence = MEDIUM,
+            supersededBy = "bg-background-restricted",
         ),
         proposal(
             id = "one-ui-never-sleeping-apps",
@@ -873,6 +876,7 @@ internal object DevicePolicyRegistry {
         area: PolicyArea = PolicyArea.BLUETOOTH_TRANSPORT,
         validation: PolicyValidation = PolicyValidation.UPSTREAM_DOCUMENTED,
         confidenceNote: String = "",
+        supersededBy: String? = null,
     ) = DevicePolicyEntry(
         id = id,
         title = title,
@@ -890,5 +894,6 @@ internal object DevicePolicyRegistry {
         confidenceNote = confidenceNote,
         area = area,
         validation = validation,
+        supersededBy = supersededBy,
     )
 }

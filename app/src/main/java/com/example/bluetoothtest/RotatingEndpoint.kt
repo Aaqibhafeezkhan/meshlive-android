@@ -70,9 +70,12 @@ object PresenceEligibility {
         visibleToThem: Boolean,
         /** Naming v2 ([CodeOnlyLeaseRule]): a contact only checked by code gets no new leases until scanned both ways. */
         codeOnlyUnscanned: Boolean = false,
+        /** Review 2026-10-27 (finding 3): a blocked person gets no lease, verified contact or not ([PersonPolicy]). */
+        blocked: Boolean = false,
     ): String? = when {
         !vaultPresent -> "no_vault"
         !persistent -> "vault_not_persistent"
+        blocked -> "peer_blocked"
         peerState == null -> "no_contact_store"
         peerState != VerificationState.VERIFIED -> "peer_${peerState.name.lowercase()}"
         !visibleToThem -> "contact_switch_off"

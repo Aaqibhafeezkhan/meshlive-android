@@ -40,7 +40,7 @@ class RelayHelperPolicyTest {
 
     @Test
     fun batteryRuleMatchesTheStreamRelayRule() {
-        // User decision 2: below 20 % and not charging, or Battery Saver; an unknown level never pauses.
+        // Design decision 2: below 20 % and not charging, or Battery Saver; an unknown level never pauses.
         assertTrue(RelayHelperPolicy.plan(ready.copy(batteryPercent = 20)).helping)
         assertFalse(RelayHelperPolicy.plan(ready.copy(batteryPercent = 19)).helping)
         assertTrue(RelayHelperPolicy.plan(ready.copy(batteryPercent = 5, charging = true)).helping)
@@ -87,7 +87,9 @@ class RelayHelperPolicyTest {
         assertEquals(RelaySetupFailure.REFUSED, RelaySetupAdmission.refusal(ok.copy(rateLimited = true, parentIsSelf = true)))
         assertEquals(RelaySetupFailure.LOOP, RelaySetupAdmission.refusal(ok.copy(parentIsSelf = true)))
         assertEquals(RelaySetupFailure.LOOP, RelaySetupAdmission.refusal(ok.copy(parentIsTarget = true)))
-        assertEquals(RelaySetupFailure.LOOP, RelaySetupAdmission.refusal(ok.copy(targetIsSelf = true)))
+        // Review CP-1: a request for the helper's own ID answers like a missing entry (FAIL 1): FAIL 6 told the asker that
+        // a phone with relay consent off was one hop away and linked its previous and current IDs.
+        assertEquals(RelaySetupFailure.NO_ROUTE, RelaySetupAdmission.refusal(ok.copy(targetIsSelf = true)))
         assertEquals(RelaySetupFailure.REFUSED, RelaySetupAdmission.refusal(ok.copy(budget = 3)))
         assertEquals(RelaySetupFailure.REFUSED, RelaySetupAdmission.refusal(ok.copy(budget = 0)))
         assertEquals(RelaySetupFailure.NO_ROUTE, RelaySetupAdmission.refusal(ok.copy(routeAvailable = false)))

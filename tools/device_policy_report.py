@@ -145,15 +145,22 @@ def component_matches(component: dict, name: str) -> bool:
         name.startswith(p) for p in component["prefixes"])
 
 
-def resolve(registry: dict, traits: dict, disabled: set[str] | None = None) -> dict:
-    """Device-level active IDs, component-rule hits and matching proposals for one phone."""
+def resolve(registry: dict, traits: dict, disabled: set[str] | None = None, arms_on: set[str] | None = None) -> dict:
+    """Device-level active IDs, component-rule hits and matching proposals for one phone.
+
+    As in Kotlin (DeviceFamilyPolicy.resolve, switch audit A10): a proposal replaced by an implemented entry
+    (`superseded_by`) is never a matching proposal, and an entry whose effect waits for a default-off Experimental arm
+    (`arm`, the arm's launch extra) is listed under `arm_off`, not `active`, unless that arm is in [arms_on]."""
     disabled = disabled or set()
+    arms_on = arms_on or set()
     all_off = "all" in disabled
-    active, components, proposals, switched_off = [], {}, [], []
+    active, components, proposals, switched_off, arm_off = [], {}, [], [], []
     for entry in registry["entries"]:
         if not matcher_matches(entry["matcher"], traits):
             continue
         if entry["status"] == "proposed":
+            if entry.get("superseded_by"):
+                continue
             component = entry["component"]
             if component is None or any(component_matches(component, n) for n in traits["codec_components"]):
                 proposals.append(entry["id"])
@@ -162,13 +169,16 @@ def resolve(registry: dict, traits: dict, disabled: set[str] | None = None) -> d
             switched_off.append(entry["id"])
             continue
         if entry["component"] is None:
-            active.append(entry["id"])
+            if entry.get("arm") and entry["arm"] not in arms_on:
+                arm_off.append(entry["id"])
+            else:
+                active.append(entry["id"])
         else:
             hits = [name for name in traits["codec_components"] if component_matches(entry["component"], name)]
             if hits:
                 components[entry["id"]] = hits
     return {"active": active, "component_rules": components, "matching_proposals": proposals,
-            "switched_off": switched_off}
+            "switched_off": switched_off, "arm_off": arm_off}
 
 
 # --- Checks -------------------------------------------------------------------------------------

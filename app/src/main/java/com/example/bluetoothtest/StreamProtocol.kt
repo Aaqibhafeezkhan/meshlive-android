@@ -389,8 +389,8 @@ object StreamProtocol {
     private const val AUDIO_PAIR_HEADER_BYTES = 12
     private const val AUDIO_BATCH_HEADER_BYTES = 5
     private const val AUDIO_BATCH_ITEM_HEADER_BYTES = 6
-    private const val MAX_AUDIO_BATCH_PACKETS = 20
-    private const val MAX_AUDIO_ACCESS_UNIT_BYTES = 16 * 1024
-    private const val MAX_AUDIO_PAIR_GAP_US = 1_000_000L
+    internal const val MAX_AUDIO_BATCH_PACKETS = 20
+    internal const val MAX_AUDIO_ACCESS_UNIT_BYTES = 16 * 1024
+    internal const val MAX_AUDIO_PAIR_GAP_US = 1_000_000L
     private const val SHA_256_BYTES = 32
 }

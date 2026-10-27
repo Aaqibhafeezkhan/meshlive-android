@@ -268,9 +268,10 @@ class GpuScaleMathTest {
     @Test
     fun theSwitchIsDebugOnlyAndDefaultOff() {
         assertFalse(GpuScaleFeature.enabled)
-        assertFalse(GpuScaleFeature.resolve(debugBuild = false, extraValue = true))
-        assertFalse(GpuScaleFeature.resolve(debugBuild = true, extraValue = false))
-        assertTrue(GpuScaleFeature.resolve(debugBuild = true, extraValue = true))
+        val spec = GpuScaleFeature.spec
+        assertFalse(FeatureCatalog.resolve(spec, false, { true }, { true }, debugBuild = false))
+        assertFalse(FeatureCatalog.resolve(spec, false, { false }, { null }, debugBuild = true))
+        assertTrue(FeatureCatalog.resolve(spec, false, { true }, { null }, debugBuild = true))
     }
 
     @Test

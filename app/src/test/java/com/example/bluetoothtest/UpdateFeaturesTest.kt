@@ -68,7 +68,7 @@ class UpdateFeaturesTest {
         ConnectivityFeatures.registerAll()
         ViewerFeatures.registerAll()
         UpdateFeatures.registerAll(true)
-        val keys = FeatureCatalog.all().map { it.prefKey }
+        val keys = FeatureCatalog.all().mapNotNull { it.prefKey }
         assertEquals(keys.size, keys.toSet().size)
         UpdateFeatures.registerAll(true)
     }

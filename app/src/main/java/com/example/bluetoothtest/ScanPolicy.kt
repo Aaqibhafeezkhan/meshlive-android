@@ -51,7 +51,8 @@ internal object ScanPolicy {
     }
 
     /** True when the entry [id] (or "all") is in the DEBUG `test_device_policy_off` set. */
-    fun isOff(id: String, switchedOff: Set<String>): Boolean = "all" in switchedOff || id in switchedOff
+    fun isOff(id: String, switchedOff: Set<String>, viewOff: Set<String> = emptySet()): Boolean =
+        DevicePolicyOff.isOff(id, switchedOff, viewOff)
 
     /** Runtime form of [isOff] against the launch extra. */
     fun enabled(id: String): Boolean = !isOff(id, DebugTunables.devicePolicyOff)
@@ -160,7 +161,6 @@ internal object ScanPolicy {
             "not relied on. Not phone-tested.",
         reviewed = REVIEWED,
         origin = "Backlog S-08: CocAutoGatt reset only CoC registration counts on adapter state; scanners were never rebuilt.",
-        proposed = true,
         area = PolicyArea.BLUETOOTH_TRANSPORT,
         validation = PolicyValidation.UPSTREAM_DOCUMENTED,
         fallback = "A scan stopped by the adapter turning off stays stopped until its owner restarts it.",
@@ -278,32 +278,6 @@ internal object ScanPolicy {
         fallback = "The filtered scan keeps running (silently empty if the controller is broken).",
     )
 
-    val SCAN_PAUSE_DURING_CONNECT = DevicePolicyEntry(
-        id = "scan-pause-during-connect",
-        title = "Pause discovery scans while the app dials a link (Experimental)",
-        matcher = DeviceMatcher(),
-        effects = listOf(
-            ScanBehaviourEffect("ScanGate.pauseFor(ms) stops continuous scanners for the dial window and restarts them through the gate"),
-        ),
-        behaviour = "Scanning while a connection is established competes for the radio; Android 14+ already downgrades " +
-            "LOW_LATENCY to BALANCED for about 6 s during connects. The diagnostic half is always on: discovery statistics windows " +
-            "that overlap an own connect attempt are tagged. The pause itself is Experimental, default off: `test_scan_pause_during_connect=true`.",
-        sources = listOf(
-            PolicySource(AOSP_SOURCE, "$A14_BT/android/app/src/com/android/bluetooth/gatt/ScanManager.java#1341",
-                "the stack downgrades scan intensity itself during connection establishment"),
-        ),
-        sourceStatus = PARTIAL,
-        evidence = listOf("none: no A/B of child establish rate with and without a concurrent scan"),
-        confidence = LOW,
-        confidenceNote = "RxAndroidBle FAQ and controller scan-window reasoning are old and mixed; the A14+ stack already mitigates.",
-        reviewed = REVIEWED,
-        origin = "Backlog S-07: discovery kept scanning during dials.",
-        proposed = true,
-        area = PolicyArea.BLUETOOTH_TRANSPORT,
-        validation = PolicyValidation.EXPERIMENTAL,
-        fallback = "Discovery keeps scanning during dials.",
-    )
-
     val HYPEROS_DEEPDOZE_SCAN_BLOCK = DevicePolicyEntry(
         id = "hyperos-deepdoze-scan-block",
         title = "Xiaomi/Redmi/POCO: background scans may deliver nothing in Deep Doze (diagnostic)",
@@ -359,7 +333,6 @@ internal object ScanPolicy {
         ANDROID10_SCANNER_LEAK,
         SCAN_TIMEOUT_RENEWAL,
         SCAN_HARDWARE_FILTER_FALLBACK,
-        SCAN_PAUSE_DURING_CONNECT,
         HYPEROS_DEEPDOZE_SCAN_BLOCK,
         OEM_SCREENOFF_SCAN_PAUSE,
     )

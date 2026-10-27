@@ -5,14 +5,8 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.os.SystemClock
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 /**
  * Link lifetime rules for the GATT paths (G-04).
@@ -72,12 +66,6 @@ internal object GattLinkLifetime {
 
     fun aclDropRequired(address: String?): Boolean = address != null && dropPending.containsKey(address)
 
-    /** A device's ACL going down; armed before the last holder is released so the broadcast cannot be missed. */
-    interface AclDownWatch {
-        fun await(timeoutMs: Long): Boolean
-        fun release()
-    }
-
     /**
      * Waits for [watch] to report the ACL down for at most [timeoutMs]. Returns true when it dropped. Never throws;
      * the watch is always released. [mayBlock] false (main thread) skips the wait.
@@ -122,27 +110,6 @@ internal object GattLinkLifetime {
             manager?.getConnectedDevices(BluetoothProfile.GATT_SERVER).orEmpty())
         connected.any { it.address == address }
     }.getOrDefault(true)
-
-    /** Registers for ACTION_ACL_DISCONNECTED of [device] now; [AclDownWatch.await] completes when it arrives. */
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
-    fun watchAclDown(context: Context, device: BluetoothDevice): AclDownWatch {
-        val appContext = context.applicationContext
-        val latch = CountDownLatch(1)
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                val source = intent?.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
-                if (source?.address == device.address) latch.countDown()
-            }
-        }
-        val filter = IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED)
-        runCatching { appContext.registerReceiver(receiver, filter) }
-        return object : AclDownWatch {
-            override fun await(timeoutMs: Long): Boolean = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
-            override fun release() {
-                runCatching { appContext.unregisterReceiver(receiver) }
-            }
-        }
-    }
 
     /**
      * Marks [device]'s link as in use by this app's GATT server (Experimental `test_gatt_server_hold`). Returns whether

@@ -260,28 +260,4 @@ class ScanRenewalTest {
         assertTrue(ScanPolicy.reserveBlocking(gate, null))
     }
 
-    @Test
-    fun connectPauseOnlyRecordsTheWindowWhileTheArmIsOff() {
-        scanner("a")
-        var enabled = false
-        val scanGate = ScanGateImpl(registry, clock, { clock.now }, pauseEnabled = { enabled })
-        val windowStart = clock.now
-        scanGate.pauseFor(2_000L)
-        assertFalse(scanGate.pausedNow)
-        assertTrue(events.isEmpty())
-        // Diagnostic stays on: a stats window overlapping the dial is tagged.
-        assertEquals(2_000L, scanGate.overlapMs(windowStart - 500L, windowStart + 5_000L))
-        assertEquals(0L, scanGate.overlapMs(windowStart + 2_000L, windowStart + 9_000L))
-        enabled = true
-        scanGate.pauseFor(2_000L)
-        assertTrue(scanGate.pausedNow)
-        assertEquals(listOf("stop:a"), events)
-        clock.advance(1_000L)
-        scanGate.pauseFor(2_000L) // overlapping dials extend, they do not resume early
-        clock.advance(1_999L)
-        assertEquals(listOf("stop:a"), events)
-        clock.advance(2L)
-        assertFalse(scanGate.pausedNow)
-        assertEquals(listOf("stop:a", "start:a"), events) // resumed through the gate
-    }
 }

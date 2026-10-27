@@ -81,7 +81,8 @@ enum class StreamLifecycleState(val wireValue: Int) {
 }
 
 sealed interface ReceivedStreamContent {
-    data class Media(val packet: StreamProtocol.Packet) : ReceivedStreamContent
+    /** [recordUnits]: units of the record this packet came in (1, 2 a pair, 3..20 a batch), 0 for its later units. */
+    data class Media(val packet: StreamProtocol.Packet, val recordUnits: Int = 1) : ReceivedStreamContent
     data class State(val state: StreamLifecycleState) : ReceivedStreamContent
 }
 
@@ -129,6 +130,8 @@ class EndToEndContentSealer internal constructor(key: ByteArray) : Closeable {
     private val key = key.copyOf()
     private var nextSequence = 0L
     private var corruptNextRecord = false
+    /** Experimental AEAD reuse (MeshAead.Context), null when off. */
+    private val aead = if (DebugTunables.aeadCipherReuse) MeshAead.Context() else null
 
     @Synchronized
     fun seal(type: EndToEndContentType, flags: Int, payload: ByteArray): ByteArray {
@@ -142,6 +145,16 @@ class EndToEndContentSealer internal constructor(key: ByteArray) : Closeable {
             flags,
             payload.size + MeshAead.TAG_BYTES,
         )
+        if (aead != null) {
+            // Header and ciphertext sealed straight into one array (the same bytes as `header + ciphertext`).
+            val record = aead.sealAfter(key, nextSequence, header, payload)
+            if (corruptNextRecord && record.size > header.size) {
+                record[record.lastIndex] = (record.last().toInt() xor 1).toByte()
+                corruptNextRecord = false
+            }
+            nextSequence++
+            return record
+        }
         val ciphertext = MeshAead.encrypt(key, nextSequence, payload, header)
         if (corruptNextRecord && ciphertext.isNotEmpty()) {
             ciphertext[ciphertext.lastIndex] = (ciphertext.last().toInt() xor 1).toByte()
@@ -163,12 +176,17 @@ class EndToEndContentSealer internal constructor(key: ByteArray) : Closeable {
     /** The forwarded-stream key this sealer's receiver passes on in its `BFG1` grant (recovery hint, RV18). */
     internal fun copyKeyForForwarding(): ByteArray = key.copyOf()
 
-    override fun close() = key.fill(0)
+    override fun close() {
+        key.fill(0)
+        aead?.release()
+    }
 }
 
 class EndToEndContentOpener internal constructor(key: ByteArray) : Closeable {
     private val key = key.copyOf()
     private var nextSequence = 0L
+    /** Experimental AEAD reuse (MeshAead.Context), null when off. */
+    private val aead = if (DebugTunables.aeadCipherReuse) MeshAead.Context() else null
 
     /**
      * Experimental call video fragments: only a call endpoint that advertised them sets this. Every
@@ -202,10 +220,16 @@ class EndToEndContentOpener internal constructor(key: ByteArray) : Closeable {
         require(metadata.sequence >= nextSequence) {
             "Replayed or reordered end-to-end sequence ${metadata.sequence}; expected at least $nextSequence"
         }
-        val header = encoded.copyOfRange(0, EndToEndContentProtocol.HEADER_BYTES)
-        val ciphertext = encoded.copyOfRange(EndToEndContentProtocol.HEADER_BYTES, encoded.size)
         val plaintext = try {
-            MeshAead.decrypt(key, metadata.sequence, ciphertext, header)
+            val headerBytes = EndToEndContentProtocol.HEADER_BYTES
+            // Experimental AEAD reuse opens the record in place: the same header as associated data, the same body.
+            aead?.decryptSlice(key, metadata.sequence, encoded, headerBytes, headerBytes, encoded.size - headerBytes)
+                ?: MeshAead.decrypt(
+                    key,
+                    metadata.sequence,
+                    encoded.copyOfRange(headerBytes, encoded.size),
+                    encoded.copyOfRange(0, headerBytes),
+                )
         } catch (error: GeneralSecurityException) {
             throw GeneralSecurityException(
                 "End-to-end decrypt failed: type=${metadata.type} sequence=${metadata.sequence} " +
@@ -217,7 +241,10 @@ class EndToEndContentOpener internal constructor(key: ByteArray) : Closeable {
         return EndToEndContentRecord(metadata.type, metadata.flags, plaintext, metadata.sequence)
     }
 
-    override fun close() = key.fill(0)
+    override fun close() {
+        key.fill(0)
+        aead?.release()
+    }
 }
 
 object EndToEndContentProtocol {
@@ -442,8 +469,27 @@ class EndToEndStreamReader(
     private val duplicates = DuplicateWindow()
     private val pendingMedia = ArrayDeque<StreamProtocol.Packet>()
 
+    /**
+     * Audio-only live streams: the mesh envelope of the record just opened, held back from [onMeshEnvelope] (the
+     * forwarder) until this reader's own checks of that record passed: the header's certificate, an audio record's
+     * source signature, a lifecycle record's decoding. A forged or unsigned record is therefore never queued to a
+     * child. Video streams forward right after the end-to-end open, as before.
+     */
+    private var heldEnvelope: MeshEnvelope? = null
+    private var holdForwarding = false
+
+    private fun forwardHeldEnvelope() {
+        val envelope = heldEnvelope ?: return
+        heldEnvelope = null
+        onMeshEnvelope(envelope)
+    }
+
     val meshStreamId: UUID?
         get() = streamId
+
+    /** The TTL of the last mesh envelope read (null for a direct stream): the viewer's hop count is the initial TTL minus it. */
+    @Volatile var lastMeshTtl: Int? = null
+        private set
 
     /**
      * Media packet payload bytes read so far and when the last arrived, counted before an audio pair
@@ -459,6 +505,8 @@ class EndToEndStreamReader(
     fun readHeader(allowAudioOnly: Boolean = false): StreamProtocol.Header {
         // A reader that may meet an audio-only stream bounds its first record to a header-sized allocation.
         if (allowAudioOnly) linkReader.maxCiphertextBytes = AudioLive.MAX_HEADER_CIPHERTEXT_BYTES
+        // A header that may be audio-only is forwarded only after its signer block verified (below).
+        holdForwarding = allowAudioOnly
         val content = readContent()
         require(content.type == EndToEndContentType.STREAM_HEADER) {
             "Expected an end-to-end stream header"
@@ -477,11 +525,13 @@ class EndToEndStreamReader(
                 if (allowAudioOnly) linkReader.maxCiphertextBytes = Int.MAX_VALUE
                 null
             }
+            holdForwarding = audioGuard != null
+            forwardHeldEnvelope()
         }
     }
 
     fun readStreamContent(): ReceivedStreamContent {
-        pendingMedia.pollFirst()?.let { return ReceivedStreamContent.Media(it) }
+        pendingMedia.pollFirst()?.let { return ReceivedStreamContent.Media(it, recordUnits = 0) }
         val content = readContent()
         return when (content.type) {
             EndToEndContentType.MEDIA_PACKET -> {
@@ -490,11 +540,13 @@ class EndToEndStreamReader(
                 val received = EndToEndStreamProtocol.decodePacket(content)
                 // Audio-only: verifies the source's signature and strips it; the packet then looks like any audio.
                 val packet = guard?.open(received) ?: received
+                // Audio-only: only now, after the source signature verified, may a child get this record.
+                forwardHeldEnvelope()
                 delivery.add(received.payload.size)
                 if (packet.flags and StreamProtocol.FLAG_AUDIO_PAIR != 0) {
                     val split = StreamProtocol.splitAudioPair(packet)
                     split.drop(1).forEach(pendingMedia::addLast) // a pair has one more unit, a batch up to 19
-                    ReceivedStreamContent.Media(split[0])
+                    ReceivedStreamContent.Media(split[0], recordUnits = split.size)
                 } else {
                     ReceivedStreamContent.Media(packet)
                 }
@@ -502,7 +554,7 @@ class EndToEndStreamReader(
             EndToEndContentType.STREAM_STATE -> {
                 // A pause or resume may leave a timestamp gap; the media-clock baseline starts again.
                 audioGuard?.onLifecycleRecord()
-                ReceivedStreamContent.State(StreamLifecycleState.decode(content.payload))
+                ReceivedStreamContent.State(StreamLifecycleState.decode(content.payload)).also { forwardHeldEnvelope() }
             }
             EndToEndContentType.PRIVATE_CALL_SIGNAL ->
                 error("Private-call signals are not broadcast stream content")
@@ -538,6 +590,7 @@ class EndToEndStreamReader(
                 }
                 require(duplicates.markIfNew(envelope)) { "Duplicate mesh packet" }
                 lastMeshSequence = envelope.sequence
+                lastMeshTtl = envelope.ttl
                 authenticatedEnvelope = envelope
                 envelope.payload
             }
@@ -546,7 +599,8 @@ class EndToEndStreamReader(
             else -> error("Expected end-to-end stream content, got ${record.type}")
         }
         return contentOpener.open(sealed).also {
-            authenticatedEnvelope?.let(onMeshEnvelope)
+            val envelope = authenticatedEnvelope ?: return@also
+            if (holdForwarding) heldEnvelope = envelope else onMeshEnvelope(envelope)
         }
     }
 }

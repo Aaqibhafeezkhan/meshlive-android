@@ -1,6 +1,6 @@
 # Links and framing
 
-Part of the [protocol reference](README.md): the records carried on every hop and the GATT byte stream.
+Part of the [protocol reference](README.md): the records carried on every hop, the GATT byte stream and the compact-header draft.
 
 ## Hop and endpoint records
 
@@ -53,7 +53,7 @@ Chunk headers are not authenticated: the sequence only orders the bytes, and int
 
 ### Draft: lost-chunk recovery `GR1` (Design GR option C; revised after review 1; Android code behind a default-off switch, not yet run on phones)
 
-Switch: `test_gatt_chunk_recovery` (Experimental, DEBUG, default off; Android `GattChunkRecovery.kt`), and the same setting on Windows when built. Reasons, measurements and review 1: DECISIONS "Design GR". The constants below are part of the contract: every platform uses the same values.
+Switch: `test_gatt_chunk_recovery` (on by default since 2026-10-21, design decision Q-GR1-DEFAULT A; DEBUG `false` is the control arm; Android `GattChunkRecovery.kt`), and the same setting on Windows when built. Reasons, measurements and review 1: DECISIONS "Design GR". The constants below are part of the contract: every platform uses the same values.
 
 **Sequence arithmetic.** Chunk sequences are compared modulo 2^32: `a` is after `b` when `(a - b) mod 2^32` is between 1 and 2^31 - 1. Every distance below is computed this way.
 
@@ -135,3 +135,117 @@ All integers are big-endian. A NACK carries as many ranges as fit the link's val
 | `failed`, `ignored`, `nacks_ignored`, `writer_stopped` | `reason` |
 
 The DEBUG hook `test_gatt_drop_received_every=N` drops the first copy of every received data value whose sequence is N-1 mod N and logs `BENCHMARK gatt_debug_drop: seq=<s> | every=<N>`, so option A or recovery can be forced on any pair.
+
+## Draft: compact headers and aggregation `CH1` (Design CH, draft 2026-10-27, not reviewed, not built)
+
+Status: wire draft only. Nothing here is sent by any build. Reasons, savings and review questions: DECISIONS "Design CH". Every compact form below is a different encoding of the same logical record: AEAD keys, nonces, associated data, sequence rules and checks are those of `BMS1`, `BME1`, `BMV1` and `BTV3`, and a node can always rewrite a compact header into the full one without keys.
+
+### Negotiation
+
+| Scope | Signal | Meaning when both peers carry it |
+| --- | --- | --- |
+| Hop (one link) | Link-hello **decode-mask bit 6** (`0x40`) | `CH1` hop features: `BMS2` hop headers, `BMV2` stream indexes, hop type 15 `BUNDLE`, and on GATT the chunk type 3 |
+| End to end | End-to-end hello **transport-mask bit 6** (`0x40`) | `CH1` endpoint features: `BME2` headers; on calls also content type 13 (compact media packet), `BTA3` audio batches and Opus packets of 10 to 60 ms |
+
+- The link-hello transport mask has no free bit (3 `BDO1`, 4 `SETUP`, 5 reserved by the Classic draft, 6 call relay, 7 build tag). Decode-mask bits 0-1 are codecs and bit 7 is used only in end-to-end call hellos. Every current reader tests codec bits with a mask, so an unknown decode bit in a link hello is ignored. Senders must never copy bit 6 into an announcement's capability summary, where `0x40` means audio-only.
+- A bit is signed inside the hello, so it cannot be added or stripped without breaking the handshake. Clearing it is always allowed and gives the current wire exactly.
+- Every compact form is self-describing by its first byte (below). A sender may switch to it at any record after it has read the peer's hello carrying the bit, and a reader that advertised the bit accepts both forms on every record. No switch-over point needs to be agreed. A reader that did not advertise the bit treats a compact form exactly as today: an invalid magic or unknown type closes the link.
+
+### `BMS2` hop header
+
+```text
+byte 0      : 0x80 | type          (type = the BMS1 hop record type, 1..127)
+bytes 1..n  : ciphertext length incl. 16-byte tag, unsigned LEB128, minimal encoding, 1..4 bytes
+then        : ciphertext and tag, exactly as BMS1
+```
+
+- `BMS1` starts with `0x42` (`B`), and a `BMS2` first byte is `0x80` or more, so the two forms never collide.
+- The sequence is implicit. It is the hop counter both sides already keep, because `BMS1` requires exactly the next sequence.
+- **Associated data is the canonical 17-byte `BMS1` header** (`BMS1`, type, u64 sequence, u32 length), rebuilt by the reader. The nonce is unchanged: 4 zero bytes followed by the u64 sequence.
+- A non-minimal or 5-byte length, a length above the reader's limit, or type 0 fails closed. The header is 2 to 4 bytes instead of 17.
+
+### `BME2` endpoint header
+
+```text
+byte 0      : 0x80 | content type
+byte 1      : packet flags (as BME1)
+bytes 2..3  : low 16 bits of the absolute sequence (u16, big-endian)
+bytes       : ciphertext length incl. tag, unsigned LEB128, minimal, 1..4 bytes
+then        : ciphertext and tag, exactly as BME1
+```
+
+- **Associated data is the canonical 18-byte `BME1` header** with the absolute sequence. The nonce is unchanged.
+- The opener rebuilds the absolute sequence as the smallest value greater than its last accepted sequence whose low 16 bits match. This keeps the current rule (strictly increasing; gaps allowed after media drops), whoever dropped records: the sender, a relay or a forwarder.
+  - A replayed or reordered record rebuilds to a later sequence than it was sealed with, so its tag fails.
+  - A run of more than 65,535 consecutive missing records cannot be rebuilt and fails closed, as a lost link would. A forwarder that drops that many records towards one child sends that child a full `BME1` header.
+- The header is 5 to 8 bytes instead of 18.
+- **Rewriting.** A node that copies endpoint records it cannot open (an opaque call relay, a stream forwarder towards its child) may pass `BME2` on unchanged only to a next hop whose endpoint session negotiated `CH1`; otherwise it rewrites the header to `BME1` from the absolute sequence it tracks for that stream. The ciphertext never changes.
+  - A call relay, even of an older build, copies records unchanged, because both call endpoints negotiated end to end and drops do not break the rebuild.
+
+### Compact media packet (content type 13, calls only)
+
+```text
+plaintext   : PTS delta (signed, zigzag LEB128, minimal) | packet payload (to the end)
+```
+
+- The packet flags are the record's authenticated `BME2` flags; there is no repeated flag byte and no length field.
+- `PTS = previous PTS of the same class + delta`. The classes are audio, video and other (display rotation), and each starts at 0 after the stream header.
+- It replaces `BTV3` media packets on call endpoints that both carry the end-to-end bit (direct and relayed calls).
+- Fragments (type 9) keep carrying an encoded `BTV3` packet, whose 13 bytes are paid once per fragmented frame.
+- Streams keep `BTV3`: a forwarder copies the source's sealed packet, so every receiver of one sealing must understand it.
+
+### `BTA3` audio batch (calls only, in an audio media packet with flags `AUDIO | AUDIO_PAIR`)
+
+```text
+magic 'BTA3' (4) | count (1, 2..20) | unit duration code (1: 1 = 10 ms, 2 = 20 ms, 3 = 40 ms, 4 = 60 ms)
+| count x unit length (unsigned LEB128, minimal, 1..2 bytes, each 1..1275) | units back to back
+```
+
+- Unit `i` has `PTS = packet PTS + i x duration`.
+- A sender whose units are not evenly spaced (DTX, a capture gap) uses `BTA1`/`BTA2` as today.
+- Readers keep accepting `BTA1` and `BTA2`.
+- Opus packets of 10 to 60 ms (one frame per packet, TOC config by duration) are allowed only between call endpoints that both carry the end-to-end bit. Everything else stays 20 ms.
+
+### `BMV2` mesh stream index (hop type 7 payload)
+
+```text
+byte 0      : 0x80 | stream index (0..15)   (BMV1 starts with 0x42)
+bytes 1..2  : low 16 bits of the mesh sequence (u16, big-endian), rebuilt as for BME2
+byte        : TTL
+byte        : mesh flags
+then        : the endpoint record (BME1 or BME2), to the end of the hop record
+```
+
+- **Index assignment.** On each link direction, the first envelope of a (stream ID, source node ID) pair is always a full `BMV1`. That pair takes the next free index in order of first appearance (0, 1, ...). Hop ordering is exact, so both sides assign the same index.
+  - A pair beyond index 15 stays `BMV1`.
+  - An index is never reused on that link.
+- The reader applies every current `BMV1` check (source equals the endpoint peer, TTL, increasing sequence, duplicate window) to the rebuilt envelope.
+- A forwarder rebuilds the full envelope before deciding what to send to each child, and encodes per child.
+- The header is 5 bytes instead of 50.
+
+### `BUNDLE` (hop type 15)
+
+```text
+plaintext   : item count (1, 2..64) | count x [ inner hop type (1) | length (unsigned LEB128, minimal) | inner plaintext ]
+```
+
+- Inner types allowed: 5 (endpoint content), 6 (heartbeat or report) and 7 (mesh envelope). Any other type, an empty item, or trailing bytes fails closed.
+- The items are processed in order, exactly as consecutive hop records would be. The bundle uses one hop sequence number and one tag.
+- A sender bundles only records that are already queued when it flushes; it never waits to fill a bundle.
+
+### GATT chunk type 3
+
+```text
+03 | sequence (u16, big-endian) | payload (1 or more bytes)
+```
+
+- Its sequence is the low 16 bits of the type 1 sequence counter.
+- A reader rebuilds the 32-bit sequence as the unique value within 32,768 of the next expected one. Duplicate, hold and gap rules are those of type 1; the 4,096-value duplicate window and the `GR1` limits fit inside 65,536.
+- A sender uses type 3 only after it has read a peer link hello carrying the hop bit, so the handshake values themselves stay type 1.
+- Windows and iOS readers fail on an unknown chunk type, so the bit is the only gate.
+
+### What does not change
+
+- Handshakes (`BMH2`, `BMH3`), `BDO1`, `BRS1`, `BFG1`, `BGK1`, labels and `BMC2` payloads, call video fragments, store-and-forward records, all AEAD keys, nonces and tags (16 bytes).
+- The exact-next hop sequence, the increasing endpoint sequence, mesh replay and duplicate rules, admission and overload guards.
+- Separately reviewed proposals, not part of `CH1`: one AEAD layer on direct calls, and amortised signatures on audio-only live records (DECISIONS "Design CH", sections P3 and P6).

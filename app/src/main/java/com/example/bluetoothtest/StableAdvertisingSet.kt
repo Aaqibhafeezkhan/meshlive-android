@@ -74,6 +74,11 @@ internal class StableAdvertisingSet(
      * (re)started while connected (`adv-while-connected-le-states`); the default reports none.
      */
     private val peripheralLinks: () -> Int = { 0 },
+    /**
+     * B2 ([DiscoverableWhenNeutral]): a call-offer or viewer-request set that is discoverable while the adapter name
+     * is "Phone" (re-checked before every start), and restarted hidden when the name leaves "Phone". Null: not covered.
+     */
+    private val neutralRole: DiscoverableWhenNeutral.Role? = null,
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var current: SetCallback? = null
@@ -95,7 +100,69 @@ internal class StableAdvertisingSet(
     private val quiesceHandler = Handler(Looper.getMainLooper())
 
     /** The value the parameters carry now: the decision, unless this process saw a stack refuse it. */
-    private fun discoverableOff(): Boolean = nonDiscoverable && !NonDiscoverableAdvertising.rejected && !discoverableFallback
+    private fun discoverableOff(): Boolean =
+        nonDiscoverable && !NonDiscoverableAdvertising.rejected && !discoverableFallback && !neutralDiscoverable
+
+    /** B2: the last start found the adapter name "Phone" with the switch on, so this set is discoverable. */
+    @Volatile private var neutralDiscoverable = false
+
+    private val nameListener = DiscoverableWhenNeutral.Listener { onNameLeftNeutral() }
+
+    /** B2: decides, before a start, whether the neutral name makes this set discoverable (reads the name now). */
+    private fun refreshNeutral() {
+        val role = neutralRole ?: return
+        if (!nonDiscoverable || NonDiscoverableAdvertising.rejected || discoverableFallback) {
+            // Already discoverable for another reason (rotating off, control arm, stack refusal): nothing to decide.
+            neutralDiscoverable = false
+            DiscoverableWhenNeutral.unregister(nameListener)
+            return
+        }
+        val decision = DiscoverableWhenNeutral.decideNow(adapter)
+        neutralDiscoverable = decision.discoverable
+        DiscoverableWhenNeutral.log(role, decision)
+        if (decision.discoverable) DiscoverableWhenNeutral.register(nameListener) else DiscoverableWhenNeutral.unregister(nameListener)
+    }
+
+    /**
+     * B2: the adapter name left "Phone". Later starts are hidden; a running discoverable set is stopped and its owner
+     * restarts it through [onLost] (a new, non-discoverable set).
+     */
+    private fun onNameLeftNeutral() {
+        val role = neutralRole ?: return
+        val restart = synchronized(this) {
+            if (!neutralDiscoverable) return
+            neutralDiscoverable = false
+            val running = current
+            val discoverableNow = running != null && !running.stopped && !running.nonDiscoverable
+            if (discoverableNow && !ownerStopped) stopLocked()
+            discoverableNow && !ownerStopped
+        }
+        DiscoverableWhenNeutral.log(role, DiscoverableWhenNeutral.Decision(false, DiscoverableWhenNeutral.Reason.NAME_CHANGED))
+        if (restart) restartHidden()
+    }
+
+    /** B2: the owner starts the set again (its next start reads the name and stays hidden). */
+    private fun restartHidden() {
+        onStatus("$label advertising: the Bluetooth name changed; restarting with the name hidden")
+        handler.post { if (!ownerStopped) onLost("bluetooth name changed") }
+    }
+
+    /**
+     * B2: the name left "Phone" while [callback] was starting discoverable (between the name read and the stack's
+     * answer): stop it as [onNameLeftNeutral] would have.
+     */
+    private fun hideIfNameLeftDuringStart(callback: SetCallback) {
+        if (neutralRole == null || callback.nonDiscoverable || neutralDiscoverable || !discoverableOffBase()) return
+        val restart = synchronized(this) {
+            val stillRunning = current === callback && !callback.stopped && !ownerStopped
+            if (stillRunning) stopLocked()
+            stillRunning
+        }
+        if (restart) restartHidden()
+    }
+
+    /** The decision without B2 (rotating switch, control arm, stack refusal). */
+    private fun discoverableOffBase(): Boolean = nonDiscoverable && !NonDiscoverableAdvertising.rejected && !discoverableFallback
 
     /** This set object's own start was refused once (a transient code): it stays discoverable. */
     @Volatile private var discoverableFallback = false
@@ -108,7 +175,10 @@ internal class StableAdvertisingSet(
     fun start(lowLatency: Boolean, timeoutSeconds: Long): Int? {
         ownerStopped = false
         generation++
-        if (!discoverableOff()) return startOnce(lowLatency, timeoutSeconds)
+        // B2 decides per attempt (after the name is read), so the refusal path follows the base decision here.
+        if (!discoverableOffBase()) {
+            return startOnce(lowLatency, timeoutSeconds)
+        }
         requestThrew = false
         val outcome = runCatching { startOnce(lowLatency, timeoutSeconds) }
         val error = outcome.exceptionOrNull()
@@ -116,7 +186,8 @@ internal class StableAdvertisingSet(
         val status = outcome.getOrNull()
         // A request that threw counts as a refusal of the hidden parameters (as before), except an adapter that is off.
         val threw = error != null || (requestThrew && status != AdvertisingStart.STATUS_ADAPTER_OFF)
-        if (!NonDiscoverableAdvertising.refusedBy(status, threw)) return outcome.getOrThrow()
+        // A set B2 made discoverable did not ask for hidden parameters: its failure is not a refusal of them.
+        if (neutralDiscoverable || !NonDiscoverableAdvertising.refusedBy(status, threw)) return outcome.getOrThrow()
         // The stack refused the non-discoverable parameters: this set starts discoverable, and a refusal that is
         // not transient (unsupported feature, an exception) is remembered for the process.
         discoverableFallback = true
@@ -151,6 +222,7 @@ internal class StableAdvertisingSet(
     private fun attempt(advertiser: android.bluetooth.le.BluetoothLeAdvertiser, lowLatency: Boolean, timeoutSeconds: Long): Int? {
         // The value is fixed for this set's life: the in-place step must pass the same one (a refusal by another set
         // in between must not flip a running set).
+        refreshNeutral()
         val callback = SetCallback(nonDiscoverable = discoverableOff())
         callback.lowLatency = lowLatency
         synchronized(this) {
@@ -184,6 +256,7 @@ internal class StableAdvertisingSet(
         logChurn(if (status == AdvertisingSetCallback.ADVERTISE_SUCCESS) "start" else "start_failed_$status", callback)
         if (status == AdvertisingSetCallback.ADVERTISE_SUCCESS) {
             budget.acquire(callback, AdvertisingSetRole.STABLE)
+            hideIfNameLeftDuringStart(callback)
         } else {
             val verdict = budget.noteRefused(AdvertisingSetRole.STABLE, status, ownedBefore, Build.VERSION.SDK_INT)
             stopInternal()
@@ -321,6 +394,7 @@ internal class StableAdvertisingSet(
     fun stop() {
         ownerStopped = true
         generation++
+        DiscoverableWhenNeutral.unregister(nameListener)
         stopLocked()
     }
 
@@ -406,6 +480,7 @@ internal class StableAdvertisingSet(
             lost("BLE advertising is unavailable")
             return
         }
+        refreshNeutral()
         val replacement = SetCallback(replacement = true, nonDiscoverable = discoverableOff())
         replacement.lowLatency = lowLatency
         current = replacement
@@ -450,6 +525,7 @@ internal class StableAdvertisingSet(
         if (failure == null) {
             budget.acquire(replacement, AdvertisingSetRole.STABLE)
             onStatus("$label advertising restarted in ${modeLabel(replacement.lowLatency)} mode (new set)")
+            hideIfNameLeftDuringStart(replacement)
             return
         }
         if (status == AdvertisingSetCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS) {

@@ -18,28 +18,31 @@ object MessagingV2Defaults {
     /**
      * Design decision 2026-10-21: with Messages on, chat uses Messaging v2. v1 history stays readable as legacy rows and unsent v1
      * messages are resealed once ([MessagingV2Migration]); a contact on an older app gets the "Their app is older" state
-     * ([ConversationLinkState.PEER_APP_OLDER]). Control arm: DEBUG `test_messaging_v2=false`, or Settings "Messages v2" off.
+     * ([ConversationLinkState.PEER_APP_OLDER]). Control arm: DEBUG `test_messaging_v2=false`. There is no Settings switch: v2 is
+     * a constant inside Messages (switch audit 2026-10-27; the stored `feature_messaging_v2` choice was read but never written).
      */
     const val ENABLED = true
 }
 
 /**
- * Master switch `test_messaging_v2` (Settings > Features "Messages v2" is phase 1c). Needs Messages. A DEBUG
- * benchmark launch reads only its own extra (default off), so a stored choice never leaks into a measured case.
+ * Master switch `test_messaging_v2`: a constant with no Settings row, inside Messages ([CallFeature.MESSAGES]). A DEBUG
+ * benchmark launch reads only its own extra; without the extra it follows the default (the one feature whose measured
+ * cases ran with it on), so `test_messaging_v2=false` is the v1 control arm.
  */
 object MessagingV2Feature {
     const val EXTRA = "test_messaging_v2"
-    const val PREF = "feature_messaging_v2"
+
+    val spec = FeatureSpec(
+        id = "messaging_v2",
+        prefKey = null,
+        defaultEnabled = MessagingV2Defaults.ENABLED,
+        benchmarkExtra = EXTRA,
+        group = CallFeatureSpecs.GROUP,
+        dependsOn = listOf("messages"),
+        benchmarkDefault = MessagingV2Defaults.ENABLED,
+    )
 
     @Volatile var enabled = false
-
-    /** [extra] is null when the launch did not pass `test_messaging_v2`: a benchmark launch then follows the default too. */
-    internal fun resolve(
-        benchmarkLaunch: Boolean,
-        extra: (String) -> Boolean?,
-        stored: (String) -> Boolean?,
-        messages: Boolean,
-    ): Boolean = messages && (if (benchmarkLaunch) extra(EXTRA) else stored(PREF)) ?: (messages && MessagingV2Defaults.ENABLED)
 }
 
 object MessagingV2Format {

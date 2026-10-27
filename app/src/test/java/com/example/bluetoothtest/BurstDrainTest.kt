@@ -140,4 +140,25 @@ class BurstDrainTest {
         clock.timing(2_000_000, 2_400_000_000L + 600_000_000L)
         assertEquals(1_600, clock.currentDelayMs)
     }
+
+    @Test
+    fun theOneStepGrowthArmChangesStreamClocksButNeverCallClocks() {
+        fun delayAfterLateFrame(profile: PlaybackDelayProfile): Long {
+            val clock = profile.newPlayoutClock()
+            clock.timing(0, 0)
+            clock.timing(1_000_000, (1_000L + profile.delayMs + 600L) * 1_000_000L) // 600 ms late
+            return clock.currentDelayMs
+        }
+        try {
+            DebugTunables.playoutBurstGrowth = null
+            val staircase = PlaybackDelayProfile.entries.associateWith(::delayAfterLateFrame)
+            DebugTunables.playoutBurstGrowth = 2.0
+            PlaybackDelayProfile.entries.filter { it.stabilityLabel == "Call" }.forEach { call ->
+                assertEquals(call.name, staircase.getValue(call), delayAfterLateFrame(call))
+            }
+            assertTrue(delayAfterLateFrame(PlaybackDelayProfile.BALANCED) > staircase.getValue(PlaybackDelayProfile.BALANCED))
+        } finally {
+            DebugTunables.playoutBurstGrowth = null
+        }
+    }
 }

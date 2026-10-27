@@ -43,6 +43,34 @@ internal object CallSetupDeadlines {
         "incoming_handshake: event=deadline | closed=true | deadlineMs=${DualSetupBudget.INCOMING_HANDSHAKE_MS} | " +
             "scope=${if (dualEndpoint) "dual" else "single"}"
 
+    /**
+     * Review A3 (2026-10-27): the caller's bound from hop authentication to the callee's RINGING or Accept. Direct: the
+     * end-to-end handshake and RINGING take about 1 s (profiling-20261026 HCI: hop auth -> RINGING 160-200 ms on a healthy
+     * pair), so 15 s only ends a callee or path that stopped answering. Relayed: the SETUP budget plus 10 s for the
+     * end-to-end handshake through the chain. DEBUG `test_caller_answer_deadline=false` is the control arm (no bound).
+     */
+    const val CALLER_ANSWER_DIRECT_MS = 15_000L
+    const val CALLER_ANSWER_RELAY_EXTRA_MS = 10_000L
+
+    fun callerAnswerMs(relayed: Boolean): Long =
+        if (relayed) RelayedCalls.SETUP_DEADLINE_MS + CALLER_ANSWER_RELAY_EXTRA_MS else CALLER_ANSWER_DIRECT_MS
+
+    /** Only the same call, still waiting for its first answer, is ended; RINGING or Accept settled it. */
+    fun callerAnswerExpired(phase: PrivateCallPhase?, currentCallId: java.util.UUID?, armedCallId: java.util.UUID): Boolean =
+        phase == PrivateCallPhase.OUTGOING_INVITE && currentCallId == armedCallId
+
+    fun callerAnswerLine(relayed: Boolean, deadlineMs: Long): String =
+        "call_setup: event=answer_deadline | relayed=$relayed | deadlineMs=$deadlineMs | action=close"
+
+    fun callerAnswerMessage(): String =
+        "The other phone connected but did not answer the call. It may be out of range or busy. Try again in a moment."
+
+    /**
+     * Review A3: with relayed calls on, an incoming link first has the relay pre-setup watchdog, which ends at the first
+     * record. An ordinary call (not a relay SETUP or message exchange) is bounded by the incoming deadline again from there.
+     */
+    fun incomingDeadlineAfterDispatch(relayedCallsOn: Boolean, allEndpoints: Boolean): Boolean = relayedCallsOn && allEndpoints
+
     fun logLine(node: String, sinceOpenMs: Long): String =
         "call_setup: event=hop_auth_deadline | node=$node | sinceOpenMs=$sinceOpenMs | deadlineMs=$HOP_AUTH_MS | action=close"
 }

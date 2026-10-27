@@ -184,10 +184,23 @@ internal enum class ConnectDurationClass(val label: String) {
     OTHER("other");
 
     companion object {
+        /**
+         * The one fast-establishment threshold (simplification pass A, 2026-10-27): every retry rule that asks "did the
+         * connect request itself fail fast" ([FastFailRedial], [FastEstablishDials], [StallRetryDials],
+         * [RelayEstablishBudget], [ConnectRetryPolicy]) uses [isFastEstablishment], not its own copy of 1.5 s and {133, 62}.
+         */
+        const val FAST_MAX_MS = 1_500L
+
+        /** GATT_ERROR (the stack's code for HCI 0x3E and for its own create-connection timeout) and 62 (0x3E itself). */
+        val ESTABLISHMENT_STATUSES: Set<Int> = setOf(133, 62)
+
+        fun isFastEstablishment(status: Int?, elapsedMs: Long): Boolean =
+            status != null && status in ESTABLISHMENT_STATUSES && elapsedMs <= FAST_MAX_MS
+
         fun classify(status: Int?, elapsedMs: Long, ownDeadlineMs: Long): ConnectDurationClass = when {
             status == null -> OTHER
             elapsedMs in 28_000L..32_500L && (status == 133 || status == 147) -> STACK_30S_TIMEOUT
-            elapsedMs <= 1_500L && (status == 133 || status == 62) -> FAST_ESTABLISH_FAILURE
+            isFastEstablishment(status, elapsedMs) -> FAST_ESTABLISH_FAILURE
             elapsedMs >= ownDeadlineMs - 1_000L && elapsedMs <= ownDeadlineMs + 1_500L -> OWN_DEADLINE
             else -> OTHER
         }

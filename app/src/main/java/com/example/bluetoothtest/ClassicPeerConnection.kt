@@ -126,13 +126,28 @@ internal fun <T> classicConnectionCandidates(
  * must reach the announced identity. A relayed route (the relay advertises its endpoint's prefix)
  * must not reach that endpoint itself: a direct link would silently replace the requested relay
  * route, which is a failed request, not a pass.
+ *
+ * Review 2026-10-27 (finding 5): a link peer that presented a BMH3 throwaway ([peerPseudonymous]) has no node ID to
+ * compare; the callee's `REVEAL` binds it to the announced prefix after Accept (PROTOCOL "Phase 2", version 2 offers), as
+ * on LE. Comparing the throwaway failed every Classic call to a phone in pseudonym mode and made the caller forget a
+ * correct learned address.
  */
 internal fun classicLinkIdentityProblem(
     linkNodeId: ByteArray,
     announcedPrefix: ByteArray?,
     directRoute: Boolean,
+    peerPseudonymous: Boolean = false,
+    /**
+     * The candidate is the advertiser itself ([ClassicCandidateKind.resolved]: a learned, bonded or debug address). A
+     * throwaway answer from a guessed one (a bonded fallback, a discovered or inquiry address) is refused: nothing would
+     * show which phone answered, so another phone could ring and its user reveal itself (review 2026-10-27, finding 3).
+     */
+    resolvedCandidate: Boolean = true,
 ): String? {
     if (announcedPrefix == null) return null
+    if (peerPseudonymous) {
+        return if (resolvedCandidate) null else "A guessed Classic address answered with a one-time key"
+    }
     val matches = linkNodeId.copyOf(announcedPrefix.size).contentEquals(announcedPrefix)
     return when {
         directRoute && !matches -> "Peer identity changed between discovery and connection"
@@ -140,6 +155,16 @@ internal fun classicLinkIdentityProblem(
         else -> null
     }
 }
+
+/** An authenticated Classic link reached someone other than the requested peer ([classicLinkIdentityProblem]). */
+internal class ClassicLinkIdentityException(problem: String) : IllegalArgumentException(problem)
+
+/**
+ * A learned address is forgotten only when a real identity proved it belongs to someone else: never for a throwaway key,
+ * a timeout or another failure ([ClassicLinkIdentityException] only).
+ */
+internal fun classicLearnedAddressDisproved(kind: ClassicCandidateKind, error: Throwable): Boolean =
+    kind == ClassicCandidateKind.LEARNED && error is ClassicLinkIdentityException
 
 /**
  * The candidates that are the advertising device itself: its exact bonded address or unique bonded

@@ -311,7 +311,8 @@ class MessagingV2EngineTest {
         val (alice, bob) = pair()
         val bytes = rig.bytes(2_100_000, 24)
         send(alice, bob, bytes)
-        val first = rig.sync(alice, bob, onAChunk = { _, sent, close -> if (sent == 150) close() })
+        val clock = rig.slowClock()
+        val first = rig.sync(alice, bob, onAChunk = { _, sent, close -> if (sent == 150) close() }, monotonicMs = clock)
         assertTrue(first.responder.outcome != StoreForwardSyncOutcome.COMPLETE)
         val partial = bob.node.store.all().filter { it.header.isBulk }
         assertTrue(partial.sumOf { it.presentCount } > 0)
@@ -319,8 +320,9 @@ class MessagingV2EngineTest {
         // The recipient's process dies and restarts: the vault file, the transfer record, the key and the bitmaps survive.
         val bobAgain = bob.reopen()
         assertEquals(1, bobAgain.engine.keys.count())
-        val second = rig.sync(alice, bobAgain)
-        assertEquals(StoreForwardSyncOutcome.COMPLETE, second.initiator.outcome)
+        val log = mutableListOf<String>()
+        val second = rig.sync(alice, bobAgain, logs = log, monotonicMs = clock)
+        assertEquals(log.filter { "deadline" in it }.joinToString(System.lineSeparator()), StoreForwardSyncOutcome.COMPLETE, second.initiator.outcome)
         val info = incoming(bobAgain, alice).single().attachment!!
         assertEquals(FileState.COMPLETE, info.state)
         assertArrayEquals(bytes, bobAgain.engine.vault.read(info.vaultId!!, 0, bytes.size))

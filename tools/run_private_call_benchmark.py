@@ -63,6 +63,8 @@ def broadcast_shape(case, phone):
         result["reference_audio"] = case["reference_audios"][phone]
     if phone in case.get("media_impairments", {}):
         result["media_impairment"] = case["media_impairments"][phone]
+    if "allow_inert_arms" in case:
+        result["allow_inert_arms"] = case["allow_inert_arms"]
     if "tunables" in case:
         # Debug launch extras apply to both endpoints; dropping them here ran every call A/B arm
         # (for example test_call_ladder_from_request or test_bounded_media_age) at the app default.

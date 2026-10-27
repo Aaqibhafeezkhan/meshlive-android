@@ -3,15 +3,9 @@ package com.example.bluetoothtest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.os.Build
 import android.os.Looper
 import android.util.Log
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 /**
  * Root cause (stack bug, Android 12 and 13): when we are LE central, the stack starts EATT on every
@@ -44,6 +38,8 @@ internal object BleCocClient {
         onSocket: (BluetoothSocket) -> Unit = {},
         /** Relay child connect only: Experimental RelayEstablishBudget for the GATT control connect. */
         establishBudget: Boolean = false,
+        /** The caller's setup deadline (a call's or message's dial, a relay helper's next hop), null when unbounded. */
+        deadline: SetupDeadline? = null,
         onControl: (BleL2capControlConnection?) -> Unit,
     ): BluetoothSocket {
         val control = BleL2capPsmReader.open(
@@ -53,17 +49,18 @@ internal object BleCocClient {
             phyPreference,
             connectionPriority,
             establishBudget = establishBudget,
+            deadline = deadline,
         )
         onControl(control)
         val psm = control.psm
         if (!BleCocFreshAcl.enabled()) {
             // The control link is alive on this ACL and its PHY request is issued: a failure here is past establishment.
-            val shared = markLinkReached({ true }) { connectChannel(device, psm, owner, onSocket) }
+            val shared = markLinkReached({ true }) { connectChannel(device, psm, owner, onSocket, deadline = deadline) }
             // The control client stayed on this ACL and already exchanged the MTU: nothing to prime.
             if (CocSwitches.mtuPrime) Log.i("BluetoothVideo", CocMtuPrime.skippedLine(owner, "control-link-alive"))
             return markLinkReached({ true }) { verifyEcho(shared, owner) }
         }
-        val watch = AndroidAclDownWatch(context.applicationContext, device)
+        val watch = AclDownWatch.forDevice(context, device)
         BleCocFreshAcl.releaseControlAndAwaitAclDown(
             watch = watch,
             closeControl = {
@@ -75,10 +72,10 @@ internal object BleCocClient {
             owner = owner,
             mayBlock = Looper.myLooper() != Looper.getMainLooper(),
         )
-        val socket = connectChannel(device, psm, owner, onSocket)
+        val socket = connectChannel(device, psm, owner, onSocket, deadline = deadline)
         // Default on here since Q49 (test_coc_mtu_prime=false is the DEBUG control arm): this fresh ACL has had no MTU exchange, so no data length update.
         if (CocMtuPrime.enabled()) CocMtuPrime.runOnAcl(context, device, owner)
-        val attached = runCatching { BleL2capPsmReader.attach(context, device, psm, onLinkStatus, phyPreference, connectionPriority) }
+        val attached = runCatching { BleL2capPsmReader.attach(context, device, psm, onLinkStatus, phyPreference, connectionPriority, deadline) }
             .onFailure { error ->
                 onLinkStatus("BLE CoC connected; GATT control reattach failed: ${error.message}")
             }
@@ -111,6 +108,7 @@ internal object BleCocClient {
         owner: String,
         onSocket: (BluetoothSocket) -> Unit = {},
         precededByGatt: Boolean = true,
+        deadline: SetupDeadline? = null,
     ): BluetoothSocket {
         EncoderBenchGuard.check("BleCocClient.connect")
         // Both callers read the PSM over a GATT connect just before; Android 10 needs that to know the address type.
@@ -119,9 +117,16 @@ internal object BleCocClient {
         onSocket(socket)
         try {
             // Bounded on every SDK (coc-connect-bounded): a watchdog closes a connect the stack never answers.
-            CocConnectBound.run(
-                socket, CocConnectBound.currentBoundMs(), owner, { Log.i("BluetoothVideo", it) },
-            ) { it.connect() }
+            // Experimental test_unified_connect_policy: the bound is clipped to the caller's setup deadline.
+            val boundMs = CocConnectBound.currentBoundMs().let { bound ->
+                if (deadline != null && ConnectRetryConfig.current().unified) {
+                    val nowMs = android.os.SystemClock.elapsedRealtime()
+                    UnifiedConnectRule.clipMs(bound, deadline.endMs, nowMs)
+                } else {
+                    bound
+                }
+            }
+            CocConnectBound.run(socket, boundMs, owner, { Log.i("BluetoothVideo", it) }) { it.connect() }
         } catch (error: Throwable) {
             runCatching { socket.close() }
             throw error
@@ -130,15 +135,9 @@ internal object BleCocClient {
     }
 }
 
-/** Waits for one device's ACL to go down; armed before the control client closes. */
-internal interface AclDownWatch {
-    fun await(timeoutMs: Long): Boolean
-    fun release()
-}
-
 internal object BleCocFreshAcl {
-    /** GATT drops an unused LE link after 1 s (android12 gatt_api.h GATT_LINK_IDLE_TIMEOUT_WHEN_NO_APP). */
-    const val ACL_DOWN_WAIT_MS = 2_000L
+    /** GATT drops an unused LE link after 1 s (android12 gatt_api.h GATT_LINK_IDLE_TIMEOUT_WHEN_NO_APP); the one ACL-wait bound. */
+    const val ACL_DOWN_WAIT_MS = GattLinkLifetime.ACL_DOWN_WAIT_MS
 
     /** The stack-family rule lives in DeviceFamilyPolicy.LE_COC_EATT_STRANDED_CHANNELS; DEBUG may override it. */
     fun enabledFor(fingerprint: BluetoothStackFingerprint, override: Boolean?): Boolean =
@@ -170,44 +169,5 @@ internal object BleCocFreshAcl {
         } finally {
             runCatching { watch.release() }
         }
-    }
-}
-
-/** ACTION_ACL_DISCONNECTED for [device], registered at construction. */
-private class AndroidAclDownWatch(
-    private val context: Context,
-    private val device: BluetoothDevice,
-) : AclDownWatch {
-    private val latch = CountDownLatch(1)
-    private val receiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            val changed: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-            }
-            if (changed?.address == device.address) latch.countDown()
-        }
-    }
-    private val registered: Boolean = runCatching {
-        val filter = IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            context.registerReceiver(receiver, filter)
-        }
-    }.isSuccess
-
-    override fun await(timeoutMs: Long): Boolean {
-        if (!registered) {
-            Thread.sleep(timeoutMs)
-            return false
-        }
-        return latch.await(timeoutMs, TimeUnit.MILLISECONDS)
-    }
-
-    override fun release() {
-        if (registered) runCatching { context.unregisterReceiver(receiver) }
     }
 }

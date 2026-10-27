@@ -22,6 +22,16 @@ internal class FakePhone(val root: File) {
     val noBackupDir: File = File(root, "no_backup").also { it.mkdirs() }
     val filesDir: File = File(root, "files").also { it.mkdirs() }
 
+    /** Stands in for the phone's non-exportable Keystore key (one per phone, like the real one). */
+    val atRestCipher: AtRestCipher = AesGcmAtRestCipher {
+        javax.crypto.spec.SecretKeySpec(ByteArray(32) { (it * 7 + root.name.length).toByte() }, "AES")
+    }
+
+    init {
+        // Stores sealed with the verified-contacts key read and write through this phone's stand-in key.
+        RecentCalls.cipher = { atRestCipher }
+    }
+
     fun preferences(name: String): MemoryPreferences = prefs.getOrPut(name) { MemoryPreferences() }
 
     fun preferenceNames(): Set<String> = prefs.keys.toSet()

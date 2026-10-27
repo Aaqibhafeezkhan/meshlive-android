@@ -287,10 +287,7 @@ internal object AdvertisingPolicy {
         listOf(NON_THROWING_START, BUDGET_LEARNED, WATCHDOG_RESTART, STUCK_REPORT, LEGACY_PAYLOAD, MULTI_ADV_FLAG, A15_QUIESCE)
 
     /** True unless `test_device_policy_off=<id>` (or `all`) switched the entry off on this run. */
-    fun enabled(id: String): Boolean {
-        val off = DeviceFamilyPolicy.switchedOff
-        return "all" !in off && id !in off
-    }
+    fun enabled(id: String): Boolean = !DevicePolicyOff.isOff(id, DeviceFamilyPolicy.switchedOff)
 
     fun nonThrowingStart(): Boolean = enabled(ID_NON_THROWING_START)
 

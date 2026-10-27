@@ -3,9 +3,9 @@ package com.example.bluetoothtest
 /**
  * The shipped defaults of the connectivity features promoted on 2026-10-11 (docs/dev/switches.md register,
  * "Experimental, alternative and optional behaviour"). Each feature has exactly one constant here.
- * Every one stays OFF until the phone test named beside it passes; turning a feature on for users
- * who never touched its switch is then a one-line change. The privacy features BMH3 and BMH3_PSEUDONYMS
- * were switched on for 0.2.0-beta (design decision 2026-10-12, after T14/T15 passed). A user's explicit choice always wins, and
+ * A feature stays OFF until the phone test named beside it passes; turning it on for users who never
+ * touched its switch is then a one-line change. ON today: BMH3 and BMH3_PSEUDONYMS (0.2.0-beta, user
+ * decision 2026-10-12, after T14/T15 passed) and IPHONE_DISCOVERY (2026-10-17). A user's explicit choice always wins, and
  * a DEBUG benchmark launch (any `test_` extra) never reads these constants (see [FeatureCatalog]).
  */
 internal object ConnectivityFeatureDefaults {
@@ -97,7 +97,15 @@ internal object ConnectivityFeatures {
         descriptionRes = R.string.feat_find_pcs_description,
         iconRes = R.drawable.ic_visibility,
         group = GROUP,
+        dependsOn = listOf(RotatingDiscoveryFeature.spec.id),
         phoneTest = "QW",
+    )
+
+    val pcStreams = FeatureSpec(
+        id = "pc_streams", prefKey = PcStreamsFeature.PREF, defaultEnabled = false,
+        benchmarkExtra = PcStreamsFeature.EXTRA, titleRes = R.string.feat_pc_streams,
+        descriptionRes = R.string.feat_pc_streams_description, iconRes = R.drawable.ic_visibility,
+        group = GROUP, dependsOn = listOf("find_pcs"), phoneTest = "QV",
     )
 
     val shareAppNearby = FeatureSpec(
@@ -148,7 +156,7 @@ internal object ConnectivityFeatures {
         phoneTest = "T14",
     )
 
-    /** Needs BMH3 (it is greyed out and off while "Hidden identities" is off); it also needs rotating IDs at run time. */
+    /** Needs BMH3 and rotating IDs (it is greyed out and off while "Hidden identities" or rotating IDs is off). */
     val bmh3Pseudonyms = FeatureSpec(
         id = "bmh3_pseudonyms",
         prefKey = Bmh3PseudonymFeature.PREF,
@@ -158,15 +166,15 @@ internal object ConnectivityFeatures {
         descriptionRes = R.string.feat_bmh3_pseudonyms_description,
         iconRes = R.drawable.ic_lock,
         group = GROUP,
-        dependsOn = "bmh3",
+        dependsOn = listOf("bmh3", RotatingDiscoveryFeature.spec.id),
         phoneTest = "T15",
     )
 
     /** In Settings order. */
     val all: List<FeatureSpec> = listOf(
-        classicWithoutPairing, cocAutoGatt, dualListening, iphoneDiscovery, findPcs, nativeOpus, shareAppNearby, bmh3, bmh3Pseudonyms,
+        classicWithoutPairing, cocAutoGatt, dualListening, iphoneDiscovery, findPcs, pcStreams, nativeOpus, shareAppNearby, bmh3, bmh3Pseudonyms,
     )
 
-    /** Idempotent: an activity can be recreated. */
-    fun registerAll() = all.forEach(FeatureCatalog::register)
+    /** Idempotent: an activity can be recreated. Rotating IDs first: `find_pcs` and `bmh3_pseudonyms` depend on it. */
+    fun registerAll() = (listOf(RotatingDiscoveryFeature.spec) + all).forEach(FeatureCatalog::register)
 }

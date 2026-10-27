@@ -252,19 +252,33 @@ internal class ClassicAddressBookState(
  * Process-wide address book for bond-free Classic. Kept in no-backup storage (cloud backup and
  * device transfer never copy it); written only while the experiment is on. DEBUG launches can add
  * per-prefix overrides (`test_classic_addresses`, `test_classic_address` + `_node`) that are never
- * persisted, so a benchmark can supply addresses read over adb.
+ * persisted, so a benchmark can supply addresses read over adb. Sealed with the verified-contacts key
+ * since 2026-10-27 (review finding 6: node IDs next to Bluetooth addresses are who this phone met);
+ * the plain `classic-addresses.txt` of earlier builds is read once and deleted.
  */
 internal object ClassicAddressBook {
-    private const val FILE_NAME = "classic-addresses.txt"
-    @Volatile private var file: File? = null
+    private const val LEGACY_FILE_NAME = "classic-addresses.txt"
+    private const val FILE_NAME = "classic-addresses.bin"
+    @Volatile private var file: SealedTextFile? = null
     private var state = ClassicAddressBookState()
+
+    /** False while the stored book could not be read (a passing Keystore or disk failure): it is never written over then. */
+    private var loadedFromFile = false
     private val debugOverrides = ConcurrentHashMap<String, String>()
 
     @Synchronized
     fun attach(context: Context) {
-        val target = File(context.applicationContext.noBackupFilesDir, FILE_NAME)
-        file = target
-        state = runCatching { ClassicAddressBookState.decode(target.readText()) }.getOrDefault(ClassicAddressBookState())
+        val dir = context.applicationContext.noBackupFilesDir
+        attach(SealedTextFile(File(dir, FILE_NAME), { IdentityVerification.atRestCipher() }, legacyPlain = File(dir, LEGACY_FILE_NAME)))
+    }
+
+    /** Production attaches the sealed file in no-backup storage; a JVM test passes its own. */
+    @Synchronized
+    internal fun attach(storage: SealedTextFile) {
+        file = storage
+        state = ClassicAddressBookState()
+        loadedFromFile = false
+        reloadIfNeeded(storage)
         state.prune(System.currentTimeMillis())
     }
 
@@ -287,15 +301,19 @@ internal object ClassicAddressBook {
     fun lookup(prefix: ByteArray): String? =
         if (ClassicFeatures.current.bondFree) state.lookup(prefix.toPrefixHex(), System.currentTimeMillis()) else null
 
-    /** Records [address] for [nodeId] after a BMH2-authenticated Classic link (either direction). */
+    /**
+     * Records [address] for [nodeId] after an authenticated Classic link (either direction). A throwaway key
+     * ([peerPseudonymous], BMH3 pseudonyms) is nobody to find again: nothing is learned (review 2026-10-27, finding 5).
+     */
     @Synchronized
-    fun learn(nodeId: NodeId, address: String?, direction: String) {
-        if (!ClassicFeatures.current.bondFree || address == null) return
+    fun learn(nodeId: NodeId, address: String?, direction: String, peerPseudonymous: Boolean = false) {
+        if (!ClassicFeatures.current.bondFree || address == null || peerPseudonymous) return
         if (state.learn(nodeId.toString(), address, System.currentTimeMillis())) {
             persist()
             Log.i(
                 "BluetoothVideo",
-                "Classic address learned | peer=${nodeId.shortLabel()} | address=...${address.takeLast(5)} | direction=$direction",
+                "Classic address learned | " + (if (BuildConfig.DEBUG) "peer=${nodeId.shortLabel()} | address=...${address.takeLast(5)} | " else "") +
+                    "direction=$direction",
             )
         }
     }
@@ -312,20 +330,29 @@ internal object ClassicAddressBook {
     @Synchronized
     fun clear() {
         state = ClassicAddressBookState()
-        runCatching { file?.delete() }
-        runCatching { file?.let { File(it.parentFile, "$FILE_NAME.tmp").delete() } }
+        loadedFromFile = true
+        file?.delete()
+    }
+
+    /** Reads the stored book once it can be read, keeping what this process learned meanwhile (newer entries win). */
+    private fun reloadIfNeeded(storage: SealedTextFile): Boolean {
+        if (loadedFromFile) return true
+        val text = try {
+            storage.read()
+        } catch (unavailable: SealedTextUnavailable) {
+            return false
+        }
+        state = ClassicAddressBookState.decode(listOfNotNull(text, state.encode()).joinToString("\n"))
+        loadedFromFile = true
+        return true
     }
 
     private fun persist() {
         val target = file ?: return
-        runCatching {
-            val temporary = File(target.parentFile, "$FILE_NAME.tmp")
-            temporary.writeText(state.encode())
-            if (!temporary.renameTo(target)) {
-                target.writeText(state.encode())
-                temporary.delete()
-            }
-        }.onFailure { Log.w("BluetoothVideo", "Classic address book not saved", it) }
+        if (!reloadIfNeeded(target)) return
+        // An emergency wipe in progress refuses the write (SealedTextFile checks WipeGuard): nothing is recreated.
+        runCatching { target.write(state.encode()) }
+            .onFailure { runCatching { Log.w("BluetoothVideo", "Classic address book not saved (${it.javaClass.simpleName})") } }
     }
 
     private fun ByteArray.toPrefixHex(): String =
@@ -342,10 +369,13 @@ internal fun parseClassicAddressOverrides(value: String?): Map<String, String> =
         prefix to address
     }.toMap()
 
-/** Learns the remote BR/EDR address of an accepted or opened Classic socket once BMH2 authenticated it. */
+/**
+ * Learns the remote BR/EDR address of an accepted or opened Classic socket once the link handshake authenticated it;
+ * never for a peer that presented a throwaway key ([peerPseudonymous]).
+ */
 @SuppressLint("MissingPermission")
-internal fun learnClassicPeerAddress(socket: BluetoothSocket?, peer: NodeId, direction: String) {
-    if (socket == null || !ClassicFeatures.current.bondFree) return
+internal fun learnClassicPeerAddress(socket: BluetoothSocket?, peer: NodeId, direction: String, peerPseudonymous: Boolean = false) {
+    if (socket == null || !ClassicFeatures.current.bondFree || peerPseudonymous) return
     if (socket.connectionType != BluetoothSocket.TYPE_RFCOMM) return
-    ClassicAddressBook.learn(peer, runCatching { socket.remoteDevice.address }.getOrNull(), direction)
+    ClassicAddressBook.learn(peer, runCatching { socket.remoteDevice.address }.getOrNull(), direction, peerPseudonymous)
 }

@@ -168,18 +168,6 @@ class BluetoothTransportPolicyTest {
     }
 
     @Test
-    fun setupBudgetIsThreadLocalAndRestored() {
-        assertNull(LeSetupBudget.remainingMs(1_000L))
-        val inner = LeSetupBudget.within(16_000L) {
-            val first = LeSetupBudget.remainingMs(1_000L)
-            val nested = LeSetupBudget.within(5_000L) { LeSetupBudget.remainingMs(1_000L) }
-            listOf(first, nested, LeSetupBudget.remainingMs(1_000L))
-        }
-        assertEquals(listOf(15_000L, 4_000L, 15_000L), inner)
-        assertNull(LeSetupBudget.remainingMs(1_000L))
-    }
-
-    @Test
     fun scanGateSeedsFromThisBootsPersistedStartsAndReportsDeferral() {
         val budget = LeScanStartBudget(5, 30_000L)
         var now = 100_000L

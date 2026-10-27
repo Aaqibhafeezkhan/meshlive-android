@@ -26,6 +26,14 @@ internal object TimeBasedSizing {
     const val DEFAULT_FLOOR_MS = 400L
     /** Both policies look back this long (the viewer's calm-before-shrink period for streams). */
     const val WINDOW_NS = 60_000_000_000L
+
+    /**
+     * The relay child queue's latency budget and the viewer playout's (B12): `test_time_queue_budget_ms` sets both;
+     * `test_playout_time_budget_ms`, when given, overrides the viewer's alone.
+     */
+    fun relayQueueBudgetMs(): Long = DebugTunables.timeQueueBudgetMs
+
+    fun playoutBudgetMs(): Long = DebugTunables.playoutTimeBudgetMs ?: DebugTunables.timeQueueBudgetMs
 }
 
 /** A sliding window of timestamped samples with quantiles; callers hold their own lock. */
@@ -302,6 +310,6 @@ class PlayoutJitterTarget(
     companion object {
         /** The target for a stream clock, or null (control arm) unless the DEBUG launch extra is on. */
         fun fromTunables(): PlayoutJitterTarget? =
-            if (DebugTunables.playoutTimeTarget) PlayoutJitterTarget(DebugTunables.timeQueueBudgetMs) else null
+            if (DebugTunables.playoutTimeTarget) PlayoutJitterTarget(TimeBasedSizing.playoutBudgetMs()) else null
     }
 }

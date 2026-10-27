@@ -18,7 +18,6 @@ class ThermalSwitchesTest {
         assertFalse(ThermalSwitches.forecastLegacy10sCadence)
         assertFalse(ThermalSwitches.batteryFallback)
         assertFalse(ThermalSwitches.memoryTierSizing)
-        assertFalse(ThermalSwitches.adpfHint)
         assertFalse(ThermalSwitches.simdSafeMode)
         assertFalse(ThermalSwitches.userspace32Tier)
     }
@@ -29,7 +28,6 @@ class ThermalSwitchesTest {
             "test_thermal_forecast_legacy_10s",
             "test_thermal_battery_fallback",
             "test_memory_tier",
-            "test_adpf_hint",
             "test_native_simd_safe_mode",
             "test_userspace32_tier",
         )
@@ -38,12 +36,11 @@ class ThermalSwitchesTest {
         assertEquals(BuildConfig.DEBUG, ThermalSwitches.forecastLegacy10sCadence)
         assertEquals(BuildConfig.DEBUG, ThermalSwitches.batteryFallback)
         assertEquals(BuildConfig.DEBUG, ThermalSwitches.memoryTierSizing)
-        assertEquals(BuildConfig.DEBUG, ThermalSwitches.adpfHint)
         assertEquals(BuildConfig.DEBUG, ThermalSwitches.simdSafeMode)
         assertEquals(BuildConfig.DEBUG, ThermalSwitches.userspace32Tier)
         // One extra turns on one arm only.
-        ThermalSwitches.applyExtras { key, _ -> key == "test_adpf_hint" }
-        assertEquals(BuildConfig.DEBUG, ThermalSwitches.adpfHint)
+        ThermalSwitches.applyExtras { key, _ -> key == "test_native_simd_safe_mode" }
+        assertEquals(BuildConfig.DEBUG, ThermalSwitches.simdSafeMode)
         assertFalse(ThermalSwitches.memoryTierSizing)
     }
 
@@ -57,7 +54,7 @@ class ThermalSwitchesTest {
     fun benchmarkLineListsEveryArm() {
         val line = ThermalSwitches.benchmarkLine()
         assertTrue(line, line.startsWith("BENCHMARK thermal_switches: forecast="))
-        listOf("forecastLegacy10s=", "batteryFallback=", "memoryTierSizing=", "adpfHint=", "simdSafeMode=", "userspace32Tier=")
+        listOf("forecastLegacy10s=", "batteryFallback=", "memoryTierSizing=", "simdSafeMode=", "userspace32Tier=")
             .forEach { assertTrue("$it in $line", it in line) }
     }
 
@@ -67,9 +64,6 @@ class ThermalSwitchesTest {
         assertEquals(1, Userspace32Tier.nativeThreadCap(1, true, false))
         assertEquals(4, Userspace32Tier.nativeThreadCap(4, switchOn = true, process64 = true))
         assertEquals(4, Userspace32Tier.nativeThreadCap(4, switchOn = false, process64 = false))
-        assertTrue(Userspace32Tier.preferMediaCodecOverNativeAv1(true, false))
-        assertFalse(Userspace32Tier.preferMediaCodecOverNativeAv1(true, true))
-        assertFalse(Userspace32Tier.preferMediaCodecOverNativeAv1(false, false))
     }
 
     @Test

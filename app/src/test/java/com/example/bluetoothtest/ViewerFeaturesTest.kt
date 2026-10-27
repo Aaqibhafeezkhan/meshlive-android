@@ -44,7 +44,8 @@ class ViewerFeaturesTest {
         ViewerFeatures.registerAll()
         ViewerFeatures.registerAll()
         assertEquals(
-            CallFeatureSpecs.all.size + ConnectivityFeatures.all.size + ViewerFeatures.all.size,
+            // + 1: rotating IDs register with the connectivity features (Find PCs and pseudonyms depend on them).
+            CallFeatureSpecs.all.size + ConnectivityFeatures.all.size + 1 + ViewerFeatures.all.size,
             FeatureCatalog.all().size,
         )
         assertNotNull(FeatureCatalog.spec("viewer_frame_age"))

@@ -44,21 +44,47 @@ internal object GattClientTeardown {
 
     fun deferred(): Boolean = deferredFor(BluetoothStackFingerprint.current(), DebugTunables.deferredGattClose)
 
-    /** Whether a client with no callback yet must wait for its first one before close (registry entry + switch). */
-    fun registrationWaitFor(signal: GattTeardownSignal?): Boolean =
-        signal != null && !signal.callbackSeen && GattSwitches.closeDeferral &&
+    /**
+     * Whether a client with no callback yet must wait for its first one before close (registry entry + switch). Review T4
+     * (2026-10-27): a client older than [REGISTRATION_WAIT_MS] registered long ago (registration takes milliseconds; it is
+     * only waiting for a connection that never came), so it closes without the wait.
+     */
+    fun registrationWaitFor(signal: GattTeardownSignal?, nowNs: Long = System.nanoTime()): Boolean =
+        signal != null && !signal.callbackSeen && signal.ageMs(nowNs) < REGISTRATION_WAIT_MS && GattSwitches.closeDeferral &&
             runCatching { GattLinkPolicy.closeAfterRegistration() != null }.getOrDefault(false)
+
+    /**
+     * Review T4: the disconnect wait protects the stack's connection list while a CONNECTED link is removed. A client that
+     * never saw CONNECTED has no entry there, so it closes without waiting. No signal: wait as before.
+     */
+    fun disconnectWaitFor(deferred: Boolean, signal: GattTeardownSignal?): Boolean =
+        deferred && (signal == null || signal.connectedSeen)
+
+    /**
+     * Review T4: deferred closes still running, per remote address. A retry dialling the same remote waits (bounded by
+     * [PREVIOUS_CLOSE_WAIT_MS]) for the previous client's close, so the stack never holds two clients to one remote
+     * (`gatt_dial_check: warnings=second_client_to_same_remote`).
+     */
+    val pendingCloses = PendingGattCloses()
+    const val PREVIOUS_CLOSE_WAIT_MS = 2_500L
 
     @SuppressLint("MissingPermission")
     fun disconnectAndClose(gatt: BluetoothGatt, signal: GattTeardownSignal? = null, owner: String = "gatt") {
         GattResourceRegistry.shared.markClosing(gatt)
+        val address = runCatching { gatt.device?.address }.getOrNull()
+        LeChildInterval.unregister(address, gatt)
+        val pending = address?.let { pendingCloses.begin(it) }
         run(
-            deferred = deferred(),
+            deferred = disconnectWaitFor(deferred(), signal),
             disconnect = { gatt.disconnect() },
             awaitDisconnected = { timeoutMs -> signal?.await(timeoutMs) ?: false },
             close = {
-                gatt.close()
-                GattResourceRegistry.shared.releaseObject(gatt)?.peer?.let(GattLinkLifetime::noteClosed)
+                try {
+                    gatt.close()
+                    GattResourceRegistry.shared.releaseObject(gatt)?.peer?.let(GattLinkLifetime::noteClosed)
+                } finally {
+                    if (pending != null && address != null) pendingCloses.end(address, pending)
+                }
             },
             async = { body -> thread(name = "GattTeardown-$owner", isDaemon = true) { body() } },
             log = { Log.i("BluetoothVideo", it) },
@@ -115,8 +141,9 @@ internal class GattAttempt {
     fun cancel() = cancelled.set(true)
 
     /** Call first in onConnectionStateChange: records a disconnect, then says whether to act. */
-    fun onConnectionState(disconnected: Boolean): Boolean {
+    fun onConnectionState(disconnected: Boolean, connected: Boolean = false): Boolean {
         teardown.onCallback()
+        if (connected) teardown.onConnected()
         if (disconnected) teardown.onDisconnected()
         return active
     }
@@ -129,10 +156,38 @@ internal class GattAttempt {
     }
 }
 
+/** Review T4: one latch per deferred close in flight, by remote address; [await] bounds a redial's wait for it. */
+internal class PendingGattCloses {
+    private val byAddress = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
+
+    fun begin(address: String): CountDownLatch = CountDownLatch(1).also { byAddress[address] = it }
+
+    fun end(address: String, closed: CountDownLatch) {
+        closed.countDown()
+        byAddress.remove(address, closed)
+    }
+
+    /** True when no close to [address] is pending or it finished within [boundMs]. */
+    fun await(address: String, boundMs: Long): Boolean =
+        byAddress[address]?.await(boundMs, TimeUnit.MILLISECONDS) ?: true
+
+    fun pending(address: String): Boolean = byAddress[address]?.count?.let { it > 0L } == true
+}
+
 /** Completed by a GATT client's callback when the stack reports the link disconnected. */
-internal class GattTeardownSignal {
+internal class GattTeardownSignal(private val createdAtNs: Long = System.nanoTime()) {
     private val latch = CountDownLatch(1)
     private val firstCallback = CountDownLatch(1)
+    @Volatile private var connected = false
+
+    fun ageMs(nowNs: Long = System.nanoTime()): Long = (nowNs - createdAtNs) / 1_000_000L
+
+    /** Review T4: the client reported CONNECTED at least once. */
+    fun onConnected() {
+        connected = true
+    }
+
+    val connectedSeen: Boolean get() = connected
 
     fun onDisconnected() {
         firstCallback.countDown()

@@ -135,9 +135,11 @@ class CallReachabilityTest {
 
     @Test
     fun normalLaunchesAreReachableAndBenchmarkLaunchesNeedTheExplicitExtra() {
-        assertTrue(CallReachabilityFeature.resolve(benchmarkLaunch = false) { false })
-        assertFalse(CallReachabilityFeature.resolve(benchmarkLaunch = true) { false })
-        assertTrue(CallReachabilityFeature.resolve(benchmarkLaunch = true) { it == CallReachabilityFeature.EXTRA })
+        val spec = CallReachabilityFeature.spec
+        assertTrue(FeatureCatalog.resolve(spec, benchmarkLaunch = false, extra = { false }, stored = { null }))
+        assertFalse(FeatureCatalog.resolve(spec, benchmarkLaunch = false, extra = { false }, stored = { false }))
+        assertFalse(FeatureCatalog.resolve(spec, benchmarkLaunch = true, extra = { false }, stored = { true }))
+        assertTrue(FeatureCatalog.resolve(spec, benchmarkLaunch = true, extra = { it == CallReachabilityFeature.EXTRA }, stored = { null }))
         assertEquals("test_always_reachable", CallReachabilityFeature.EXTRA)
     }
 
@@ -258,12 +260,16 @@ class CallReachabilityTest {
 
     @Test
     fun browsingSwitchDefaultsOnForUsersAndOffForBenchmarkLaunches() {
-        assertTrue(ReachableWhileBrowsingFeature.resolve(benchmarkLaunch = false, hasExtra = false, extraValue = false))
+        val spec = ReachableWhileBrowsingFeature.spec
+        val absent = { _: String -> null as Boolean? }
+        assertTrue(FeatureCatalog.resolve(spec, false, absent, { null }))
         // A DEBUG benchmark launch keeps the old behaviour (existing cases do not change) unless asked.
-        assertFalse(ReachableWhileBrowsingFeature.resolve(benchmarkLaunch = true, hasExtra = false, extraValue = false))
-        assertTrue(ReachableWhileBrowsingFeature.resolve(benchmarkLaunch = true, hasExtra = true, extraValue = true))
-        // The control arm.
-        assertFalse(ReachableWhileBrowsingFeature.resolve(benchmarkLaunch = true, hasExtra = true, extraValue = false))
+        assertFalse(FeatureCatalog.resolve(spec, true, absent, { null }))
+        assertTrue(FeatureCatalog.resolve(spec, true, { true }, { null }))
+        // The control arm, in a benchmark launch and in a DEBUG person's launch; a release build never reads it.
+        assertFalse(FeatureCatalog.resolve(spec, true, { false }, { null }))
+        assertFalse(FeatureCatalog.resolve(spec, false, { false }, { null }, debugBuild = true))
+        assertTrue(FeatureCatalog.resolve(spec, false, { false }, { null }, debugBuild = false))
         assertEquals("test_reachable_while_browsing", ReachableWhileBrowsingFeature.EXTRA)
     }
 

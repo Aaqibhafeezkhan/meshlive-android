@@ -307,14 +307,19 @@ class RecognitionTable {
 
     @Volatile private var table: Map<String, List<Hit>> = emptyMap()
 
+    /** Design OR: per contact (node ID hex), the role-0 IDs this table holds by epoch, its centre and lease age. */
+    @Volatile private var windows: Map<String, RelaySeekSelectors.Window> = emptyMap()
+
     val size: Int get() = table.values.sumOf { it.size }
 
     fun rebuild(contacts: Collection<ContactPresence>, myEpoch: Long, nowMs: Long) {
         val next = HashMap<String, MutableList<Hit>>()
+        val nextWindows = HashMap<String, RelaySeekSelectors.Window>()
         contacts.forEach { contact ->
             val stale = nowMs - contact.receivedAtMs > STALE_SKEW_MS
             val radius = if (stale) WIDE_RADIUS else NARROW_RADIUS
             val centre = myEpoch + contact.skewEpochs
+            val callIds = HashMap<Long, ByteArray>()
             for (epoch in (centre - radius)..(centre + radius)) {
                 if (epoch < 0) continue
                 val lease = contact.leasesByDay[PresenceLeases.dayOf(epoch)] ?: continue
@@ -322,11 +327,21 @@ class RecognitionTable {
                     val salt = RotatingDiscoveryIds.salt(lease, epoch, role)
                     val rdi = RotatingDiscoveryIds.rdi(contact.nodeId, epoch, role, salt)
                     next.getOrPut(rdi.toKey()) { mutableListOf() } += Hit(NodeId.fromBytes(contact.nodeId), epoch, role)
+                    if (role == RotatingDiscoveryIds.ROLE_CALL_OFFER) callIds[epoch] = rdi
                 }
             }
+            nextWindows[contact.nodeId.toKey()] = RelaySeekSelectors.Window(centre, stale, callIds)
         }
         table = next
+        windows = nextWindows
     }
+
+    /**
+     * Design OR: the search window of the contact whose node ID starts with [prefixHex] (exactly one contact), the same
+     * epochs, days, revocation and pruning as recognition. Null when this table holds no ID of that contact.
+     */
+    internal fun seekWindow(prefixHex: String): RelaySeekSelectors.Window? =
+        windows.entries.filter { it.key.startsWith(prefixHex) }.singleOrNull()?.value?.takeIf { it.ids.isNotEmpty() }
 
     /** Every contact whose ID equals [sixBytes] (two contacts may collide, about 2^-48 per pair). */
     fun lookup(sixBytes: ByteArray): List<Hit> = table[sixBytes.toKey()].orEmpty()

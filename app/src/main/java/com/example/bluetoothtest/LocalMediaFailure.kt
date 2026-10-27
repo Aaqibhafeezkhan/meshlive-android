@@ -78,6 +78,8 @@ internal enum class ReceiverStopKind {
     OTHER,
     /** The listener/advertiser could not start. */
     STARTUP,
+    /** Review B4: the parent never connected within the join wait (GATT; a CoC join reports its accept timeout as LINK). */
+    JOIN_TIMEOUT,
 }
 
 internal data class ReceiverStopCause(
@@ -89,6 +91,9 @@ internal data class ReceiverStopCause(
     companion object {
         fun of(kind: ReceiverStopKind, error: Throwable) =
             ReceiverStopCause(kind, "${kind.name}|${failureSignature(error)}")
+
+        /** Review B4: a join whose parent never connected; counted by the "avoid a failing parent" fallback. */
+        fun joinTimeout() = ReceiverStopCause(ReceiverStopKind.JOIN_TIMEOUT, "${ReceiverStopKind.JOIN_TIMEOUT.name}|parent did not connect")
     }
 }
 

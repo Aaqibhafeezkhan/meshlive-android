@@ -468,6 +468,11 @@ internal data object CallRelayAcknowledgedGattWrites : DevicePolicyEffect {
     override fun describe(): String = "call relay GATT writes with response, paced at 24 KB/s"
 }
 
+/** This phone takes call-relay (helper) duty only over LE CoC: no helper offer, link-hello mark or SETUP over GATT. */
+internal data object CallRelayHelperCocOnly : DevicePolicyEffect {
+    override fun describe(): String = "call-relay helper duty over LE CoC only (never over GATT)"
+}
+
 internal data object ClassicSourceBalancedViewerScan : DevicePolicyEffect {
     override fun describe(): String = "Classic source viewer discovery uses balanced scanning, never continuous low latency"
 }
@@ -562,6 +567,16 @@ internal data class DevicePolicyEntry(
     val validation: PolicyValidation = PolicyValidation.EXPERIMENTAL,
     /** What the app does when the entry is off or its effect fails (the generic path). */
     val fallback: String = "",
+    /**
+     * Id of the implemented entry that replaced this proposal; it is kept for its sources and never reported as a
+     * matching proposal (switch audit 2026-10-27, A10).
+     */
+    val supersededBy: String? = null,
+    /**
+     * The default-off Experimental arm the entry's effect waits for. While the arm is off the entry is reported under
+     * `armOff`, not `active` (its effect stays resolvable: the code path already needs the arm as well).
+     */
+    val arm: PolicyArm? = null,
 ) {
     val offSwitch: String get() = "test_device_policy_off=$id"
 
@@ -569,6 +584,11 @@ internal data class DevicePolicyEntry(
         matcher.describe(),
         component?.describe(),
     ).joinToString("; ")
+}
+
+/** A DEBUG switch an entry's effect needs ([DevicePolicyEntry.arm]); [on] reads its current value. */
+internal class PolicyArm(val switch: String, val on: () -> Boolean) {
+    override fun toString(): String = switch
 }
 
 internal class ResolvedDevicePolicy(
@@ -580,7 +600,12 @@ internal class ResolvedDevicePolicy(
     val switchedOff: List<DevicePolicyEntry>,
     /** Proposed entries that would match this phone. */
     val matchingProposals: List<DevicePolicyEntry>,
+    /** Active entries whose Experimental arm is off ([DevicePolicyEntry.arm]): in effect only once the arm is on. */
+    val armOff: List<DevicePolicyEntry> = emptyList(),
 ) {
+    /** What the phone actually runs: [active] without the entries still waiting for their arm ([armOff]). */
+    val reportedActive: List<DevicePolicyEntry> get() = active - armOff.toSet()
+
     val activeIds: List<String> get() = active.map(DevicePolicyEntry::id)
 
     fun isActive(id: String): Boolean = active.any { it.id == id }
@@ -625,7 +650,7 @@ internal class ResolvedDevicePolicy(
 
 internal object DeviceFamilyPolicy {
     /** Bump when entries, matchers or effects change. */
-    const val REVISION = "2026-10-14.2"
+    const val REVISION = "2026-10-27.1"
 
     val entries: List<DevicePolicyEntry> get() = DevicePolicyRegistry.entries
 
@@ -635,26 +660,20 @@ internal object DeviceFamilyPolicy {
     val switchedOff: Set<String> get() = DebugTunables.devicePolicyOff
 
     fun resolve(traits: DeviceTraits, disabled: Set<String> = switchedOff): ResolvedDevicePolicy {
+        val armsOff = DevicePolicyOff.armsOff(entries)
         cached?.let { last ->
-            if ((last.traits === traits || last.traits == traits) && last.disabled == disabled) return last
+            // An arm switched after the last resolve (launch extras are read after the first device_policy line) re-resolves.
+            if ((last.traits === traits || last.traits == traits) && last.disabled == disabled && armsOff == lastArmsOff) {
+                return last
+            }
         }
-        val off = disabled + traits.policyOff
-        val allOff = "all" in off
-        val matching = entries.filter { it.matcher.matches(traits) }
-        val implemented = matching.filterNot { it.proposed }
-        // A component-scoped proposal matters only when this phone has such a component.
-        val proposals = matching.filter { entry ->
-            entry.proposed && (entry.component?.let { rule -> traits.codecComponents.any { rule.matches(it) } } ?: true)
+        return DevicePolicyOff.resolve(entries, traits, disabled).also {
+            lastArmsOff = armsOff
+            cached = it
         }
-        val switchedOff = implemented.filter { allOff || it.id in off }
-        return ResolvedDevicePolicy(
-            traits = traits,
-            disabled = disabled,
-            active = implemented - switchedOff.toSet(),
-            switchedOff = switchedOff,
-            matchingProposals = proposals,
-        ).also { cached = it }
     }
+
+    @Volatile private var lastArmsOff: Set<String> = emptySet()
 
     fun current(): ResolvedDevicePolicy = resolve(DeviceTraits.current())
 
@@ -689,9 +708,8 @@ internal object DeviceFamilyPolicy {
         disabled: Set<String> = switchedOff,
     ): List<T> {
         if (traits != null) return resolve(traits, disabled).componentEffects(componentName)
-        val allOff = "all" in disabled
         return entries.filter { entry ->
-            !entry.proposed && entry.matcher.universal && !allOff && entry.id !in disabled &&
+            !entry.proposed && entry.matcher.universal && !DevicePolicyOff.isOff(entry.id, disabled) &&
                 entry.component?.matches(componentName) == true
         }.flatMap { it.effects }.filterIsInstance<T>()
     }
@@ -707,11 +725,12 @@ internal object DeviceFamilyPolicy {
             "${entry.id}[${names.size}]"
         }
         return "BENCHMARK device_policy: revision=$REVISION | traits=${resolved.traits.describe()} | " +
-            "active=${resolved.active.filter { it.component == null }.joinToString(",") { it.id }.ifEmpty { "none" }} | " +
+            "active=${resolved.reportedActive.filter { it.component == null }.joinToString(",") { it.id }.ifEmpty { "none" }} | " +
             "componentRules=${componentHits.ifEmpty { "none" }} | " +
             "switchedOff=${resolved.switchedOff.joinToString(",") { it.id }.ifEmpty { "none" }} | " +
             "matchingProposals=${resolved.matchingProposals.joinToString(",") { it.id }.ifEmpty { "none" }} | " +
-            "unconfirmed=${resolved.active.filter { it.validation != PolicyValidation.LOCALLY_REPRODUCED }.joinToString(",") { it.id }.ifEmpty { "none" }} | " +
+            "armOff=${resolved.armOff.joinToString(",") { it.id }.ifEmpty { "none" }} | " +
+            "unconfirmed=${resolved.reportedActive.filter { it.validation != PolicyValidation.LOCALLY_REPRODUCED }.joinToString(",") { it.id }.ifEmpty { "none" }} | " +
             "entries=${entries.size}"
     }
 }
@@ -719,3 +738,41 @@ internal object DeviceFamilyPolicy {
 /** Parses `test_device_policy_off` ("id1,id2" or "all"). */
 internal fun parseDevicePolicySwitches(value: String?): Set<String> =
     value?.split(',', ';', ' ')?.map(String::trim)?.filter(String::isNotEmpty)?.toSet().orEmpty()
+
+/**
+ * The one off-switch evaluation for every registry batch (switch audit 2026-10-27, A10). Before, ScanPolicy, AudioSwitches,
+ * AdvertisingPolicy and BleL2capControl checked `test_device_policy_off` by hand and ignored a traits view's own
+ * [DeviceTraits.policyOff], while [DeviceFamilyPolicy.resolve], CameraPolicy and CocPolicy honoured it.
+ */
+internal object DevicePolicyOff {
+    /** True when "all" or [id] is switched off by the launch extra ([disabled]) or by the traits view ([viewOff]). */
+    fun isOff(id: String, disabled: Set<String> = DeviceFamilyPolicy.switchedOff, viewOff: Set<String> = emptySet()): Boolean =
+        "all" in disabled || id in disabled || "all" in viewOff || id in viewOff
+
+    /** Ids of [entries] whose Experimental arm is off now. */
+    fun armsOff(entries: List<DevicePolicyEntry>): Set<String> =
+        entries.filter { it.arm?.on?.invoke() == false }.map { it.id }.toSet()
+
+    /**
+     * [entries] as seen by [traits]: the matcher, the off-switches ([isOff] with the view's own ids), Experimental arms, and
+     * proposals (a component-scoped one only where this phone has such a component; superseded ones never).
+     */
+    fun resolve(entries: List<DevicePolicyEntry>, traits: DeviceTraits, disabled: Set<String>): ResolvedDevicePolicy {
+        val matching = entries.filter { it.matcher.matches(traits) }
+        val implemented = matching.filterNot { it.proposed }
+        val proposals = matching.filter { entry ->
+            entry.proposed && entry.supersededBy == null &&
+                (entry.component?.let { rule -> traits.codecComponents.any { rule.matches(it) } } ?: true)
+        }
+        val switchedOff = implemented.filter { isOff(it.id, disabled, traits.policyOff) }
+        val active = implemented - switchedOff.toSet()
+        return ResolvedDevicePolicy(
+            traits = traits,
+            disabled = disabled,
+            active = active,
+            switchedOff = switchedOff,
+            matchingProposals = proposals,
+            armOff = active.filter { it.arm?.on?.invoke() == false },
+        )
+    }
+}

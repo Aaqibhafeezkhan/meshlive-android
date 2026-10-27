@@ -78,6 +78,12 @@ class AndroidVideoReceiver(
     @Volatile private var parentStreamPaused = false
     /** The parent's stream header arrived on this link: media can flow, so the trickle test may judge. */
     @Volatile private var parentMediaStarted = false
+    /**
+     * Experimental relay child thinning only: the relay paused this child's video for a weak link (audio still arrives). The
+     * trickle close treats such a window like the parent's own pause (B10): audio alone is far below bitrate/8 of the video
+     * stream, and judging it would close the link the relay deliberately thinned, again and again.
+     */
+    @Volatile private var weakLinkPaused = false
     /** LE CoC: a lease on the role's long-lived listener (CocListeners). */
     @Volatile private var cocListener: CocListenLease<BluetoothSocket>? = null
     @Volatile private var clientSocket: BluetoothSocket? = null
@@ -263,6 +269,11 @@ class AndroidVideoReceiver(
                         }
                     }
                     if (activeCocListener == null) ClassicRfcommCap.note(socket) // an accepted Classic RFCOMM peer counts towards the cap log
+                    // Review B12: a Classic join takes one sender; its BLE request advert stops once that sender connected.
+                    if (transport == BluetoothTransportOption.CLASSIC_RFCOMM && streamToken != 0) {
+                        classicViewerAdvertiser?.close()
+                        classicViewerAdvertiser = null
+                    }
                     if (transport == BluetoothTransportOption.BLE_L2CAP) {
                         bleControlServer?.stopAdvertising()
                         RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_VIEWER_REQUEST)
@@ -366,6 +377,8 @@ class AndroidVideoReceiver(
                 }
             } finally {
                 running.set(false)
+                // Review B7: a receiver that stopped itself leaves the Bluetooth epoch registry now, not at close().
+                BluetoothEpoch.unregister(epochName)
                 RotatingDiscovery.removeBoundaryListener(viewerBoundaryListener)
                 RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_VIEWER_REQUEST)
                 viewerInputs = null
@@ -496,8 +509,11 @@ class AndroidVideoReceiver(
                 inputs.streamBitrateKbps, inputs.recoveryFromNodeIdPrefix,
             )
             val silenceMs = RotatingDiscovery.boundarySilenceMs()
-            control?.reannounce(announcement, silenceMs)
+            // Review T12: both servers sit out the same silence at once (one after the other, the GATT advert came
+            // back a whole silence after the control one).
+            val controlThread = control?.let { thread(name = "ViewerIdRotationControl") { it.reannounce(announcement, silenceMs) } }
             gatt?.reannounce(announcement, silenceMs)
+            runCatching { controlThread?.join() }
             if (BuildConfig.DEBUG) {
                 Log.i("BluetoothVideo", "BENCHMARK rotid_restart: role=viewer | silenceMs=$silenceMs")
             }
@@ -530,19 +546,27 @@ class AndroidVideoReceiver(
             connections::offer,
         )
         gattVideoServer = server
+        server.readvertiseOnLocalClose = true
         server.start()
         watchViewerBoundaries(
             identity, capabilities, DiscoveryAnnouncement.FLAG_GATT_TRANSPORT, streamToken, routeCost,
             streamBitrateKbps, recoveryFromNodeIdPrefix,
         )
+        // Review B3/B9: one join wait across connections, extended once for a link still in setup.
+        val joinWait = if (streamToken == 0) null else ReceiverJoinWait(android.os.SystemClock.elapsedRealtime(), CONNECTION_WAIT_TIMEOUT_MS)
         while (running.get()) {
-            val connection = if (streamToken == 0) {
+            val connection = if (joinWait == null) {
                 connections.take()
             } else {
-                connections.poll(CONNECTION_WAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS) ?: return
+                pollJoinConnection(connections, joinWait, server) ?: run {
+                    // Review B4: a typed cause, so the "avoid a failing parent" fallback counts this parent.
+                    if (running.get()) stopCause = ReceiverStopCause.joinTimeout()
+                    return
+                }
             }
             RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_VIEWER_REQUEST)
             gattParentLink = connection
+            var linkAuthenticated = false
             try {
                 receiveSecure(
                     context,
@@ -559,6 +583,7 @@ class AndroidVideoReceiver(
                     phyPreference,
                     ioConfig,
                     connection.receiveQueueState,
+                    onLinkAuthenticated = { linkAuthenticated = true },
                 ) { " | ${connection.phySummary()}" }
             } catch (error: LocalMediaPipelineException) {
                 throw error
@@ -598,8 +623,59 @@ class AndroidVideoReceiver(
                 closeDecoders()
                 connection.close()
             }
-            if (streamToken != 0) return
+            if (joinWait != null) {
+                // Review B9: a connection that never authenticated was not this join's parent: drop it, keep waiting.
+                if (!running.get() || !joinWait.keepWaitingAfter(linkAuthenticated, android.os.SystemClock.elapsedRealtime())) return
+                Log.i("BluetoothVideo", "BENCHMARK receiver_join: event=unauthenticated_link_dropped | action=keep_waiting")
+            }
         }
+    }
+
+    /**
+     * Review B8 (2026-10-27): a GATT control write that failed because the parent link died left the viewer waiting on a
+     * silent input until a read timeout. When the parent also stops being heard for [GattControlFailure.QUIET_MS] after
+     * the failure, the link is closed now, so the ordinary link-loss recovery runs; a parent still sending keeps the old
+     * behaviour (forward media continues without reverse control).
+     */
+    private fun watchGattParentAfterControlFailure(error: Exception, controlRunning: AtomicBoolean) {
+        val link = gattParentLink ?: return
+        val pipe = link.inputStream as? GattBytePipe ?: return
+        thread(name = "GattControlFailureWatch", isDaemon = true) {
+            try {
+                Thread.sleep(GattControlFailure.QUIET_MS)
+            } catch (_: InterruptedException) {
+                return@thread
+            }
+            if (running.get() && controlRunning.get() && gattParentLink === link &&
+                GattControlFailure.endsLink(error is IOException, pipe.heardWithin(GattControlFailure.QUIET_MS))
+            ) {
+                Log.i("BluetoothVideo", "BENCHMARK viewer_control: event=gatt_control_failed | parentHeard=false | action=close_link")
+                runCatching { link.close() }
+            }
+        }
+    }
+
+    /** Review B3: the join's wait for its parent's connection, extended once while a central is still in setup. */
+    private fun pollJoinConnection(
+        connections: LinkedBlockingQueue<GattVideoConnection>,
+        joinWait: ReceiverJoinWait,
+        server: GattVideoServer,
+    ): GattVideoConnection? {
+        while (running.get()) {
+            val remainingMs = joinWait.remainingMs(android.os.SystemClock.elapsedRealtime())
+            if (remainingMs > 0L) {
+                connections.poll(remainingMs, TimeUnit.MILLISECONDS)?.let { return it }
+                continue
+            }
+            val nowMs = android.os.SystemClock.elapsedRealtime()
+            if (!joinWait.extendForLinkInSetup(server.setupCentralSinceMs(), nowMs)) return null
+            Log.i(
+                "BluetoothVideo",
+                "BENCHMARK receiver_join: event=deadline_extended | reason=link_in_setup | " +
+                    "extensionMs=${ReceiverJoinWait.SETUP_EXTENSION_MS}",
+            )
+        }
+        return null
     }
 
     @SuppressLint("MissingPermission")
@@ -622,6 +698,7 @@ class AndroidVideoReceiver(
         val output = BufferedOutputStream(socket.mediaOutputStream(), ioConfig.bufferBytes)
         parentStreamPaused = false
         parentMediaStarted = false
+        weakLinkPaused = false
         // A relay's re-anchor closes this link, but on a starved link (mesh4-659efc38 0001/0005:
         // 0 kbps) even the close may never arrive and this child waited 30 s, unseen by the relay's
         // fresh scan. A live stream always carries audio, so a relayed parent link that delivers no
@@ -633,7 +710,8 @@ class AndroidVideoReceiver(
         // stayed up while the stack drained and this child never reconnected.
         val trickle = if (DebugTunables.relayParentTrickle) RelayParentTrickle(streamBitrateKbps, startedNs) else null
         parentTrickle = trickle
-        val silenceWatch = if (routeCost > 0 && DebugTunables.relayChildReanchor) {
+        // The child-side parent-link watch (RelayRecoveryConfig.parentWatch; follows relay_child_reanchor unless set apart).
+        val silenceWatch = if (routeCost > 0 && RelayRecoveryConfig.current().parentWatch) {
             thread(name = "ReceiverParentSilence") {
                 try {
                     while (running.get()) {
@@ -644,7 +722,9 @@ class AndroidVideoReceiver(
                         val trickleKbps = if (silent) {
                             null
                         } else {
-                            trickle?.onTick(nowNs, readGaps.bytesRead, paused, armed = parentMediaStarted)
+                            // A weak-link pause (relay child thinning at audio only) is a pause for the trickle test (B10);
+                            // the silence test still closes a link that delivers nothing at all.
+                            trickle?.onTick(nowNs, readGaps.bytesRead, paused || weakLinkPaused, armed = parentMediaStarted)
                         }
                         if (silent || trickleKbps != null) {
                             Log.i(
@@ -709,7 +789,7 @@ class AndroidVideoReceiver(
             streamBitrateKbps,
             phyPreference = phyPreference,
             ioConfig = ioConfig,
-            onLinkAuthenticated = { session -> learnClassicPeerAddress(socket, session.peerNodeId, "incoming") },
+            onLinkAuthenticated = { session -> learnClassicPeerAddress(socket, session.peerNodeId, "incoming", session.peerPseudonymous) },
         ) { linkDetails(transport, socket) + readGaps.summary() }
     }
 
@@ -1129,6 +1209,19 @@ class AndroidVideoReceiver(
             var timestampAlignmentLogged = false
             var audioPackets = 0L
             var bytes = 0L
+            // DEBUG: stream audio counters for audio A/Bs (StreamAudioStats); the audio decoder writes the lines.
+            val streamAudioStats = if (BuildConfig.DEBUG && header.hasAudio) {
+                StreamAudioStats(
+                    stream = streamReader.meshStreamId?.toString() ?: "direct",
+                    hops = {
+                        streamReader.lastMeshTtl?.let { EndToEndStreamWriter.DEFAULT_MESH_TTL - it }
+                            ?: if (streamReader.meshStreamId == null) 0 else null
+                    },
+                    clockMs = { System.nanoTime() / 1_000_000L },
+                )
+            } else {
+                null
+            }
             val controlFailure = AtomicReference<Throwable?>()
             val controlContentSession = endpointSession
 
@@ -1247,6 +1340,7 @@ class AndroidVideoReceiver(
                             "GATT reverse control unavailable; continuing forward media without it",
                             error,
                         )
+                        watchGattParentAfterControlFailure(error, controlRunning)
                     } else {
                         controlFailure.compareAndSet(null, error)
                     }
@@ -1263,6 +1357,7 @@ class AndroidVideoReceiver(
 
             fun weakLinkChanged(paused: Boolean?) {
                 if (paused == null) return
+                weakLinkPaused = paused
                 onVideoPausedWeakLink(paused)
                 onStatus(if (paused) "Video paused: weak link. Audio continues." else "Video resumed.")
                 Log.i("BluetoothVideo", "BENCHMARK weak_link_pause: role=stream_rx | paused=$paused")
@@ -1306,6 +1401,9 @@ class AndroidVideoReceiver(
                         is ReceivedStreamContent.Media -> {
                             val integrity = StreamProtocol.verifyAndStripDebugIntegrity(content.packet)
                             val packet = integrity.packet
+                            if (packet.isAudio && packet.flags and StreamProtocol.FLAG_CODEC_CONFIG == 0) {
+                                streamAudioStats?.onRecord(content.recordUnits)
+                            }
                             if (!packet.isAudio &&
                                 packet.flags and (
                                     StreamProtocol.FLAG_CODEC_CONFIG or StreamProtocol.FLAG_DISPLAY_ROTATION
@@ -1416,6 +1514,7 @@ class AndroidVideoReceiver(
                         debugTraceContext = context,
                         debugTraceSession = debugTraceSessionName,
                         onLevel = onAudioLiveLevel.takeIf { header.isAudioOnly },
+                        streamAudioStats = streamAudioStats,
                     )
                 }.also {
                     audioDecoder = it
@@ -1903,6 +2002,11 @@ internal fun shouldExpectPeriodicChildHeartbeat(
 ): Boolean = usesPeriodicReceiverHeartbeat(transport) || childCanRelay ||
     (transport == BluetoothTransportOption.BLE_GATT && debugDirectGattHeartbeat)
 
+/**
+ * Upper bound of the receiver's keepalive wait. The control loop also wakes every [CAPACITY_REPORT_INTERVAL_MS]
+ * (1 s) for link reports and writes a keepalive on every pass, so the period on the air is about 1 s (PROTOCOL
+ * "Lifecycle, liveness and route withdrawal"); the timeouts below were measured with that period.
+ */
 internal fun receiverHeartbeatIntervalMs(@Suppress("UNUSED_PARAMETER") transport: BluetoothTransportOption): Long =
     2_000L
 
@@ -1929,8 +2033,10 @@ internal fun relayParentSilent(nowNs: Long, lastReadNs: Long, startedNs: Long, p
  * M31 -> A15s carried ~12 kbps of a 300 kbps stream (first keyframe after 17 s) with read gaps under
  * 0.5 s. HCI snoop (relaylink-*) put a starved relay child at 4-37 kbps, a healthy one at 296-378, and
  * the 2M one-PDU-per-event pair (ASUS -> A15s) at ~120. A floor of bitrate/8 (37.5 kbps at 300) closes
- * only the starved band. Windows that saw the parent's pause, or an unknown bitrate, never judge.
- * Pure (bytes and clock passed in). DEBUG `test_relay_parent_trickle=false` is the control arm.
+ * only the starved band. Windows that saw the parent's pause, or an unknown bitrate, never judge; the caller also passes
+ * the relay's weak-link pause (Experimental relay child thinning at audio only) as a pause (switch audit B10).
+ * Pure (bytes and clock passed in). DEBUG `test_relay_parent_trickle=false` is the control arm; the whole test runs only
+ * inside the child's parent-link watch (RelayRecoveryConfig.parentWatch).
  */
 internal class RelayParentTrickle(@Volatile var streamBitrateKbps: Int, startedNs: Long) {
     private var windowStartNs = startedNs

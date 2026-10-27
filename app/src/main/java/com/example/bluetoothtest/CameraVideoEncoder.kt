@@ -2633,16 +2633,33 @@ class CameraVideoEncoder(
         } ?: ""
     }
 
+    /**
+     * The back-off verdict for one request, with a DEBUG setup-timing line `BENCHMARK key_frame_request: honored= | force= |
+     * sinceLastMs= | intervalMs=`: a joining viewer two hops away waits for the next honoured request (stream join gap,
+     * 2026-10-26: authenticated-to-first-header median 402 ms direct, 1127 ms through one relay).
+     */
+    private fun honorKeyFrameRequest(force: Boolean, path: String): Boolean {
+        val nowNs = System.nanoTime()
+        val sinceLastMs = keyFrameRequestBackoff.sinceLastHonoredMs(nowNs)
+        val honored = keyFrameRequestBackoff.shouldHonor(nowNs, force)
+        if (BuildConfig.DEBUG) Log.i(
+            "BluetoothVideo",
+            "BENCHMARK key_frame_request: honored=$honored | force=$force | path=$path | " +
+                "sinceLastMs=${sinceLastMs ?: "none"} | intervalMs=${keyFrameRequestBackoff.currentIntervalMs()}",
+        )
+        return honored
+    }
+
     fun requestKeyFrame(force: Boolean = false) {
         if (usesNativeAom) {
-            if (!keyFrameRequestBackoff.shouldHonor(System.nanoTime(), force)) return
+            if (!honorKeyFrameRequest(force, "native")) return
             nativeKeyFrameRequested.set(true)
             onStatus("Requested a native libaom recovery keyframe")
             return
         }
         worker.post {
             val activeCodec = codec ?: return@post
-            if (!keyFrameRequestBackoff.shouldHonor(System.nanoTime(), force)) return@post
+            if (!honorKeyFrameRequest(force, "mediacodec")) return@post
             val shaping = keyFrameShapingFraction()
             runCatching {
                 activeCodec.setParameters(
@@ -2986,6 +3003,14 @@ internal class KeyFrameRequestBackoff(
 ) {
     private var lastHonoredNs: Long? = null
     private var intervalNs = minIntervalNs
+
+    /** Milliseconds since the last honoured request, or null before the first (diagnostics only). */
+    @Synchronized
+    fun sinceLastHonoredMs(nowNs: Long): Long? = lastHonoredNs?.let { (nowNs - it) / 1_000_000L }
+
+    /** The current minimum spacing between honoured unforced requests (diagnostics only). */
+    @Synchronized
+    fun currentIntervalMs(): Long = intervalNs / 1_000_000L
 
     @Synchronized
     fun shouldHonor(nowNs: Long, force: Boolean): Boolean {

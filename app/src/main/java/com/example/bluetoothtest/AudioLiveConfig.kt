@@ -3,8 +3,8 @@ package com.example.bluetoothtest
 /**
  * Experimental audio-only live stream ("radio"): the one constant that ships it. Design and promotion
  * criteria: docs/dev/decisions/README.md "Design AL"; the register of switches: docs/dev/switches.md. Default ON since
- * 2026-10-17 (design decision after short phone checks; the remaining T-AL* tests stay open); users can still
- * turn it off in Settings > Features.
+ * 2026-10-17 (design decision after short phone checks; the remaining T-AL* tests stay open). There is no Settings
+ * switch: the `feature_audio_live_v2` preference is read but nothing writes it, so this constant decides.
  */
 object AudioLiveFeatureDefaults {
     const val ENABLED = true

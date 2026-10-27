@@ -138,4 +138,69 @@ class RecentCallsTest {
         assertEquals(listOf(5L, 4L, 3L, 1L, 2L), calls.map { it.atMs })
         assertEquals(calls, RecentCalls.decode(RecentCalls.encode(calls)))
     }
+
+    /**
+     * Review 2026-10-27 (finding 6): Recent held real-key callers' fingerprints (strangers included) in plain text. The
+     * stored list is sealed now, and an earlier build's plain list is migrated once and removed.
+     */
+    @Test
+    fun theStoredListHoldsNoReadableIdentityAndAnOlderPlainListIsSealedOnce() {
+        val phone = FakePhone(java.nio.file.Files.createTempDirectory("recent-sealed").toFile())
+        try {
+            val context = phone.start()
+            val stored = phone.preferences(RecentCalls.PREFERENCES)
+            // An earlier build left a plain list.
+            stored.edit().putString("calls_v2", RecentCalls.encode(listOf(RecentCall(a, true, 1, fingerprintHex = fingerprint)))).commit()
+            RecentCalls.record(context, RecentCall(b, false, 2))
+            val reloaded = RecentCalls.load(phone.start())
+            org.junit.Assert.assertEquals(listOf(b, a), reloaded.map { it.nodePrefixHex })
+            org.junit.Assert.assertEquals(fingerprint, reloaded.last().fingerprintHex)
+            val onDisk = stored.all.values.joinToString(" ")
+            org.junit.Assert.assertFalse("the plain value is gone", stored.contains("calls_v2"))
+            org.junit.Assert.assertFalse("no fingerprint is readable", onDisk.contains(fingerprint))
+            org.junit.Assert.assertFalse("no node prefix is readable", onDisk.contains(a) || onDisk.contains(b))
+            // A damaged value (it fails authentication) is replaced by the next call.
+            stored.edit().putString("calls_sealed_v1", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").commit()
+            org.junit.Assert.assertTrue(RecentCalls.load(context).isEmpty())
+            org.junit.Assert.assertTrue(RecentCalls.record(context, RecentCall(a, true, 3)))
+            org.junit.Assert.assertEquals(listOf(a), RecentCalls.load(context).map { it.nodePrefixHex })
+            // A Keystore that cannot open it right now: nothing is written over it, recording reports false (no crash),
+            // and the screen can offer "Clear history".
+            val sealedNow = stored.getString("calls_sealed_v1", null)
+            val working = RecentCalls.cipher
+            RecentCalls.cipher = { object : AtRestCipher {
+                override fun seal(plaintext: ByteArray): ByteArray = throw java.security.KeyStoreException("busy")
+                override fun open(sealed: ByteArray): ByteArray = throw java.security.KeyStoreException("busy")
+            } }
+            org.junit.Assert.assertFalse(RecentCalls.record(context, RecentCall(b, true, 4)))
+            org.junit.Assert.assertEquals(sealedNow, stored.getString("calls_sealed_v1", null))
+            org.junit.Assert.assertTrue(RecentCalls.isUnreadable(context))
+            RecentCalls.cipher = working
+            org.junit.Assert.assertFalse(RecentCalls.isUnreadable(context))
+            org.junit.Assert.assertTrue(RecentCalls.clear(context))
+            org.junit.Assert.assertTrue(RecentCalls.load(context).isEmpty())
+        } finally {
+            phone.root.deleteRecursively()
+        }
+    }
+
+    /** Review 2026-10-27 (finding 15): once an emergency wipe started, Recent and the local hide list are not rewritten. */
+    @Test
+    fun nothingIsRecordedWhileAnEmergencyWipeRuns() {
+        val phone = FakePhone(java.nio.file.Files.createTempDirectory("recent-wipe").toFile())
+        try {
+            val context = phone.start()
+            WipeGuard.begin()
+            // Review finding 1: the call-end path must not throw (an uncaught throw crashed the app and aborted the wipe).
+            org.junit.Assert.assertFalse(RecentCalls.record(context, RecentCall(a, true, 1)))
+            org.junit.Assert.assertFalse(RecentCalls.recordBlocked(context, 2))
+            org.junit.Assert.assertFalse(RecentCalls.promoteStranger(context, "gold fox", fingerprint))
+            LocalReporting.hideStream(context, 1234)
+            org.junit.Assert.assertTrue(phone.preferences(RecentCalls.PREFERENCES).all.isEmpty())
+            org.junit.Assert.assertTrue(phone.preferences(CallFeatureDefaults.APP_SETTINGS_PREFERENCES).all.isEmpty())
+        } finally {
+            WipeGuard.resetForTest()
+            phone.root.deleteRecursively()
+        }
+    }
 }

@@ -422,7 +422,7 @@ internal fun leSetupStatus(message: String?): Int? =
  * Bounded LE setup retry (review 2026-10-10). A retry needs: an attempt left, a retryable failure,
  * at most ONE retry for the link-layer statuses added by le-connect-retry-link-statuses (8, 0x22,
  * 0x3E, 147: a supervision timeout alone costs seconds), and enough of the caller's setup budget for
- * a whole further attempt ([nextAttemptMs]). A private call's 2M -> 1M setup retry and its bad-2M
+ * a whole further attempt ([nextAttemptMs]; [remainingBudgetMs] is [SetupDeadline.ordinaryRemainingMs]). A private call's 2M -> 1M setup retry and its bad-2M
  * memory only happen inside AdaptivePhyMemory.EARLY_LOSS_MS, so inner retries must not consume it.
  */
 internal fun leSetupRetryAllowed(
@@ -442,28 +442,6 @@ internal fun leSetupRetryAllowed(
 }
 
 internal const val MAX_EXTENDED_STATUS_RETRIES = 1
-
-/**
- * The setup time the caller has left on this thread (an elapsedRealtime deadline), e.g. a private
- * call's first LE attempt inside the 15 s early-loss window. Retry loops read it; null means
- * unbounded. GATT/CoC open loops run synchronously on the caller's connect thread, so a
- * thread-local carries the deadline without widening every open signature.
- */
-internal object LeSetupBudget {
-    private val deadline = ThreadLocal<Long?>()
-
-    fun <T> within(deadlineElapsedMs: Long, block: () -> T): T {
-        val previous = deadline.get()
-        deadline.set(deadlineElapsedMs)
-        try {
-            return block()
-        } finally {
-            deadline.set(previous)
-        }
-    }
-
-    fun remainingMs(nowMs: Long = SystemClock.elapsedRealtime()): Long? = deadline.get()?.let { it - nowMs }
-}
 
 /** Persisted scan starts (elapsedRealtime), so a restarted process still sees the stack's per-UID count. */
 internal interface ScanStartStore {

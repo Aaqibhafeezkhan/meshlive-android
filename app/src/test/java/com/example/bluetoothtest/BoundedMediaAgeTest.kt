@@ -187,11 +187,12 @@ class BoundedMediaAgeTest {
     }
 
     @Test
-    fun theRelaySkipSettingFollowsBenchmarkThenAdvancedThenDefaultOn() {
-        assertFalse(relayChildMediaAgeSetting(benchmarkLaunch = true, benchmarkExtra = false, advancedSettings = true, storedChoice = true))
-        assertTrue(relayChildMediaAgeSetting(benchmarkLaunch = true, benchmarkExtra = true, advancedSettings = true, storedChoice = false))
-        assertFalse(relayChildMediaAgeSetting(benchmarkLaunch = false, benchmarkExtra = true, advancedSettings = true, storedChoice = false))
-        assertTrue(relayChildMediaAgeSetting(benchmarkLaunch = false, benchmarkExtra = false, advancedSettings = false, storedChoice = false))
+    fun theRelaySkipSettingFollowsTheBenchmarkExtraElseTheStoredChoiceWithOrWithoutAdvanced() {
+        assertFalse(relayChildMediaAgeSetting(benchmarkLaunch = true, benchmarkExtra = false, storedChoice = true))
+        assertTrue(relayChildMediaAgeSetting(benchmarkLaunch = true, benchmarkExtra = true, storedChoice = false))
+        // Switch audit B14: a user's OFF stays off when Advanced is turned off (it used to revert to on).
+        assertFalse(relayChildMediaAgeSetting(benchmarkLaunch = false, benchmarkExtra = true, storedChoice = false))
+        assertTrue(relayChildMediaAgeSetting(benchmarkLaunch = false, benchmarkExtra = false, storedChoice = true))
     }
 
     @Test
@@ -412,7 +413,10 @@ class BoundedMediaAgeTest {
             }
         }
         done.set(true)
-        writer.join(10_000)
+        // The writer drains up to ~23k queued items; on a saturated host that can take longer than any short join, and a
+        // truncated drain would be misread as lost frames. The generous bound only catches a writer that is truly stuck.
+        writer.join(120_000)
+        assertFalse("the writer must finish draining", writer.isAlive)
         val video = written.filter { it >= 0 }
         assertTrue(video.isNotEmpty())
         // Each written inter frame directly follows its reference; a keyframe may follow a gap.

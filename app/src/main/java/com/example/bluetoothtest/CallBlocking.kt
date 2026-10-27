@@ -108,6 +108,10 @@ internal class BlockedPeopleStore(
     @Synchronized
     fun contains(fingerprint: IdentityFingerprint): Boolean = loadOrNull()?.any { it.fingerprint == fingerprint } == true
 
+    /** A person known only by the 128-bit node ID (the first 16 bytes of the fingerprint): a forwarded stream's source. */
+    @Synchronized
+    fun containsNode(nodeId: NodeId): Boolean = loadOrNull()?.any { it.fingerprint.nodeId == nodeId } == true
+
     @Synchronized
     fun add(fingerprint: IdentityFingerprint): BlockResult {
         val current = loadOrNull() ?: return BlockResult.STORE_UNREADABLE
@@ -217,10 +221,19 @@ internal object BlockedPeople {
 
     fun isBlocked(context: Context, fingerprint: IdentityFingerprint): Boolean = store(context).contains(fingerprint)
 
+    fun isBlockedNode(context: Context, nodeId: NodeId): Boolean = store(context).containsNode(nodeId)
+
     fun isUnreadable(context: Context): Boolean = store(context).isUnreadable()
 
+    /**
+     * Every block goes through here (Recent, a contact, "Decline and block", a stream, a chat, local reporting), so the
+     * side effects of [PersonPolicy.onBlocked] (review 2026-10-27, finding 3: the person's presence leases) always run.
+     */
     fun block(context: Context, fingerprint: IdentityFingerprint): BlockResult =
-        runCatching { store(context).add(fingerprint) }.getOrDefault(BlockResult.UNAVAILABLE).also { prefixSnapshot = null }
+        runCatching { store(context).add(fingerprint) }.getOrDefault(BlockResult.UNAVAILABLE).also { result ->
+            prefixSnapshot = null
+            if (result == BlockResult.BLOCKED || result == BlockResult.ALREADY_BLOCKED) PersonPolicy.onBlocked(fingerprint)
+        }
 
     fun unblock(context: Context, fingerprint: IdentityFingerprint): Boolean =
         runCatching { store(context).remove(fingerprint) }.getOrDefault(false).also { prefixSnapshot = null }
@@ -281,8 +294,9 @@ internal object CallBlocking {
     /** The production gate: the preference, the block list and the verified-contact store. Fails open on any error. */
     fun gate(context: Context): CallGate = CallGate { caller ->
         runCatching {
+            PersonPolicy.ensureInstalled(context)
             val fingerprint = caller.fingerprint
-            val blocked = !caller.pseudonymous && fingerprint != null && BlockedPeople.isBlocked(context, fingerprint)
+            val blocked = !caller.pseudonymous && fingerprint != null && PersonPolicy.blocked(fingerprint)
             val standing = when {
                 caller.pseudonymous || fingerprint == null -> ContactStanding.NOT_VERIFIED
                 else -> standingOf(PeerIdentityGate.store?.state(fingerprint.nodeId, fingerprint))
@@ -299,14 +313,29 @@ internal object CallBlocking {
      * Watch list: hides the broadcasts whose source (the route at cost 0 of a logical stream) is a blocked person,
      * judged by the source's fixed announcement prefix, or for a rotating ID by the one contact it is recognised as.
      * A broadcast heard only through relays, with no cost-0 route in range, cannot be attributed and stays listed.
+     * Review 2026-10-27 (finding 4): a stream whose source authenticated as a blocked person when someone watched or
+     * listened ([hiddenRoute], [PersonPolicy.hideStream]) keeps that route hidden, also under a rotating ID nobody
+     * recognises; another broadcaster that advertises the same token is not affected (reviewer review finding 1).
      */
     fun <T> hideBlockedStreams(
         peers: List<T>,
         announcement: (T) -> DiscoveryAnnouncement,
         blockedPrefixes: Set<String>,
         recognised: (DiscoveryAnnouncement) -> String?,
+        hiddenRoute: (DiscoveryAnnouncement) -> Boolean = { false },
     ): List<T> {
-        if (blockedPrefixes.isEmpty() || peers.isEmpty()) return peers
+        if (peers.isEmpty()) return peers
+        val authenticatedHidden = peers.filterNot { hiddenRoute(announcement(it)) }
+        if (blockedPrefixes.isEmpty()) return authenticatedHidden
+        return hideByPrefix(authenticatedHidden, announcement, blockedPrefixes, recognised)
+    }
+
+    private fun <T> hideByPrefix(
+        peers: List<T>,
+        announcement: (T) -> DiscoveryAnnouncement,
+        blockedPrefixes: Set<String>,
+        recognised: (DiscoveryAnnouncement) -> String?,
+    ): List<T> {
         val hiddenTokens = peers.map(announcement)
             .filter { it.routeCost == 0 }
             .filter { source ->
@@ -324,5 +353,7 @@ internal object CallBlocking {
             peers,
             BleL2capPeer::announcement,
             BlockedPeople.cachedPrefixes(context) + LocalReporting.prefixes(context),
-        ) { RotatingDiscovery.recognize(it).singleOrNull()?.contact?.toString()?.take(12) }
+            recognised = { RotatingDiscovery.recognize(it).singleOrNull()?.contact?.toString()?.take(12) },
+            hiddenRoute = PersonPolicy::streamHidden,
+        )
 }

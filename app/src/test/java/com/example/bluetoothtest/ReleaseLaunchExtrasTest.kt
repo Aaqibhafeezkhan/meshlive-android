@@ -52,15 +52,17 @@ class ReleaseLaunchExtrasTest {
                         assertEquals(
                             "$keys changed ${spec.id}",
                             spec.defaultEnabled,
-                            FeatureCatalog.resolve(spec, benchmark, { extraValue }, { null }),
+                            FeatureCatalog.resolve(spec, benchmark, { extraValue }, { null }, debugBuild = false),
                         )
                     }
                     assertEquals(
                         RotatingDiscoveryFeature.DEFAULT_ENABLED,
-                        RotatingDiscoveryFeature.resolve(benchmark, { extraValue }, { null }),
+                        FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, benchmark, { extraValue }, { null }, debugBuild = false),
                     )
-                    assertTrue(CallReachabilityFeature.resolve(benchmark, { true }) { extraValue })
-                    assertFalse(RelayedCallsFeature.resolve(benchmark, { extraValue }, advancedSettings = false) { false })
+                    assertTrue(FeatureCatalog.resolve(CallReachabilityFeature.spec, benchmark, { extraValue }, { null }, debugBuild = false))
+                    assertFalse(
+                        FeatureCatalog.resolve(RelayedCallsFeature.spec, benchmark, { extraValue }, { false }, debugBuild = false),
+                    )
                     assertEquals(
                         IntercomFeatureSettings.resolve(false, { false }, { null }),
                         IntercomFeatureSettings.resolve(benchmark, { extraValue }, { null }),

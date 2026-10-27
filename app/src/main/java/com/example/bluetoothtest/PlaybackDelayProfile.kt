@@ -127,7 +127,11 @@ enum class PlaybackDelayProfile(
         get() = adaptiveMaxDelayMs > delayMs
 
     fun newPlayoutClock(delayOverrideMs: Long? = null): MediaPlayoutClock = if (delayOverrideMs != null && delayOverrideMs != delayMs) {
-        MediaPlayoutClock(delayOverrideMs, maxScheduleAheadMs = scheduleAheadMs(delayOverrideMs))
+        MediaPlayoutClock(
+            delayOverrideMs,
+            maxScheduleAheadMs = scheduleAheadMs(delayOverrideMs),
+            burstGrowthFactor = burstGrowthFactor(),
+        )
     } else {
         MediaPlayoutClock(
             delayMs,
@@ -140,8 +144,15 @@ enum class PlaybackDelayProfile(
             },
             // Experimental time-based target: streams only; calls keep their conversational bounds.
             timeTarget = if (stabilityLabel == "Call") null else PlayoutJitterTarget.fromTunables(),
+            burstGrowthFactor = burstGrowthFactor(),
         )
     }
+
+    /**
+     * Experimental one-step burst growth (`test_playout_burst_growth`): streams only, like the time target. Calls keep the
+     * lateness + 50 ms staircase (switch audit 2026-10-27, A9: every clock read the tunable, so the arm also changed calls).
+     */
+    private fun burstGrowthFactor(): Double? = if (stabilityLabel == "Call") null else DebugTunables.playoutBurstGrowth
 
     /** Frames held for the whole maximum delay plus the decoder's own pipeline. */
     fun videoQueueCapacity(fps: Int): Int = (ceil(

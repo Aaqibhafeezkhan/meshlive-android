@@ -56,23 +56,21 @@ internal class RelayEstablishBudget(
         const val BUDGET_MS = 12_000L
         const val MIN_DELAY_MS = 300L
         const val MAX_DELAY_MS = 900L
-        const val FAST_MAX_MS = 1_500L
+        const val FAST_MAX_MS = ConnectDurationClass.FAST_MAX_MS
         const val ABSENT_MIN_MS = 4_500L
         const val ABSENT_MAX_MS = 6_500L
         const val EXPECTED_FAST_ATTEMPT_MS = 600L
         const val MAX_ABSENT_RETRIES = 1
 
-        /** GATT_ERROR (what the stack returns for HCI 0x3E and for its own create-connection timeout). */
-        private val ESTABLISHMENT_STATUSES = setOf(133, 62)
-
+        /** The duration rule is [ConnectDurationClass]'s; this adds only the connect-stage message check and the absent band. */
         fun classify(message: String?, durationMs: Long): Kind {
             val status = leSetupStatus(message) ?: return Kind.OTHER
-            if (status !in ESTABLISHMENT_STATUSES) return Kind.OTHER
+            if (status !in ConnectDurationClass.ESTABLISHMENT_STATUSES) return Kind.OTHER
             // Post-link failures (service discovery, MTU, write) carry other messages and are not
             // "connection failed" / "disconnected before use" statuses.
             if (message == null || !(CONNECT_STAGE_PREFIXES.any { message.startsWith(it) })) return Kind.OTHER
             return when {
-                durationMs <= FAST_MAX_MS -> Kind.FAST_ESTABLISHMENT
+                ConnectDurationClass.isFastEstablishment(status, durationMs) -> Kind.FAST_ESTABLISHMENT
                 durationMs in ABSENT_MIN_MS..ABSENT_MAX_MS -> Kind.TARGET_ABSENT
                 else -> Kind.OTHER
             }

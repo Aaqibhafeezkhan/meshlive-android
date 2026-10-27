@@ -8,8 +8,7 @@ package com.example.bluetoothtest
  * The calls card is still drawn and bound by `CallFeatureSettingsBinder`
  * (res/layout/settings_features_calls.xml), not by `FeatureSettingsBlock`.
  *
- * `CallFeatureResolver.enabled` and `FeatureCatalog.resolve` apply the same rule; a unit test
- * (`FeatureCatalogTest`) keeps them equal. "Show caller names on the lock screen" is not listed: it is
+ * `CallFeatureResolver.enabled` delegates to `FeatureCatalog.resolve`. "Show caller names on the lock screen" is not listed: it is
  * a privacy preference stored by `NotificationPrivacy`, with no benchmark extra and no default flip.
  */
 internal object CallFeatureSpecs {
@@ -63,10 +62,11 @@ internal object CallFeatureSpecs {
             prefKey = feature.prefKey,
             defaultEnabled = feature.defaultOn,
             benchmarkExtra = feature.benchmarkExtra,
-            titleRes = titleOf(feature),
-            descriptionRes = descriptionOf(feature),
+            // The constants (no stored choice since 2026-10-17) keep no Settings texts: they have no row.
+            titleRes = if (feature.prefKey == null) 0 else titleOf(feature),
+            descriptionRes = if (feature.prefKey == null) 0 else descriptionOf(feature),
             group = GROUP,
-            dependsOn = if (feature == CallFeature.AUTO_SYNC) idOf(CallFeature.MESSAGES) else null,
+            dependsOn = if (feature == CallFeature.AUTO_SYNC) listOf(idOf(CallFeature.MESSAGES)) else emptyList(),
             phoneTest = phoneTestOf(feature),
         )
     }

@@ -159,6 +159,8 @@ internal class ReachTable<P : Any>(
             // rotating phone compares with its current and previous RDI (a boundary may have passed).
             if (isOwnVia(entry.via)) return@forEach
             if (entry.cost > config.maxRelays) return@forEach
+            // A page naming its own advertiser is no relay route: that phone is the target, dialled as the target only.
+            if (entry.target.contentEquals(page.relayPrefix)) return@forEach
             observe(entry.target, page.relayPrefix, entry.cost, entry.ageMs, address, now)
         }
     }
@@ -278,6 +280,18 @@ internal class ReachTable<P : Any>(
     }
 
     /**
+     * The freshest offer of the next hop after a failed dial, heard at or after [seenAfterMs]: the helper [hopPrefix] of a
+     * relayed route, else (a direct hop) the [target] itself. A routed hop's dial announcement carries the target's ID, so
+     * a lookup by that ID would find the target's own offer and send it a helper SETUP for itself (relay-showcase z1/z2:
+     * M31 redialled the ASUS, the target, instead of the S22 helper). A helper hop equal to the target is no hop.
+     */
+    @Synchronized
+    fun rediscoverHop(hopPrefix: ByteArray?, target: ByteArray, seenAfterMs: Long): OfferSighting<P>? {
+        if (hopPrefix != null && hopPrefix.contentEquals(target)) return null
+        return offers[(hopPrefix ?: target).prefixHex()]?.takeIf { it.seenMs >= seenAfterMs }
+    }
+
+    /**
      * Routes a caller can try for [target], best first (PLAN C6): direct, then fewest relays, then age
      * under 20 s before older, then the stronger first hop, then the freshest. Failed pairs are excluded.
      */
@@ -299,7 +313,9 @@ internal class ReachTable<P : Any>(
         observations.values.filter { it.targetKey == targetKey && it.relay != null }.forEach { o ->
             if (requireRelays != 0 && o.rawCost != requireRelays) return@forEach
             if ((skipUntil[o.routeKey] ?: 0L) > now) return@forEach
-            val hop = helperOffer(o.relay!!, accept) ?: return@forEach
+            // The target is never a helper for its own call (its helper offer is its own call offer).
+            if (o.relay!!.contentEquals(target)) return@forEach
+            val hop = helperOffer(o.relay, accept) ?: return@forEach
             routes += ReachRoute(target.copyOf(), o.relay.copyOf(), o.rawCost, o.ageMs(now), hop)
         }
         return routes.sortedWith(

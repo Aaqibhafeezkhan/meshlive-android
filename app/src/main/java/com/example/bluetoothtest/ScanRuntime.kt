@@ -70,6 +70,17 @@ internal object ScanRuntime {
     /** A scan (re)started anywhere in the app. */
     fun onScanStart() = health.onScanStart(clock())
 
+    const val CONSUMER_SCAN_REGISTRY = "scan-registry"
+    const val CONSUMER_ADVERTISING_BUDGET = "advertising-budget"
+    const val CONSUMER_LINK_CHANGE_ROLLBACK = "link-change-rollback"
+
+    /** The Bluetooth-epoch consumers [attach] registers: the scanner rebuild only while its registry entry is on. */
+    fun epochConsumers(switchedOff: Set<String>): List<String> = listOfNotNull(
+        CONSUMER_SCAN_REGISTRY.takeUnless { ScanPolicy.isOff(ScanPolicy.BLUETOOTH_PROCESS_RESTART_RECOVERY.id, switchedOff) },
+        CONSUMER_ADVERTISING_BUDGET,
+        CONSUMER_LINK_CHANGE_ROLLBACK,
+    )
+
     fun attach(context: Context) {
         if (!attached.compareAndSet(false, true)) return
         val app = context.applicationContext ?: context
@@ -80,30 +91,35 @@ internal object ScanRuntime {
 
         if (ScanEnvironment.guidanceActive(sdk, switchedOff)) attachLocationWatcher(app, snapshot)
 
-        if (!ScanPolicy.isOff("bluetooth-process-restart-recovery", switchedOff)) {
-            BluetoothEpoch.attach(app)
-            BluetoothEpoch.register(
-                "scan-registry",
-                onOff = { ScanRegistry.shared.pause(ScanRegistry.shared.running()) },
-                onOn = {
-                    health.reset()
-                    markerTracker?.onBluetoothRestarted()
-                    uncleanExits = 0
-                    restartScannersAfterBluetoothOn()
-                },
-            )
-            // One epoch source for the other batches (integration): a Bluetooth restart voids what advertising
-            // learned about its instance budget (batch A) and every remembered link-change mark (batch P).
-            BluetoothEpoch.register(
-                "advertising-budget",
-                onOff = { AdvertisingBudget.shared.onAdapterRestarted() },
-                onOn = {},
-            )
-            BluetoothEpoch.register(
-                "link-change-rollback",
-                onOff = { LinkChangeRollbacks.onBluetoothRestarted() },
-                onOn = {},
-            )
+        // The epoch (the only ACTION_STATE_CHANGED receiver) is always attached: calls, receivers, the stream screen,
+        // advertising and link-change marks all register on it. The registry entry's off-switch turns off only its own
+        // consumer, the scanner rebuild (switch audit 2026-10-27, A5: it used to detach every Bluetooth-ON consumer).
+        BluetoothEpoch.attach(app)
+        epochConsumers(switchedOff).forEach { name ->
+            when (name) {
+                CONSUMER_SCAN_REGISTRY -> BluetoothEpoch.register(
+                    name,
+                    onOff = { ScanRegistry.shared.pause(ScanRegistry.shared.running()) },
+                    onOn = {
+                        health.reset()
+                        markerTracker?.onBluetoothRestarted()
+                        uncleanExits = 0
+                        restartScannersAfterBluetoothOn()
+                    },
+                )
+                // One epoch source for the other batches (integration): a Bluetooth restart voids what advertising
+                // learned about its instance budget (batch A) and every remembered link-change mark (batch P).
+                CONSUMER_ADVERTISING_BUDGET -> BluetoothEpoch.register(
+                    name,
+                    onOff = { AdvertisingBudget.shared.onAdapterRestarted() },
+                    onOn = {},
+                )
+                CONSUMER_LINK_CHANGE_ROLLBACK -> BluetoothEpoch.register(
+                    name,
+                    onOff = { LinkChangeRollbacks.onBluetoothRestarted() },
+                    onOn = {},
+                )
+            }
         }
 
         if ((sdk == 29 || sdk == 30) && !ScanPolicy.isOff("android10-scanner-leak-on-process-death", switchedOff)) {

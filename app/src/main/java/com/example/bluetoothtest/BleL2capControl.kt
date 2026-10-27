@@ -178,7 +178,7 @@ class BleL2capDiscovery(
         // protection: every start of every app scanner waits for a slot (registry entry le-scan-start-quota).
         val waitMs = ScanStartGate.shared.reserve(scanBudget)
         if (waitMs > 0L) {
-            android.util.Log.i("BluetoothVideo", "BLE scan start deferred ${waitMs} ms: scan quota (5 starts per 30 s)")
+            android.util.Log.i("BluetoothVideo", "BLE scan start deferred ${waitMs} ms: scan quota (5 starts per 30 s) | scanner=${stats.scanner} | reason=quota")
             runCatching { ScanStartGate.deferralListener?.invoke(waitMs) }
             handler.postDelayed({ if (running.get()) beginScan(reserved = false) }, waitMs)
             return
@@ -212,7 +212,12 @@ class BleL2capDiscovery(
         }
         try {
             EncoderBenchGuard.check("BleL2capControl.scan")
-            scanner.startScan(scanFilters(), scanSettings(activeScanMode), callback)
+            // Review B11: a close() that ran while this start waited (quota deferral, another thread) must not leave a
+            // scan registered that nothing will ever stop.
+            synchronized(scanLock) {
+                if (!running.get()) return
+                scanner.startScan(scanFilters(), scanSettings(activeScanMode), callback)
+            }
         } catch (_: SecurityException) {
             halt()
             onError("Nearby devices permission is unavailable. Allow it in Android Settings and try again.")
@@ -657,6 +662,14 @@ class BleL2capDiscovery(
                     logPcDecoded(result, outcome.decoded)
                     outcome.announcement
                 }
+                is ScanRecordForms.Outcome.PcStream -> {
+                    stats.pc++
+                    outcome.announcement
+                }
+                ScanRecordForms.Outcome.PcDisabled -> {
+                    stats.pcDisabled++
+                    return
+                }
                 is ScanRecordForms.Outcome.PcInvalid -> {
                     stats.pcInvalid++
                     logPcRejected(result, outcome.error, pcData)
@@ -760,12 +773,17 @@ class BleL2capDiscovery(
         handler.postDelayed(::logScanStats, SCAN_STATS_INTERVAL_MS)
     }
 
+    /** Review B11: start and stop of the scan are ordered, so a stop never runs between a start's check and its startScan. */
+    private val scanLock = Any()
+
     @SuppressLint("MissingPermission")
     private fun stop(notify: Boolean) {
-        if (!halt()) return
+        val halted = synchronized(scanLock) {
+            halt().also { if (it) runCatching { adapter.bluetoothLeScanner?.stopScan(callback) } }
+        }
+        if (!halted) return
         stats.logIfDebug("stopped")
         handler.removeCallbacksAndMessages(null)
-        runCatching { adapter.bluetoothLeScanner?.stopScan(callback) }
         if (!notify) return
         val unrecovered = failureCode
         if (unrecovered != null && seenAddresses.isEmpty()) {
@@ -825,10 +843,10 @@ internal class ScanStats(
     /** Experimental "Find PCs": decoded PC service-data announcements and rejected ones (never the compact counters). */
     @Volatile var pc = 0
     @Volatile var pcInvalid = 0
+    @Volatile var pcDisabled = 0
     /** Manufacturer data of this app that did not decode (before F11 these left no trace). */
     @Volatile var undecodable = 0
     private var startedMs = System.currentTimeMillis()
-    private var startedElapsedMs = elapsedOrMinusOne()
 
     fun reset() {
         raw = 0
@@ -839,13 +857,10 @@ internal class ScanStats(
         compactInvalid = 0
         pc = 0
         pcInvalid = 0
+        pcDisabled = 0
         undecodable = 0
         startedMs = System.currentTimeMillis()
-        startedElapsedMs = elapsedOrMinusOne()
     }
-
-    /** SystemClock is not available in plain JVM tests; -1 then means "no connect-overlap tagging". */
-    private fun elapsedOrMinusOne(): Long = runCatching { android.os.SystemClock.elapsedRealtime() }.getOrDefault(-1L)
 
     /** Unchanged with compact discovery and "Find PCs" off; on, each appends its own two counters. */
     fun line(state: String): String =
@@ -853,17 +868,8 @@ internal class ScanStats(
             "elapsedMs=${System.currentTimeMillis() - startedMs} | raw=$raw | " +
             "withoutAnnouncement=$withoutAnnouncement | rejected=$rejected | accepted=$accepted" +
             (if (compactDiscovery) " | compact=$compact | compactInvalid=$compactInvalid" else "") +
-            (if (pcDiscovery) " | pc=$pc | pcInvalid=$pcInvalid" else "") +
-            (if (undecodable > 0) " | undecodable=$undecodable" else "") +
-            connectOverlapTag()
-
-    /** S-07 diagnostic: the part of this window that overlapped an own connect attempt; empty when none. */
-    private fun connectOverlapTag(): String {
-        val overlap = runCatching {
-            if (startedElapsedMs < 0L) 0L else ScanGate.overlapMs(startedElapsedMs, android.os.SystemClock.elapsedRealtime())
-        }.getOrDefault(0L)
-        return if (overlap > 0L) " | connectOverlapMs=$overlap" else ""
-    }
+            (if (pcDiscovery) " | pc=$pc | pcInvalid=$pcInvalid | pcDisabled=$pcDisabled" else "") +
+            (if (undecodable > 0) " | undecodable=$undecodable" else "")
 
     fun logIfDebug(state: String) {
         if (BuildConfig.DEBUG) android.util.Log.i("BluetoothVideo", "BENCHMARK " + line(state))
@@ -999,6 +1005,7 @@ class BleL2capControlServer(
         onStatus = onLinkStatus,
         onLost = ::onAdvertisingLost,
         nonDiscoverable = NonDiscoverableAdvertising.forNewSet(connectable = true),
+        neutralRole = DiscoverableWhenNeutral.roleOf(value),
     )
 
     /**
@@ -1354,8 +1361,10 @@ object BleL2capPsmReader {
         primeGattMtuForCoc: Boolean = true,
         /** Relay child connect only: Experimental RelayEstablishBudget (test_relay_establish_budget). */
         establishBudget: Boolean = false,
+        /** The caller's setup deadline (a call's or message's dial), null when unbounded. */
+        deadline: SetupDeadline? = null,
     ): BleL2capControlConnection =
-        openWithRetries(context, device, onLinkStatus, phyPreference, connectionPriority, primeGattMtuForCoc, null, establishBudget)
+        openWithRetries(context, device, onLinkStatus, phyPreference, connectionPriority, primeGattMtuForCoc, null, establishBudget, deadline)
 
     /**
      * Attaches a GATT client to an LE link whose CoC channel is already open (BleCocClient fresh ACL):
@@ -1368,8 +1377,14 @@ object BleL2capPsmReader {
         onLinkStatus: (String) -> Unit,
         phyPreference: BlePhyPreference = BlePhyPreference.TWO_M,
         connectionPriority: BleConnectionPriority = BleConnectionPriority.HIGH,
-    ): BleL2capControlConnection =
-        openWithRetries(context, device, onLinkStatus, phyPreference, connectionPriority, false, psm)
+        deadline: SetupDeadline? = null,
+    ): BleL2capControlConnection = if (DebugTunables.cocAttachSingle) {
+        // Review T5 (2026-10-27): the CoC socket is already connected; this GATT client only adds priority and PHY control.
+        // One attempt with a short bound, so a failing reattach costs at most ATTACH_TIMEOUT_MS, not 3 x 6 s plus retries.
+        openOnce(context, device, onLinkStatus, phyPreference, connectionPriority, false, psm, timeoutMs = ATTACH_TIMEOUT_MS)
+    } else {
+        openWithRetries(context, device, onLinkStatus, phyPreference, connectionPriority, false, psm, deadline = deadline)
+    }
 
     private fun openWithRetries(
         context: Context,
@@ -1380,12 +1395,14 @@ object BleL2capPsmReader {
         primeGattMtuForCoc: Boolean,
         knownPsm: Int?,
         establishBudget: Boolean = false,
+        deadline: SetupDeadline? = null,
+        config: ConnectRetryConfig = ConnectRetryConfig.current(),
     ): BleL2capControlConnection {
-        var attempt = 1
-        var extendedRetries = 0
         var linkReached = false
         val startedMs = SystemClock.elapsedRealtime()
-        val budget = if (establishBudget) RelayEstablishBudget(startedMs) else null
+        val attempts = ConnectAttempts(
+            ConnectAttempts.Link.BLE_CONTROL, config, deadline, startedMs, establishBudget, device.address.takeLast(5),
+        )
         while (true) {
             val attemptStartedMs = SystemClock.elapsedRealtime()
             try {
@@ -1397,58 +1414,35 @@ object BleL2capPsmReader {
                     connectionPriority,
                     primeGattMtuForCoc,
                     knownPsm,
+                    timeoutMs = attempts.attemptTimeoutMs(attemptStartedMs),
+                    connectPhaseMs = attempts.connectPhaseMs(),
                 )
-                if (budget != null) {
-                    val nowMs = SystemClock.elapsedRealtime()
-                    android.util.Log.i(
-                        "BluetoothVideo",
-                        RelayEstablishBudget.logLine("coc-control", attempt, nowMs - attemptStartedMs, null, null, nowMs - startedMs),
-                    )
-                }
+                attempts.successLines(attemptStartedMs, SystemClock.elapsedRealtime()).forEach { android.util.Log.i("BluetoothVideo", it) }
                 GattPoolBackoff.recordSuccess(PoolSource.CLIENT)
                 return connection
             } catch (error: IOException) {
                 if (error is LinkReachedSetupFailure) linkReached = true
                 GattPoolBackoff.noteConnectFailure(error.message, "ble-control-client")
-                if (budget != null) {
-                    val nowMs = SystemClock.elapsedRealtime()
-                    val durationMs = nowMs - attemptStartedMs
-                    val decision = budget.onFailure(error.message, durationMs, nowMs)
-                    android.util.Log.i(
-                        "BluetoothVideo",
-                        RelayEstablishBudget.logLine("coc-control", attempt, durationMs, error.message, decision, nowMs - startedMs),
-                    )
-                    if (decision.kind != RelayEstablishBudget.Kind.OTHER) {
-                        val delayMs = decision.retryAfterMs
-                            ?: throw EstablishmentBudgetExhausted(error.message, decision.attempt, decision.elapsedMs, error)
-                        attempt += 1
-                        onLinkStatus(leSetupRetryNotice("BLE control", error.message, "retrying in place"))
-                        Thread.sleep(delayMs)
-                        continue
-                    }
-                }
                 val retryable = runCatching { BluetoothTransportPolicy.retryableConnectStatuses() }
                     .getOrDefault(setOf(BluetoothTransportPolicy.GATT_ERROR_133))
-                val allowed = leSetupRetryAllowed(
-                    message = error.message,
-                    attemptsUsed = attempt,
-                    maxAttempts = CONTROL_OPEN_ATTEMPTS,
+                val nowMs = SystemClock.elapsedRealtime()
+                // One decision (ConnectAttempts): relay establish budget, Experimental fast-fail redial, ordinary rule.
+                val decision = attempts.onFailure(
+                    error,
+                    attempts.classify(error.message, nowMs - attemptStartedMs),
+                    attemptStartedMs,
+                    nowMs,
                     classifiedRetryable = isRetryableBleControlFailure(error.message, retryable),
-                    extendedRetriesUsed = extendedRetries,
-                    nextAttemptMs = CONTROL_RETRY_DELAY_MS + TimeUnit.SECONDS.toMillis(CONTROL_TIMEOUT_SECONDS),
-                    remainingBudgetMs = LeSetupBudget.remainingMs(),
+                    linkReached = linkReached,
                 )
-                if (!allowed) throw carryLinkReached(error, linkReached)
-                if (leSetupStatus(error.message)?.let { it != BluetoothTransportPolicy.GATT_ERROR_133 } == true) extendedRetries++
-                attempt += 1
-                onLinkStatus(
-                    if (error.message == BLE_CONTROL_READ_TIMEOUT) {
-                        "BLE control did not respond; retrying connection"
-                    } else {
-                        leSetupRetryNotice("BLE control", error.message, "retrying connection")
-                    },
-                )
-                Thread.sleep(CONTROL_RETRY_DELAY_MS)
+                decision.lines.forEach { android.util.Log.i("BluetoothVideo", it) }
+                when (decision) {
+                    is ConnectAttempts.Decision.GiveUp -> throw decision.error
+                    is ConnectAttempts.Decision.Dial -> {
+                        onLinkStatus(decision.notice)
+                        Thread.sleep(decision.delayMs)
+                    }
+                }
             }
         }
     }
@@ -1462,6 +1456,9 @@ object BleL2capPsmReader {
         connectionPriority: BleConnectionPriority,
         primeGattMtuForCoc: Boolean,
         knownPsm: Int?,
+        timeoutMs: Long = ConnectAttempts.Link.BLE_CONTROL.attemptTimeoutMs,
+        /** Experimental unified policy only: the attempt ends if the control link is not connected after this long. */
+        connectPhaseMs: Long? = null,
     ): BleL2capControlConnection {
         val result = AtomicReference<Int?>()
         val error = AtomicReference<String?>()
@@ -1511,8 +1508,7 @@ object BleL2capPsmReader {
          * connection beside the priority update, while the server requested its own, collided
          * (status 42 on the server in every M31/ASUS/A15s CoC setup).
          */
-        fun finishWithPsm(gatt: BluetoothGatt, psm: Int) {
-            if (complete.get()) return
+        fun requestSequencedPhy(gatt: BluetoothGatt) {
             if (!phyDeferred && DebugTunables.cocSequencedPhy && attempt.active && phyRequested.compareAndSet(false, true)) {
                 gate.submit(
                     LlProcedure.PHY,
@@ -1525,6 +1521,11 @@ object BleL2capPsmReader {
                     true
                 }
             }
+        }
+
+        fun finishWithPsm(gatt: BluetoothGatt, psm: Int) {
+            if (complete.get()) return
+            requestSequencedPhy(gatt)
             linkDiag.log("setup")
             finish(psm = psm)
         }
@@ -1576,7 +1577,7 @@ object BleL2capPsmReader {
         val callback = object : BluetoothGattCallback() {
             @SuppressLint("MissingPermission")
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-                if (!attempt.onConnectionState(newState == BluetoothProfile.STATE_DISCONNECTED)) return
+                if (!attempt.onConnectionState(newState == BluetoothProfile.STATE_DISCONNECTED, newState == BluetoothProfile.STATE_CONNECTED)) return
                 if (newState == BluetoothProfile.STATE_DISCONNECTED) gate.onLinkClosed(status)
                 when {
                     status != BluetoothGatt.GATT_SUCCESS ->
@@ -1605,6 +1606,15 @@ object BleL2capPsmReader {
                         }
                         if (knownPsm == null) {
                             discoverServices(gatt)
+                        } else if (DebugTunables.cocAttachSingle) {
+                            // Review T5: the attach returns at once (the CoC call or stream no longer waits 600 ms for
+                            // it); the PHY request still follows the priority update by the same delay, off that path.
+                            linkDiag.log("setup")
+                            finish(psm = knownPsm)
+                            thread(name = "BleCocAttachPhy", isDaemon = true) {
+                                runCatching { Thread.sleep(ATTACH_PHY_DELAY_MS) }
+                                if (attempt.active) requestSequencedPhy(gatt)
+                            }
                         } else {
                             // Attach: the PHY request follows the priority update, as after a PSM read.
                             // A worker thread, not the main looper, so a caller's thread never matters.
@@ -1734,7 +1744,7 @@ object BleL2capPsmReader {
             phyMask = controlInitiatingPhys(phyPreference),
         ) ?: throw IOException("Could not start BLE channel discovery")
         try {
-            if (!latch.await(CONTROL_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            if (!awaitControlSetup(latch, timeoutMs, connectPhaseMs, linkConnected::get)) {
                 throw IOException(BLE_CONTROL_READ_TIMEOUT)
             }
             error.get()?.let { throw IOException(it) }
@@ -1753,13 +1763,23 @@ object BleL2capPsmReader {
         }
     }
 
-    private const val CONTROL_TIMEOUT_SECONDS = 6L
-    private const val CONTROL_OPEN_ATTEMPTS = 3
-    private const val CONTROL_RETRY_DELAY_MS = 500L
+    /**
+     * Waits for the control setup for [timeoutMs]. With [connectPhaseMs] (Experimental unified connect policy) the wait
+     * ends early when the link has not reported connected by then. True when the setup finished.
+     */
+    internal fun awaitControlSetup(latch: CountDownLatch, timeoutMs: Long, connectPhaseMs: Long?, connected: () -> Boolean): Boolean {
+        if (connectPhaseMs == null || connectPhaseMs >= timeoutMs) return latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        if (latch.await(connectPhaseMs, TimeUnit.MILLISECONDS)) return true
+        if (!connected()) return false
+        return latch.await(timeoutMs - connectPhaseMs, TimeUnit.MILLISECONDS)
+    }
+
     private const val GATT_CACHE_REFRESH_DELAY_MS = 500L
     private const val MTU_PRIME_TIMEOUT_MS = 1_500L
     private const val MAX_ATT_MTU = 517
     private const val ATTACH_PHY_DELAY_MS = 600L
+    /** Review T5: the single GATT control reattach after a CoC connect (healthy: connected + priority in ~0.3-1 s). */
+    private const val ATTACH_TIMEOUT_MS = 3_000L
 }
 
 /**
@@ -1774,7 +1794,7 @@ internal fun isRetryableBleControlFailure(
         message == BLE_CONTROL_READ_TIMEOUT ||
         isRetryableLeSetupStatus(message, retryableStatuses, listOf("BLE control connection failed (status "))
 
-private const val BLE_CONTROL_READ_TIMEOUT = "Timed out reading the receiver's BLE video channel"
+internal const val BLE_CONTROL_READ_TIMEOUT = "Timed out reading the receiver's BLE video channel"
 
 /**
  * PHYs to initiate the control connection on. Legacy advertisements are on LE 1M, so initiating on

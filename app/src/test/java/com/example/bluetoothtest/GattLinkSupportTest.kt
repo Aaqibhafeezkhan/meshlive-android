@@ -136,7 +136,7 @@ class GattLinkSupportTest {
 
     // ---- GattLinkLifetime --------------------------------------------------------------------------------------
 
-    private class FakeWatch(private val dropsAfterMs: Long?, private val onWait: (Long) -> Unit = {}) : GattLinkLifetime.AclDownWatch {
+    private class FakeWatch(private val dropsAfterMs: Long?, private val onWait: (Long) -> Unit = {}) : AclDownWatch {
         var released = 0
         override fun await(timeoutMs: Long): Boolean {
             onWait(timeoutMs)
@@ -155,7 +155,7 @@ class GattLinkSupportTest {
         assertFalse(GattLinkLifetime.awaitAclDown(stuck, timeoutMs = 2_000L, nowMs = { 0L }, log = { logs += it }))
         assertEquals(1, stuck.released)
         assertTrue(logs.last(), "dropped=false" in logs.last() && "boundMs=2000" in logs.last())
-        val throwing = object : GattLinkLifetime.AclDownWatch {
+        val throwing = object : AclDownWatch {
             var released = false
             override fun await(timeoutMs: Long): Boolean = throw IllegalStateException("receiver gone")
             override fun release() { released = true }

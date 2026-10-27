@@ -228,6 +228,83 @@ class CallBlockingTest {
         assertEquals(listOf(rotatingStranger), visible)
     }
 
+    /**
+     * Review 2026-10-27 (finding 4): a blocked person's stream under a rotating ID nobody recognises stayed listed and kept
+     * playing. Once its source authenticated as the blocked person (the viewer left it then), that route stays hidden, even
+     * with no blocked prefix to match. reviewer review (finding 1): a genuine broadcaster that advertises the same logical
+     * token (the token is public and chosen by the advertiser) stays listed.
+     */
+    @Test
+    fun aRouteWhoseSourceAuthenticatedAsABlockedPersonStaysHiddenButNotAGenuineOneWithTheSameToken() {
+        PersonPolicy.resetForTest()
+        try {
+            val blockedRadio = offer(0x10, cost = 0, logical = 31, rotating = true)
+            val genuineSameToken = offer(0x30, cost = 0, logical = 31, rotating = true)
+            val other = offer(0x60, cost = 0, logical = 32, rotating = true)
+            assertEquals(blockedRadio.logicalStreamToken(), genuineSameToken.logicalStreamToken())
+            val peers = listOf(blockedRadio, genuineSameToken, other)
+            fun visible() = CallBlocking.hideBlockedStreams(peers, { it }, emptySet(), { null }, PersonPolicy::streamHidden)
+            assertEquals(peers, visible())
+            PersonPolicy.hideStream(blockedRadio)
+            assertEquals(listOf(genuineSameToken, other), visible())
+            // Nothing about it outlives the process: the emergency wipe forgets it too.
+            PersonPolicy.clearForWipe()
+            assertEquals(peers, visible())
+        } finally {
+            PersonPolicy.resetForTest()
+        }
+    }
+
+    /** S9: one rule answers "blocked?" for a full identity and for a source known only by its node ID (a BFG1 grant). */
+    @Test
+    fun theBlockListAnswersForAFingerprintAndForTheNodeIdOfTheSamePerson() {
+        val phone = FakePhone(Files.createTempDirectory("person-policy").toFile())
+        try {
+            val context = phone.start()
+            val blocked = fingerprint(1)
+            val other = fingerprint(2)
+            BlockedPeople.installForTest(store())
+            PersonPolicy.install(context)
+            assertEquals(PersonPolicy.Verdict.ALLOW, PersonPolicy.check(blocked))
+            assertEquals(BlockResult.BLOCKED, BlockedPeople.block(context, blocked))
+            assertEquals(PersonPolicy.Verdict.BLOCKED, PersonPolicy.check(blocked))
+            assertEquals(PersonPolicy.Verdict.BLOCKED, PersonPolicy.checkNode(blocked.nodeId))
+            assertEquals(PersonPolicy.Verdict.ALLOW, PersonPolicy.check(other))
+            assertEquals(PersonPolicy.Verdict.ALLOW, PersonPolicy.checkNode(other.nodeId))
+            assertEquals(PersonPolicy.Verdict.ALLOW, PersonPolicy.check(null))
+            // Unblocking lets the person through again everywhere.
+            assertTrue(BlockedPeople.unblock(context, blocked))
+            assertEquals(PersonPolicy.Verdict.ALLOW, PersonPolicy.checkNode(blocked.nodeId))
+        } finally {
+            PersonPolicy.resetForTest()
+            phone.root.deleteRecursively()
+        }
+    }
+
+    /** Finding 3: every block (whichever screen made it) runs the side effects, so a blocked contact loses its lease. */
+    @Test
+    fun everyBlockRunsThePresenceRevocationAndARepeatedBlockDoesToo() {
+        val phone = FakePhone(Files.createTempDirectory("person-policy").toFile())
+        try {
+            val context = phone.start()
+            val person = fingerprint(4)
+            val revoked = mutableListOf<IdentityFingerprint>()
+            BlockedPeople.installForTest(store())
+            PersonPolicy.installForTest(emptySet()) { revoked += it }
+            assertEquals(BlockResult.BLOCKED, BlockedPeople.block(context, person))
+            assertEquals(BlockResult.ALREADY_BLOCKED, BlockedPeople.block(context, person))
+            assertEquals(listOf(person, person), revoked)
+            // A block that could not be stored revokes nothing (the person is not blocked).
+            val unreadable = BlockedPeopleStore(file, AesGcmAtRestCipher { SecretKeySpec(ByteArray(32) { 9 }, "AES") })
+            BlockedPeople.installForTest(unreadable)
+            assertEquals(BlockResult.STORE_UNREADABLE, BlockedPeople.block(context, fingerprint(5)))
+            assertEquals(2, revoked.size)
+        } finally {
+            PersonPolicy.resetForTest()
+            phone.root.deleteRecursively()
+        }
+    }
+
     @Test
     fun aStreamHeardOnlyThroughARelayCannotBeAttributedAndStaysListed() {
         val viaBlockedRelay = offer(0x10, cost = 1, logical = 5)

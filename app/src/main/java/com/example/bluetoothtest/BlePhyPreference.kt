@@ -97,6 +97,14 @@ enum class GattPhySplit(val debugValue: String, val txMask: Int, val rxMask: Int
 internal fun phyAfterAuth(connectPhy: BlePhyPreference, peerBadOnTwoM: Boolean): BlePhyPreference =
     if (connectPhy != BlePhyPreference.TWO_M || peerBadOnTwoM) BlePhyPreference.ONE_M_ADAPTIVE else BlePhyPreference.TWO_M
 
+/**
+ * Whether a stream link asked the stack for 2M, which the early-loss rule ([linkWasTwoM]) reads when the stack never reported a
+ * PHY. With `test_phy_after_auth` the link opens on 1M and 2M is requested only after hop authentication ([deferredRequested]);
+ * a link lost before that never ran on 2M (switch audit 2026-10-27, A6: it counted as a 2M loss and marked the peer bad on 2M).
+ */
+internal fun streamRequestedTwoM(linkPhy: BlePhyPreference, deferPhy: Boolean, deferredRequested: Boolean): Boolean =
+    if (deferPhy) deferredRequested else linkPhy == BlePhyPreference.TWO_M
+
 /** The masks and option a GATT client passes to `setPreferredPhy`. */
 internal data class PhyRequestMasks(val txMask: Int, val rxMask: Int, val option: Int)
 
@@ -191,8 +199,8 @@ internal fun forwarderGattPriority(
 }
 
 /**
- * Default on since 2026-10-15 (`test_relay_upstream_dck=false` is the control arm): the connection priority a central requests on the
- * link to a child that can relay (`maxChildren > 0`). A relay is peripheral to this link and central to its
+ * Experimental, default off (`test_relay_upstream_dck=true`; DebugTunables.relayUpstreamDck): the connection priority a central
+ * requests on the link to a child that can relay (`maxChildren > 0`). It was worse with a child on phones, so it stays off. A relay is peripheral to this link and central to its
  * own child link, and both settle at HIGH (11.25-15 ms, 15 ms on every controller seen). Two links at the
  * same interval keep a fixed relative anchor phase for the whole connection, and on the Exynos 9611
  * controller (M31) a child anchor in the wrong part of the parent's cycle starves the child link

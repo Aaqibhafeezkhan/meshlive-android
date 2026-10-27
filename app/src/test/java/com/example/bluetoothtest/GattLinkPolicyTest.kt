@@ -82,8 +82,8 @@ class GattLinkPolicyTest {
     @Test
     fun theOffSwitchTurnsEachActiveEntryOff() {
         for (entry in GattLinkPolicy.entries.filterNot { it.proposed }) {
-            // A phone on which the entry applies (some entries match only the Android 10/11 stack).
-            val phone = listOf(traits(33), traits(30), traits(29)).firstOrNull {
+            // A phone on which the entry applies (some entries match only the Android 10/11 stack or one SoC family).
+            val phone = listOf(traits(33), traits(30), traits(29), traits(33, "Xiaomi", "Mediatek")).firstOrNull {
                 DeviceFamilyPolicy.resolve(it, emptySet()).isActive(entry.id)
             }
             assertNotNull("${entry.id} applies to no test phone", phone)

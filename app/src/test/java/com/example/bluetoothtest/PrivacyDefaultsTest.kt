@@ -34,7 +34,7 @@ class PrivacyDefaultsTest {
         val snapshot = userLaunch()
         assertTrue(snapshot.isOn(ConnectivityFeatures.bmh3.id))
         assertTrue(snapshot.isOn(ConnectivityFeatures.bmh3Pseudonyms.id))
-        assertTrue(RotatingDiscoveryFeature.resolve(false, { false }) { null })
+        assertTrue(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, false, { false }) { null })
         // Extras are never read by a user launch.
         assertTrue(userLaunch(extras = emptySet()).isOn("bmh3"))
     }
@@ -44,14 +44,16 @@ class PrivacyDefaultsTest {
         val plain = benchmarkLaunch()
         assertFalse(plain.isOn("bmh3"))
         assertFalse(plain.isOn("bmh3_pseudonyms"))
-        assertFalse(RotatingDiscoveryFeature.resolve(true, { false }) { null })
-        assertFalse(RotatingDiscoveryFeature.resolve(true, { false }) { true })
+        assertFalse(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, true, { false }) { null })
+        assertFalse(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, true, { false }) { true })
         // The pseudonym extra alone is not enough: it is a child of bmh3.
         assertFalse(benchmarkLaunch(extras = setOf(Bmh3PseudonymFeature.EXTRA)).isOn("bmh3_pseudonyms"))
-        val both = benchmarkLaunch(extras = setOf(Bmh3Feature.EXTRA, Bmh3PseudonymFeature.EXTRA))
+        // Pseudonyms also need rotating IDs (a dependency of the catalog since the 2026-10-27 switch audit).
+        assertFalse(benchmarkLaunch(extras = setOf(Bmh3Feature.EXTRA, Bmh3PseudonymFeature.EXTRA)).isOn("bmh3_pseudonyms"))
+        val both = benchmarkLaunch(extras = setOf(Bmh3Feature.EXTRA, Bmh3PseudonymFeature.EXTRA, RotatingDiscoveryFeature.EXTRA))
         assertTrue(both.isOn("bmh3"))
         assertTrue(both.isOn("bmh3_pseudonyms"))
-        assertTrue(RotatingDiscoveryFeature.resolve(true, { it == RotatingDiscoveryFeature.EXTRA }) { null })
+        assertTrue(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, true, { it == RotatingDiscoveryFeature.EXTRA }) { null })
         // A stored user choice never leaks into a benchmark launch.
         assertFalse(benchmarkLaunch(stored = mapOf(Bmh3Feature.PREF to true)).isOn("bmh3"))
     }
@@ -64,7 +66,7 @@ class PrivacyDefaultsTest {
         val childOff = userLaunch(stored = mapOf(Bmh3PseudonymFeature.PREF to false))
         assertTrue(childOff.isOn("bmh3"))
         assertFalse(childOff.isOn("bmh3_pseudonyms"))
-        assertFalse(RotatingDiscoveryFeature.resolve(false, { false }) { if (it == RotatingDiscoveryFeature.PREF) false else null })
+        assertFalse(FeatureCatalog.resolve(RotatingDiscoveryFeature.spec, false, { false }) { if (it == RotatingDiscoveryFeature.PREF) false else null })
     }
 
     @Test
@@ -77,9 +79,9 @@ class PrivacyDefaultsTest {
     @Test
     fun theNeutralBluetoothNameIsNotPartOfTheDefault() {
         // Opt-in only: a user launch without a stored choice keeps the phone's own name.
-        assertFalse(NeutralNameOption.resolve(false, { false }) { false })
+        assertFalse(FeatureCatalog.resolve(NeutralNameOption.spec, false, { false }) { null })
         assertEquals("neutral_bluetooth_name", NeutralNameOption.PREF)
-        assertFalse(NeutralNameOption.resolve(true, { false }) { true })
+        assertFalse(FeatureCatalog.resolve(NeutralNameOption.spec, true, { false }) { true })
     }
 
     @Test

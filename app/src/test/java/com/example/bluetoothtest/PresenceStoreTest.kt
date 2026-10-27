@@ -583,6 +583,108 @@ class PresenceStoreTest {
         assertNull(vault.contact(nodeB))
     }
 
+    /**
+     * Review 2026-10-27 (finding 14): keys of days that are over (this phone's own and its contacts' leases) stayed in the
+     * store after a restart until the next daily maintenance, so a phone seized right after being switched on named more
+     * past IDs than its window allows. They are dropped when the store is loaded, in memory and on disk.
+     */
+    @Test
+    fun keysOfDaysThatAreOverAreDroppedWhenTheStoreIsLoaded() {
+        val owner = vault(File(dir, "owner.bin"), TestCipher(), MemoryFloor())
+        owner.ensureLoaded()
+        val first = vault()
+        first.ensureLoaded()
+        assertTrue(first.storeLease(nodeB, leaseFrom(owner), epoch, 1L))
+        // Five days later the phone starts again.
+        now = epoch + 5 * PresenceLeases.EPOCHS_PER_DAY
+        val restarted = vault()
+        assertTrue(restarted.ensureLoaded())
+        val firstKept = DayKeyWindow.firstDay(now)
+        assertEquals(firstKept, requireNotNull(restarted.windowInfo()).first)
+        val leaseDays = requireNotNull(restarted.contact(nodeB)?.presence).leasesByDay.keys
+        assertTrue(leaseDays.all { it >= PresenceLeases.dayOf(now) - 1 })
+        // The file itself no longer holds them either.
+        val onDisk = PresenceStateCodec.decode(cipher.open(file.readBytes())) { now }.state
+        assertTrue(onDisk.dayKeys.keys.all { it >= firstKept })
+        assertTrue(requireNotNull(onDisk.contacts.single { it.nodeId == nodeB }.presence).leasesByDay.keys.all { it >= PresenceLeases.dayOf(now) - 1 })
+    }
+
+    /**
+     * Review 2026-10-27 (finding 3): blocking a verified contact did not touch the presence vault, so a blocked contact kept
+     * recognising this phone nearby for the rest of its lease (up to four weeks).
+     */
+    @Test
+    fun blockingAContactThatHoldsTheCurrentLeaseRevokesItAndNoNewLeaseGoesOut() {
+        val vault = vault()
+        vault.ensureLoaded()
+        val keyBefore = vault.keyOf().copyOf()
+        vault.recordDelivered(nodeB)
+        val before = vault.generation()
+        assertTrue(vault.revokeForBlocked(nodeB))
+        assertTrue(vault.generation() > before)
+        assertFalse("the blocked contact's keys no longer name this phone", keyBefore.contentEquals(vault.keyOf()))
+        assertFalse(vault.canDeliver(nodeB))
+        assertNull(vault.deliverLease(nodeB, epoch) { true })
+        // Blocking again (already blocked) revokes nothing more.
+        val after = vault.generation()
+        assertFalse(vault.revokeForBlocked(nodeB))
+        assertEquals(after, vault.generation())
+    }
+
+    /**
+     * reviewer review 2026-10-27 (finding 5): a contact blocked while rotating IDs were off kept its lease for the whole run when
+     * the block list could not be read at start. The revocation stays pending and is done once the list can be read, before
+     * another key is handed out.
+     */
+    @Test
+    fun aBlockedContactsLeaseIsRevokedOnceTheBlockListCanBeReadLaterInTheSameRun() {
+        var clock = 1_000_000L
+        val vault = PresenceVault(PresenceStore(file, cipher), floor, SecureRandom(), clockMs = { clock }, epochSource = { now })
+        vault.ensureLoaded()
+        vault.recordDelivered(nodeB)
+        val before = vault.generation()
+        var blockList: Set<NodeId>? = null
+        vault.requestBlockedReconcile { blockList }
+        assertTrue(vault.blockedReconcileOutstanding)
+        assertEquals(before, vault.generation())
+        blockList = setOf(nodeB)
+        clock += 5_000L
+        vault.dayKey(epoch, epoch)
+        assertFalse(vault.blockedReconcileOutstanding)
+        assertTrue(vault.generation() > before)
+        assertFalse(vault.canDeliver(nodeB))
+    }
+
+    /** Security review 2026-10-27 (item 8): the start-up reconciliation never starts a new generation from an unreadable store. */
+    @Test
+    fun theStartupReconciliationOfBlockedPeopleDoesNotRevokeFromAnUnreadableStore() {
+        val vault = vault()
+        vault.ensureLoaded()
+        vault.recordDelivered(nodeB)
+        val broken = vault(sharedCipher = TestCipher().also { it.failing = true })
+        val floorBefore = floor.value
+        assertFalse(broken.revokeForBlocked(nodeB, failClosedWhenUnreadable = false))
+        assertEquals(floorBefore, floor.value)
+        // A block the user makes now still fails closed.
+        assertTrue(broken.revokeForBlocked(nodeB))
+        assertTrue(floor.value > floorBefore)
+    }
+
+    @Test
+    fun blockingSomeoneWithoutACurrentLeaseLeavesEveryoneElsesRecognitionAlone() {
+        val vault = vault()
+        vault.ensureLoaded()
+        val before = vault.generation()
+        assertFalse("a stranger is not in the vault", vault.revokeForBlocked(nodeC))
+        assertNull(vault.contact(nodeC))
+        assertEquals(before, vault.generation())
+        vault.recordDelivered(nodeB)
+        vault.bump()
+        val current = vault.generation()
+        assertFalse("a lease of an older generation is already dead", vault.revokeForBlocked(nodeB))
+        assertEquals(current, vault.generation())
+    }
+
     @Test
     fun turningTheSwitchOffAfterDeliveryRevokesOnceAndNeverAgain() {
         val vault = vault()

@@ -529,8 +529,12 @@ class AudioLiveController(
     /** The listener tapped an audio row (or a reconnect picked a new route): show the listening screen. */
     private var listenToken: Int? = null
 
+    /** The route being listened to (a blocked source hides this route, not every offer with its token). */
+    private var listenOffer: DiscoveryAnnouncement? = null
+
     fun onJoin(announcement: DiscoveryAnnouncement, title: String?) {
         listenToken = announcement.logicalStreamToken()
+        listenOffer = announcement
         listenSourceFingerprint = null
         listenRoot?.findViewById<View>(R.id.audioListenReport)?.visibility = View.GONE
         if (!canListenTo(announcement)) return
@@ -577,7 +581,10 @@ class AudioLiveController(
         view.findViewById<MaterialButton>(R.id.audioListenMute).setOnClickListener { toggleListenMute() }
         view.findViewById<MaterialButton>(R.id.audioListenBlock).setOnClickListener {
             val fingerprint = listenSourceFingerprint ?: return@setOnClickListener
-            BlockedPeople.block(activity.applicationContext, fingerprint)
+            // The store and the presence revocation of a blocked contact (finding 3) touch the Keystore: off the main thread.
+            val context = activity.applicationContext
+            thread(name = "AudioLiveBlock", isDaemon = true) { BlockedPeople.block(context, fingerprint) }
+            listenOffer?.let(PersonPolicy::hideStream)
             android.widget.Toast.makeText(activity, R.string.audio_live_listen_blocked, android.widget.Toast.LENGTH_LONG).show()
             host.leaveListening()
         }
@@ -596,6 +603,17 @@ class AudioLiveController(
         listenSourceFingerprint = header.audioLiveAuth?.let { IdentityFingerprint.fromPublicKey(it.identitySpki) }
         if (listenSourceFingerprint?.let { LocalReporting.hidden(activity, it.hex) } == true) {
             listenToken?.let { LocalReporting.hideStream(activity, it) }
+            host.leaveListening()
+            return
+        }
+        // Review 2026-10-27 (finding 4): the header's identity key names the source; a blocked person's radio (also under a
+        // rotating ID the list could not attribute) is left at once and its offer stays hidden.
+        if (PersonPolicy.blocked(listenSourceFingerprint)) {
+            listenOffer?.let(PersonPolicy::hideStream)
+            android.util.Log.i(
+                "BluetoothVideo",
+                (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "call_blocking: event=stream_left | kind=audio | reason=blocked_person",
+            )
             host.leaveListening()
             return
         }

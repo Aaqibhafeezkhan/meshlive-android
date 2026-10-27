@@ -34,6 +34,32 @@ object RelayedCallsFeature {
     const val EXTRA_NO_DIRECT = "test_relayed_calls_no_direct"
     @Volatile var noDirectSightings = false
 
+    /**
+     * Which routed people the Nearby list shows (design decision 2026-10-26). Default: only saved contacts reached through
+     * other phones; a stranger several phones away is never listed, and a Contacts call searches every route on tap.
+     * `test_relayed_list_strangers=true` (DEBUG) is the earlier arm that lists everyone reachable through helpers.
+     */
+    const val EXTRA_LIST_STRANGERS = "test_relayed_list_strangers"
+    @Volatile var listRoutedStrangers = false
+
+    /** Whether the Nearby list shows a routed row ([isContact] = the row is a saved contact). Direct rows always show. */
+    fun showsRoutedRow(isContact: Boolean): Boolean = isContact || listRoutedStrangers
+
+    /**
+     * Resolved by the shared rule ([FeatureCatalog.resolve]), with the Advanced gating stated in the spec: the switch is an
+     * Advanced row, so a stored ON counts only while Manual settings is on and the experiment never runs hidden (DECISIONS
+     * "Known interactions", B14). Default off.
+     */
+    val spec = FeatureSpec(
+        id = "relayed_calls",
+        prefKey = PREF,
+        defaultEnabled = false,
+        benchmarkExtra = EXTRA,
+        group = ConnectivityFeatures.GROUP,
+        advancedOnly = true,
+        phoneTest = "Design C",
+    )
+
     @Volatile var enabled = false
 
     /** This phone may relay other people's calls (sub-switch "Help calls nearby"). */
@@ -47,17 +73,6 @@ object RelayedCallsFeature {
 
     /** Benchmark rule: only a chain of exactly this many relays counts (0 = normal use). Direct fallback fails. */
     @Volatile var requireRelays = 0
-
-    fun resolve(
-        benchmarkLaunch: Boolean,
-        extra: (String) -> Boolean,
-        advancedSettings: Boolean,
-        stored: (String) -> Boolean,
-    ): Boolean = when {
-        benchmarkLaunch -> extra(EXTRA)
-        advancedSettings -> stored(PREF)
-        else -> false
-    }
 
     /** The cost cap from a DEBUG launch extra; the product value everywhere else. */
     fun resolveMaxRelays(benchmarkLaunch: Boolean, extraValue: Int): Int =
@@ -100,6 +115,13 @@ object RelayedCalls {
     /** A relayed incoming call that rings this long unanswered is declined by the callee (PLAN C3). */
     const val RELAYED_RINGING_CAP_MS = 60_000L
 
+    /**
+     * Review A4 (2026-10-27): the cap never fires before the callee's own ring timeout ([CallRingTimeout.CALLEE_MS], 65 s).
+     * At 60 s it declined before the caller's 60 s "No answer" (which starts later, at the RINGING the relay delivered), so
+     * the caller saw "Call declined" and this phone recorded nothing missed.
+     */
+    fun relayedRingingCapMs(): Long = maxOf(RELAYED_RINGING_CAP_MS, CallRingTimeout.CALLEE_MS)
+
     /** A connectable offer older than this is not used to open a link (it may have a new address). */
     const val OFFER_FRESH_MS = 30_000L
 
@@ -114,6 +136,15 @@ object RelayedCalls {
     fun consents(offer: DiscoveryAnnouncement, rotating: Boolean = false): Boolean =
         offer.isPrivateCallOffer() && offer.rotating == rotating && offer.routeCost == 0 &&
             offer.capabilitySummary and CONSENT_BIT != 0
+
+    /**
+     * DeviceFamilyPolicy `mediatek-call-relay-gatt-helper-off` (off with `test_device_policy_off=<id>`): this phone takes
+     * helper duty only over LE CoC, so over [transport] GATT it neither offers nor accepts it.
+     */
+    internal fun gattHelperDutyBlocked(
+        transport: BluetoothTransportOption?,
+        policy: () -> ResolvedDevicePolicy = { DeviceFamilyPolicy.current() },
+    ): Boolean = transport == BluetoothTransportOption.BLE_GATT && policy().has<CallRelayHelperCocOnly>()
 
     /** True for a connectable idle helper offer: callers may open its listener and send SETUP. */
     fun isRelayHelperOffer(offer: DiscoveryAnnouncement, rotating: Boolean = false): Boolean =
@@ -167,6 +198,13 @@ object RelayedCalls {
         val left = remainingMs - elapsedMs - PER_HOP_RESERVE_MS
         return if (left >= MIN_REMAINING_MS) left.toInt() else null
     }
+
+    /**
+     * The offer a hop is checked against when it answers with a real key: [helperOfferFor] for a rotating route, a version 2
+     * call offer with the fixed prefix otherwise.
+     */
+    fun hopOfferFor(prefix: ByteArray, rotating: Boolean): DiscoveryAnnouncement =
+        if (rotating) helperOfferFor(prefix) else helperOfferFor(prefix).copy(version = DiscoveryAnnouncement.FIXED_PREFIX_VERSION)
 
     /** A minimal version 5 helper offer carrying [rdi]: what a rotating hop's opening is checked against. */
     fun helperOfferFor(rdi: ByteArray): DiscoveryAnnouncement = DiscoveryAnnouncement(

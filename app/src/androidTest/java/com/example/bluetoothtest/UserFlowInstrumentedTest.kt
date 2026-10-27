@@ -71,7 +71,7 @@ class UserFlowInstrumentedTest {
         val prefs = context.getSharedPreferences(UpdateSettings.PREFERENCES_FILE, Context.MODE_PRIVATE)
         var keys: List<String> = emptyList()
         ActivityScenario.launch<MainActivity>(plainLaunch()).use { scenario ->
-            scenario.onActivity { keys = FeatureCatalog.all().map { it.prefKey } }
+            scenario.onActivity { keys = FeatureCatalog.all().mapNotNull { it.prefKey } }
             assertTrue("the activity registers the feature catalog", keys.isNotEmpty())
         }
         for (enabled in listOf(true, false)) {

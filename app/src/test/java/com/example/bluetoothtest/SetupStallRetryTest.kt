@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SetupStallRetryTest {
-    private class FakeWatch(private val dropAfterMs: Long?, private val clock: LongArray) : GattLinkLifetime.AclDownWatch {
+    private class FakeWatch(private val dropAfterMs: Long?, private val clock: LongArray) : AclDownWatch {
         var released = false
         var awaitedBoundMs = -1L
 
@@ -94,26 +94,6 @@ class SetupStallRetryTest {
         assertEquals(
             StallRetryDials.Verdict.Stop,
             StallRetryDials.next(ConnectDurationClass.FAST_ESTABLISH_FAILURE, attemptsUsed = 1, nowMs = 13_600L, deadlineMs = 15_000L),
-        )
-    }
-
-    @Test
-    fun theStallBudgetOnlyAppliesInsideItsBlockOnThisThread() {
-        assertEquals(
-            StallRetryDials.Verdict.NotApplicable,
-            StallRetryDials.next(ConnectDurationClass.FAST_ESTABLISH_FAILURE, attemptsUsed = 1, nowMs = 0L),
-        )
-        val inside = StallRetryDials.within(Long.MAX_VALUE) {
-            val other = arrayOfNulls<StallRetryDials.Verdict>(1)
-            Thread { other[0] = StallRetryDials.next(ConnectDurationClass.FAST_ESTABLISH_FAILURE, 1, nowMs = 0L) }
-                .apply { start(); join() }
-            assertEquals(StallRetryDials.Verdict.NotApplicable, other[0])
-            StallRetryDials.next(ConnectDurationClass.FAST_ESTABLISH_FAILURE, attemptsUsed = 1, nowMs = 0L)
-        }
-        assertTrue(inside is StallRetryDials.Verdict.Dial)
-        assertEquals(
-            StallRetryDials.Verdict.NotApplicable,
-            StallRetryDials.next(ConnectDurationClass.FAST_ESTABLISH_FAILURE, attemptsUsed = 1, nowMs = 0L),
         )
     }
 

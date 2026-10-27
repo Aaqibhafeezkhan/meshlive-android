@@ -12,21 +12,24 @@ class MessagingV2KeysChangedException(message: String) : IllegalStateException(m
 
 /**
  * Sub-switch `test_mv2_chat_session` (DECISIONS Design M "Switches"): on inside the feature; `false` is the control arm, an
- * exchange per message as v1 does. Only meaningful while the master switch `test_messaging_v2` is on.
+ * exchange per message as v1 does. Only meaningful while the master switch `test_messaging_v2` is on. A constant with no
+ * Settings row (its stored `feature_mv2_chat_session` choice was read but never written); a DEBUG benchmark launch reads
+ * only its own extra, default on inside the feature.
  */
 object MessagingV2ChatFeature {
     const val EXTRA = "test_mv2_chat_session"
-    const val PREF = "feature_mv2_chat_session"
+
+    val spec = FeatureSpec(
+        id = "mv2_chat_session",
+        prefKey = null,
+        defaultEnabled = true,
+        benchmarkExtra = EXTRA,
+        group = CallFeatureSpecs.GROUP,
+        dependsOn = listOf(MessagingV2Feature.spec.id),
+        benchmarkDefault = true,
+    )
 
     @Volatile var enabled = true
-
-    /** Needs the master switch. A DEBUG benchmark launch reads only its own extra (default on inside the feature). */
-    internal fun resolve(
-        benchmarkLaunch: Boolean,
-        extra: (String, Boolean) -> Boolean,
-        stored: (String) -> Boolean?,
-        masterOn: Boolean,
-    ): Boolean = masterOn && if (benchmarkLaunch) extra(EXTRA, true) else stored(PREF) ?: true
 }
 
 /** The numbers of the thread link policy (M6). The link's own timers (20 s ping, 60 s dead, 30 min maximum) are in [MessagingV2Limits]. */

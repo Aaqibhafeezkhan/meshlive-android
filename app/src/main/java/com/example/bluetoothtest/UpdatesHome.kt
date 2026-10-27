@@ -31,11 +31,8 @@ internal class UpdatesHome(
         val b = build ?: return
         if (Updater.backend.available && UpdateConsent.reconcile(activity, prefs)) {
             // A restored "yes" without its marker: forgotten, so the question comes back (UpdateConsent).
-            FeatureCatalog.refresh(
-                DebugTunables.benchmarkLaunch,
-                { activity.intent.getBooleanExtra(it, false) },
-                { key -> if (prefs.contains(key)) prefs.getBoolean(key, false) else null },
-            )
+            // Keeps the launch of the activity's last refresh (its extras and Advanced toggle).
+            FeatureCatalog.refreshStoredChoices { key -> if (prefs.contains(key)) prefs.getBoolean(key, false) else null }
         }
         val nearbyOn = FeatureCatalog.isEnabled(UpdateFeatures.newerVersionsNearby.id)
         val release = UpdateRuntime.release(b)
@@ -76,11 +73,8 @@ internal class UpdatesHome(
         when (action) {
             UpdateResumeAction.ASK -> Updater.backend.askOnce(activity) { yes ->
                 UpdateConsent.set(activity, prefs, yes)
-                FeatureCatalog.refresh(
-                    DebugTunables.benchmarkLaunch,
-                    { activity.intent.getBooleanExtra(it, false) },
-                    { key -> if (prefs.contains(key)) prefs.getBoolean(key, false) else null },
-                )
+                // Keeps the launch of the activity's last refresh (its extras and Advanced toggle).
+                FeatureCatalog.refreshStoredChoices { key -> if (prefs.contains(key)) prefs.getBoolean(key, false) else null }
                 apply()
             }
             UpdateResumeAction.CHECK_NOW -> Updater.backend.maybeCheckNow(activity) { activity.runOnUiThread { refreshNotice() } }

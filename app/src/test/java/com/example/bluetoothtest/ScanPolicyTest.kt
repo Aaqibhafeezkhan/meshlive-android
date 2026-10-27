@@ -50,13 +50,19 @@ class ScanPolicyTest {
     @Test
     fun experimentalArmsAreProposedSoTheRegistryNeverReportsThemActive() {
         val proposed = ScanPolicy.entries.filter { it.proposed }.map { it.id }.toSet()
-        for (id in listOf("le-scan-timeout-renewal", "scan-hardware-filter-fallback", "scan-pause-during-connect",
+        for (id in listOf("le-scan-timeout-renewal", "scan-hardware-filter-fallback",
             "hyperos-deepdoze-scan-block", "oem-screenoff-scan-pause-vivo-poco-oppo")) {
             assertTrue(id, id in proposed)
         }
-        // The default-on behaviours are implemented entries.
+        // The default-on behaviours are implemented entries (Bluetooth restart recovery ships on, switch audit A5).
         val active = ScanPolicy.entries.filterNot { it.proposed }.map { it.id }.toSet()
-        assertEquals(setOf("android10-11-location-switch-scan-gate", "scan-silence-watchdog", "android10-scanner-leak-on-process-death"), active)
+        assertEquals(
+            setOf(
+                "android10-11-location-switch-scan-gate", "scan-silence-watchdog", "bluetooth-process-restart-recovery",
+                "android10-scanner-leak-on-process-death",
+            ),
+            active,
+        )
         // Experimental entries never claim local validation.
         ScanPolicy.entries.filter { it.proposed && it.id.startsWith("le-") }.forEach {
             assertEquals(PolicyValidation.EXPERIMENTAL, it.validation)
@@ -101,18 +107,17 @@ class ScanPolicyTest {
         assertFalse(ScanSwitches.renewalAll)
         assertFalse(ScanSwitches.staleRestart)
         assertFalse(ScanSwitches.softwareFilterFallback)
-        assertFalse(ScanSwitches.pauseDuringConnect)
         assertFalse(ScanSwitches.probeUngated) // the quota fix is the shipped behaviour; ungated is the control arm
         val asked = ArrayList<String>()
         ScanSwitches.apply { key, _ -> asked += key; true }
         assertEquals(
             listOf(
                 "test_scan_renewal_legacy", "test_scan_renewal_all", "test_scan_stale_restart",
-                "test_scan_sw_filter_fallback", "test_scan_pause_during_connect", "test_scan_probe_ungated",
+                "test_scan_sw_filter_fallback", "test_scan_probe_ungated",
             ),
             asked,
         )
-        assertTrue(ScanSwitches.renewalAll && ScanSwitches.staleRestart && ScanSwitches.pauseDuringConnect)
+        assertTrue(ScanSwitches.renewalAll && ScanSwitches.staleRestart && ScanSwitches.probeUngated)
         ScanSwitches.applyLaunchExtras(null) // a launch without extras restores every default
         assertFalse(ScanSwitches.renewalAll || ScanSwitches.staleRestart || ScanSwitches.softwareFilterFallback)
     }

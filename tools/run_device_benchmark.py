@@ -18,6 +18,7 @@ from pathlib import Path
 
 from benchmark_layout import output_path, resolve
 from device_log_capture import LogCapture, merge_dump
+import switch_inert
 
 PACKAGE = os.environ.get("MESHLIVE_APP_ID", "io.github.meshlive.app")
 COMPONENT = f"{PACKAGE}/com.example.bluetoothtest.MainActivity"
@@ -301,7 +302,21 @@ def validate_case(case, devices):
     replay_fixture_metadata(case)
     reference_audio_metadata(case)
     media_impairment_metadata(case)
+    refuse_inert_arms(case)
     return participants
+
+
+def refuse_inert_arms(case):
+    """A requested arm that a parent switch masks measures nothing (switch audit F2, tools/switch_inert.py): refuse the
+    case unless it sets `allow_inert_arms` (a deliberate regression control). A `user_launch` case runs the app's user
+    defaults, which this benchmark-launch table does not describe, so it is not checked."""
+    tunables = case.get("tunables", {})
+    if case.get("allow_inert_arms") is True or tunables.get("user_launch") is True:
+        return
+    inert = switch_inert.inert_arms(tunable_extras(tunables))
+    if inert:
+        raise ValueError("Requested arm is inert: " + "; ".join(f"{name} because {parent}" for name, parent in inert) +
+                         " (set allow_inert_arms for a deliberate regression control)")
 
 
 LOG_BUFFER_BYTES = 8 << 20
@@ -338,6 +353,14 @@ TUNABLES = {
     "bluetooth_on_recovery": ("test_bluetooth_on_recovery", bool),
     # Q29 (2026-10-14): incoming-handshake deadline on every call endpoint; false restores dual-endpoint-only.
     "call_handshake_deadline_all": ("test_call_handshake_deadline_all", bool),
+    "caller_answer_deadline": ("test_caller_answer_deadline", bool),
+    "coc_attach_single": ("test_coc_attach_single", bool),
+    "fast_fail_redial_all": ("test_fast_fail_redial_all", bool),
+    "stall_retry_own_budget": ("test_stall_retry_own_budget", bool),
+    "setup_stall_ms": ("test_setup_stall_ms", int),
+    "relayed_budget_from_hop_auth": ("test_relayed_budget_from_hop_auth", bool),
+    # Simplification pass A (2026-10-27): the single connect-retry rule (UnifiedConnectRule); default off.
+    "unified_connect_policy": ("test_unified_connect_policy", bool),
     # Lock-screen notification privacy (2026-10-10): true shows the caller's name (user opt-in).
     "lock_screen_peer_names": ("test_lock_screen_peer_names", bool),
     # Always reachable for calls (2026-10-10): app default on for normal launches, off for every
@@ -351,6 +374,15 @@ TUNABLES = {
     "call_fps_follow": ("test_call_fps_follow", bool),
     "viewer_admission_bounds": ("test_viewer_admission_bounds", bool),
     "source_media_prewarm": ("test_source_media_prewarm", bool),
+    # Setup-latency A/B (2026-10-26, faster-setup): dial a row heard under 1.5 s ago at once (Experimental, off);
+    # microphone start off the UI thread (Experimental, off); idle list scans yield to incoming connections (off).
+    "dial_recent_sighting": ("test_dial_recent_sighting", bool),
+    # Source honours a relay child's keyframe request after a 2 s calm gap at once (Experimental, off).
+    "relay_join_key_frame": ("test_relay_join_key_frame", bool),
+    # A call's first GATT dial redials a fast 0x3E (missed CONNECT_IND) up to 4 times with jitter (Experimental, off).
+    "fast_0x3e_dials": ("test_fast_0x3e_dials", bool),
+    "audio_off_main": ("test_audio_off_main", bool),
+    "reachable_scan_yield": ("test_reachable_scan_yield", bool),
     "drop_leading_blank_frames": ("test_drop_leading_blank_frames", bool),
     # DEBUG only: blank the first N camera images before the leading-blank gate (0..60), to exercise it on any phone.
     "inject_blank_frames": ("test_inject_blank_frames", int),
@@ -381,9 +413,6 @@ TUNABLES = {
     # Experimental (app default off): the CoC central requests the PHY only after the socket connected
     # and hop authentication finished, then waits for onPhyUpdate (readPhy fallback after 1 s).
     "coc_phy_after_connect": ("test_coc_phy_after_connect", bool),
-    # Experimental (app default off): the higher node-ID phone of a direct call pair holds its outgoing
-    # call 1.5 s and yields to the peer's call (one CoC initiator per pair).
-    "coc_single_initiator": ("test_coc_single_initiator", bool),
     # Experimental (app default off): peers tracked by node prefix; stale/replaced addresses rescanned first.
     "peer_address_book": ("test_peer_address_book", bool),
     # Experimental (app default off): Android <= 11 CoC SDUs coalesced up to 8,000 bytes (replaces single-PDU there).
@@ -424,10 +453,14 @@ TUNABLES = {
     "bounded_media_age": ("test_bounded_media_age", bool),
     "relay_child_media_age": ("test_relay_child_media_age", bool),
     "relay_child_reanchor": ("test_relay_child_reanchor", bool),
+    # Child side of relay recovery, split out of relay_child_reanchor (switch audit B2); absent, they follow it.
+    "relay_parent_watch": ("test_relay_parent_watch", bool),
+    "relay_prefer_parent": ("test_relay_prefer_parent", bool),
     # Default-on relay cold start (one child on the carried incoming link); false is the control arm.
     "relay_cold_start": ("test_relay_cold_start", bool),
     # Default-on relay parent fallback after repeated link-establishment failures; false is the control arm.
     "relay_establish_fallback": ("test_relay_establish_fallback", bool),
+    "relay_hold_in_place": ("test_relay_hold_in_place", bool),
     # Default-on fan-out growth in planned-link units; false is the control arm.
     "fanout_proven_links": ("test_fanout_proven_links", bool),
     "relay_parent_trickle": ("test_relay_parent_trickle", bool),
@@ -444,6 +477,8 @@ TUNABLES = {
     "relay_drain_sustained": ("test_relay_drain_sustained", bool),
     "playout_time_target": ("test_playout_time_target", bool),
     "time_queue_budget_ms": ("test_time_queue_budget_ms", int),
+    # Viewer playout budget alone (switch audit B12); absent, time_queue_budget_ms sets both budgets.
+    "playout_time_budget_ms": ("test_playout_time_budget_ms", int),
     "time_queue_floor_ms": ("test_time_queue_floor_ms", int),
     # Default-on relay child stall guard (false = control arm: wait for the 5 s supervision timeout); the
     # upstream DCK priority for a relay-capable child is an experiment (app default off, Android 14+ centrals).
@@ -476,6 +511,14 @@ TUNABLES = {
     # screen with an incoming-call alert, first call frame shown on arrival.
     "call_legacy_low_delay": ("test_call_legacy_low_delay", bool),
     "call_legacy_relief": ("test_call_legacy_relief", bool),
+    # Experimental overhead trims (app default off, no wire change): queued 20 ms call audio units sent as one
+    # pair/batch record (no added delay), and 40 ms pairs on every call route that sends single units.
+    "call_audio_coalesce": ("test_call_audio_coalesce", bool),
+    "call_audio_pairs": ("test_call_audio_pairs", bool),
+    # Experimental CPU trim (app default off, byte-identical records): one AES-GCM cipher per record stream.
+    "aead_cipher_reuse": ("test_aead_cipher_reuse", bool),
+    # Experimental (app default 2 = 40 ms pairs): stream audio units per record, 3-10 = existing BTA2 batches.
+    "stream_audio_batch_frames": ("test_stream_audio_batch_frames", int),
     "call_lock_screen": ("test_call_lock_screen", bool),
     "call_first_frame_now": ("test_call_first_frame_now", bool),
     # Call UX (2026-10-10). Benchmark launches keep the former behaviour unless a tunable opts in: audio
@@ -501,6 +544,19 @@ TUNABLES = {
     "call_relay_chain": ("test_call_relay_chain", bool),
     # Experimental relayed call cap from this phone's measured link (app default off: 15 FPS / 110 kbps).
     "relayed_call_measured_cap": ("test_relayed_call_measured_cap", bool),
+    # Relayed calls (relay-showcase 2026-10-26): control arms of the first-hop 2M protections and the helper's one
+    # fast connect retry (app default on), and the Experimental 1M next hop of a helper (app default off).
+    "relayed_first_hop_direct": ("test_relayed_first_hop_direct", bool),
+    "relayed_hop_retry": ("test_relayed_hop_retry", bool),
+    "relayed_hop_1m": ("test_relayed_hop_1m", bool),
+    # Control arm of relayed-call candidate iteration (app default on): false = the attempt ends at the first failed route.
+    "relayed_candidates": ("test_relayed_candidates", bool),
+    # Control arm of the helper's per-link 2M -> 1M next-hop retry and its bad-2M record (app default on).
+    "relayed_hop_phy_retry": ("test_relayed_hop_phy_retry", bool),
+    # Amendment CP (app defaults: pseudonymous relay edges on, stranger relayed calls on, contact-helper arm off).
+    "relayed_pseudonymous_edges": ("test_relayed_pseudonymous_edges", bool),
+    "relayed_stranger_calls": ("test_relayed_stranger_calls", bool),
+    "relayed_contact_helper": ("test_relayed_contact_helper", bool),
     # Experimental delivery-based probing (app default off): probe ceiling, probe undo, queue overuse.
     "delivery_rate_control": ("test_delivery_rate_control", bool),
     # Control arm for link report version 3 (app default on); false = pre-2026-10-09 behaviour exactly.
@@ -580,6 +636,53 @@ TUNABLES = {
     # every participant of the run; the class override is strong|standard|weak (control matrix only).
     "auto_ladder": ("test_auto_ladder", bool),
     "auto_ladder_class": ("test_auto_ladder_class", str),
+    # Register names the runner used to reject (switch audit 2026-10-27, D/F7): each is the switch's own DEBUG launch extra
+    # (docs/dev/switches.md row of the same name).
+    "call_bluetooth_output": ("test_call_bluetooth_output", bool),
+    "check_for_updates": ("test_check_for_updates", bool),
+    "copied_id_pc_pair": ("test_copied_id_pc_pair", bool),
+    "gatt_input_failure_ends_link": ("test_gatt_input_failure_ends_link", bool),
+    "gatt_phy_split": ("test_gatt_phy_split", str),
+    "gatt_reregister_keep_address": ("test_gatt_reregister_keep_address", bool),
+    "inbound_probe": ("test_inbound_probe", str),
+    "live_media_state": ("test_live_media_state", bool),
+    "newer_versions_nearby": ("test_newer_versions_nearby", bool),
+    "peer_labels": ("test_peer_labels", bool),
+    "phy_after_auth": ("test_phy_after_auth", bool),
+    "phy_move_flood_guard": ("test_phy_move_flood_guard", bool),
+    "phy_move_skip_backlog": ("test_phy_move_skip_backlog", bool),
+    "reachable_while_browsing": ("test_reachable_while_browsing", bool),
+    "relay_hold_in_place": ("test_relay_hold_in_place", bool),
+    "relay_recovery_grace": ("test_relay_recovery_grace", bool),
+    "relay_refusal_escalation": ("test_relay_refusal_escalation", bool),
+    "relay_stall_holdoff": ("test_relay_stall_holdoff", bool),
+    "relay_stall_separate": ("test_relay_stall_separate", bool),
+    "stall_rediscover_ms": ("test_stall_rediscover_ms", int),
+    "stall_remembers_2m": ("test_stall_remembers_2m", bool),
+    "stalled_2m_move": ("test_stalled_2m_move", bool),
+    "stream_adaptive_phy": ("test_stream_adaptive_phy", bool),
+    "stream_row_grouping": ("test_stream_row_grouping", bool),
+    # Shipped-default features (B4/F7): a benchmark launch runs every release-ON feature OFF unless its extra is passed.
+    # Pass these to measure them, or `user_launch: true` to run the app exactly as a person's launch does (user
+    # defaults and stored choices; DEBUG test_user_launch, the other tunables still apply where the app reads them).
+    "user_launch": ("test_user_launch", bool),
+    "call_head_of_line": ("test_call_head_of_line", str),  # off | gatt_default (what users run) | on
+    "rotating_ids": ("test_rotating_ids", bool),
+    "bmh3": ("test_bmh3", bool),
+    "bmh3_pseudonyms": ("test_bmh3_pseudonyms", bool),
+    "bmh3_only": ("test_bmh3_only", bool),
+    "bmh3_contacts_only": ("test_bmh3_contacts_only", bool),
+    "iphone_discovery": ("test_ios_compact_discovery", bool),
+    "generated_names": ("test_generated_names", bool),
+    "bvmid2": ("test_bvmid2", bool),
+    "title_pages": ("test_title_pages", bool),
+    "names_before_answer": ("test_names_before_answer", bool),
+    "visible_by_name": ("test_visible_by_name", bool),
+    "find_pcs": ("test_find_pcs", bool),
+    "messaging_v2": ("test_messaging_v2", bool),
+    "mv2_chat_session": ("test_mv2_chat_session", bool),
+    "audio_live": ("test_audio_live", bool),
+    "store_forward": ("test_store_forward", bool),
 }
 
 

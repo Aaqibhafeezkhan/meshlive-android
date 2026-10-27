@@ -30,17 +30,22 @@ object RotatingDiscoveryFeature {
      */
     const val DEFAULT_ENABLED = true
 
-    @Volatile var enabled = false
-
     /**
-     * [stored] is the user's explicit choice (null: never decided). It is honoured with or without the Advanced settings
-     * view, so leaving Advanced after turning the feature off does not turn it back on.
+     * Resolved by the shared rule ([FeatureCatalog.resolve]). The stored choice is honoured with or without the Advanced
+     * settings view, so leaving Advanced after turning the feature off does not turn it back on. Its switch is the Advanced
+     * privacy row (not a generated row); `bmh3_pseudonyms` and `find_pcs` depend on it.
      */
-    fun resolve(
-        benchmarkLaunch: Boolean,
-        extra: (String) -> Boolean,
-        stored: (String) -> Boolean?,
-    ): Boolean = if (benchmarkLaunch) extra(EXTRA) else stored(PREF) ?: DEFAULT_ENABLED
+    val spec = FeatureSpec(
+        id = "rotating_ids",
+        prefKey = PREF,
+        defaultEnabled = DEFAULT_ENABLED,
+        benchmarkExtra = EXTRA,
+        group = ConnectivityFeatures.GROUP,
+        phoneTest = "RV",
+    )
+
+    /** The value in force since the last `applyRotatingIds` (endpoint and scan code read it). */
+    @Volatile var enabled = false
 }
 
 /** The reviewed RDI construction (design section 3). All integers big-endian. */
@@ -514,7 +519,7 @@ object RecoveryHint {
     }
 }
 
-/** The resolution of the explicit option "Use a neutral Bluetooth name" (default off; PROTOCOL "Pre-handshake exposure"). */
+/** The explicit option "Use a neutral Bluetooth name" (default off; PROTOCOL "Pre-handshake exposure"). */
 object NeutralNameOption {
     /** Advanced setting, default off, independent of the rotating switch. */
     const val PREF = "neutral_bluetooth_name"
@@ -523,9 +528,18 @@ object NeutralNameOption {
     const val EXTRA = "test_neutral_bluetooth_name"
     const val EXTRA_ALIAS = "test_rotating_neutral_name"
 
-    /** A DEBUG benchmark launch changes the name only with its extra; otherwise the stored choice (default off). */
-    fun resolve(benchmarkLaunch: Boolean, extra: (String) -> Boolean, stored: (String) -> Boolean): Boolean =
-        if (benchmarkLaunch) extra(EXTRA) || extra(EXTRA_ALIAS) else stored(PREF)
+    /**
+     * A DEBUG benchmark launch changes the name only with its extra (or the alias); otherwise the stored choice (default
+     * off), with or without the Advanced view. Resolved by [FeatureCatalog.resolve]; its switch is the Advanced privacy row.
+     */
+    val spec = FeatureSpec(
+        id = "neutral_bluetooth_name",
+        prefKey = PREF,
+        defaultEnabled = false,
+        benchmarkExtra = EXTRA,
+        extraAliases = listOf(EXTRA_ALIAS),
+        group = ConnectivityFeatures.GROUP,
+    )
 }
 
 /**

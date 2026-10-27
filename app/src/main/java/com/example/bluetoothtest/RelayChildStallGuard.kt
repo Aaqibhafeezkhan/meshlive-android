@@ -123,9 +123,18 @@ internal class RelayStallHoldoff(private val holdoffMs: Long = HOLDOFF_MS) {
     }
 }
 
-/** The relay's hold-off, kept across forwarders like [RelayChildEstablishment]. */
+/**
+ * The relay's hold-offs, kept across forwarders like [RelayChildEstablishment]. Two maps, one per switch (switch audit
+ * 2026-10-27, A4): the refusal round wrote into the stall guard's map, which the dial gates read only under
+ * `relayStallHoldoff`, so the `test_relay_stall_holdoff=false` control arm also turned refusal escalation's hold-off off.
+ * Read and written only through [RelayChildRecoveryPolicy].
+ */
 internal object RelayChildStall {
+    /** Written when the stall guard closes a child link; read while `test_relay_stall_holdoff` is on. */
     val holdoff = RelayStallHoldoff()
+
+    /** Written when a refusal round fails a dial; read while refusal escalation (`test_relay_refusal_escalation`) is on. */
+    val refusalHoldoff = RelayStallHoldoff()
 }
 
 /** Reports every successful read so [RelayChildStallGuard] sees inbound progress without touching the framing. */

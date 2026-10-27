@@ -286,6 +286,8 @@ internal class LinkPacer(
     private var guardHeldNs = 0L
     private var guardWriteNs = 0L
     private var guardBacklogMs = -1L
+    /** Media the queue had dropped (shed, thinned) by the previous report, -1 when the caller does not count drops. */
+    private var guardDroppedMedia = -1L
     private var guardBlock: DrainGuardBlock? = null
 
     /** 0 = unpaced (nothing measured or seeded). The current pace, including seed decay. */
@@ -367,13 +369,19 @@ internal class LinkPacer(
      * [DRAIN_GUARD_BLOCKED_PERCENT]% of the time since then inside blocking write calls, more than it
      * was held by the pacer ([noteWrite]). A pacer-limited writer sleeps in the pacer instead, so the
      * raise continues. The seed is still held (not decayed) either way.
+     *
+     * Shed-aware (switch audit B3): [droppedMedia] is the queue's running count of media it dropped (a
+     * bounded-age shed to the next keyframe, arriving video dropped while that keyframe is awaited,
+     * thinning). A fall in queue age across reports that also saw a drop is the drop, not the link
+     * draining (on a relay the relay-child media age sheds the very queue the guard reads), so it does
+     * not count as draining. -1 (a caller that does not count drops) keeps the age test alone.
      */
     @Synchronized
-    fun holdSeed(raiseBacklogMs: Long = -1L, drainGuard: Boolean = false): Boolean {
+    fun holdSeed(raiseBacklogMs: Long = -1L, drainGuard: Boolean = false, droppedMedia: Long = -1L): Boolean {
         if (measuredBytesPerSecond > 0L || seedBytesPerSecond <= 0L) return false
         val now = nanoTime()
         guardBlock = null
-        if (raiseBacklogMs >= SEED_RAISE_BACKLOG_MS && !(drainGuard && raiseStalled(now, raiseBacklogMs))) {
+        if (raiseBacklogMs >= SEED_RAISE_BACKLOG_MS && !(drainGuard && raiseStalled(now, raiseBacklogMs, droppedMedia))) {
             val previous = currentRate()
             val cap = (SEED_RAISE_CAP_KBPS * 1_000L / 8 * PACE_GAIN).toLong()
             val raised = minOf(cap, seedBytesPerSecond * SEED_RAISE_NUM / SEED_RAISE_DEN)
@@ -391,6 +399,7 @@ internal class LinkPacer(
             guardHeldNs = 0L
             guardWriteNs = 0L
             guardBacklogMs = raiseBacklogMs
+            guardDroppedMedia = droppedMedia
         }
         seededAtNs = now
         return true
@@ -412,14 +421,18 @@ internal class LinkPacer(
         guardWriteNs += writeNs.coerceAtLeast(0L)
     }
 
-    private fun raiseStalled(nowNs: Long, backlogMs: Long): Boolean {
+    private fun raiseStalled(nowNs: Long, backlogMs: Long, droppedMedia: Long): Boolean {
         val previous = guardBacklogMs
         val elapsedNs = nowNs - guardEvalNs
         if (previous < 0L || elapsedNs <= 0L) return false
-        val notDraining = backlogMs + DRAIN_GUARD_MIN_DROP_MS > previous
+        // A drop since the previous report explains any fall in queue age (B3): it is not draining.
+        val dropped = guardDroppedMedia >= 0L && droppedMedia > guardDroppedMedia
+        val notDraining = dropped || backlogMs + DRAIN_GUARD_MIN_DROP_MS > previous
         val blocking = guardWriteNs * 100L >= elapsedNs * DRAIN_GUARD_BLOCKED_PERCENT && guardWriteNs > guardHeldNs
         if (!notDraining || !blocking) return false
-        guardBlock = DrainGuardBlock(previous, backlogMs, guardWriteNs * 100L / elapsedNs, guardHeldNs * 100L / elapsedNs)
+        guardBlock = DrainGuardBlock(
+            previous, backlogMs, guardWriteNs * 100L / elapsedNs, guardHeldNs * 100L / elapsedNs, shed = dropped,
+        )
         return true
     }
 
@@ -565,7 +578,14 @@ internal class LinkPacer(
 }
 
 /** What the experimental drain guard saw when it refused a seed raise (percentages of the time since the previous report). */
-internal data class DrainGuardBlock(val previousBacklogMs: Long, val backlogMs: Long, val writeBlockedPercent: Long, val heldPercent: Long)
+internal data class DrainGuardBlock(
+    val previousBacklogMs: Long,
+    val backlogMs: Long,
+    val writeBlockedPercent: Long,
+    val heldPercent: Long,
+    /** The queue dropped media since the previous report, so its age fall was not counted as draining (B3). */
+    val shed: Boolean = false,
+)
 
 /**
  * The experimental join probe's outcome ([LinkPacer.resolveJoinProbe], [LinkPacer.expireJoinProbe]):
@@ -586,7 +606,7 @@ internal data class JoinProbeResult(
 
 internal fun DrainGuardBlock.benchmarkLine(role: String, peer: String, seedKbps: Int): String =
     "BENCHMARK pacer_seed_raise_blocked: role=$role | peer=$peer | seedKbps=$seedKbps | backlogMs=$backlogMs | " +
-        "previousBacklogMs=$previousBacklogMs | writeBlockedPct=$writeBlockedPercent | heldPct=$heldPercent"
+        "previousBacklogMs=$previousBacklogMs | writeBlockedPct=$writeBlockedPercent | heldPct=$heldPercent | shed=$shed"
 
 /**
  * Whether a viewer that has not measured its parent link should report that media still arrives on
@@ -684,9 +704,13 @@ internal class SustainedDeliveryMeter(
     /**
      * The writer finished handing [bytes] (wire bytes) to the link at [nowNs]. [backlogged]: media is
      * still queued for this child now; [heldNs]: how long the pacer held the writer before this write.
+     * [leadCapped]: the Experimental relay lead cap was in force (the child reports late media). Such a
+     * cycle is held by the relay's own cap, so it measures nothing, but the link is still the limit and
+     * media still waits: the last estimate is kept instead of expiring (switch audit B3: the time queue
+     * otherwise fell back to the fixed budget exactly while the child was late). It still ends the run.
      */
     @Synchronized
-    fun onWritten(nowNs: Long, bytes: Int, backlogged: Boolean, heldNs: Long = 0L) {
+    fun onWritten(nowNs: Long, bytes: Int, backlogged: Boolean, heldNs: Long = 0L, leadCapped: Boolean = false) {
         val startNs = prevEndNs
         val startBacklogged = prevBacklogged
         prevEndNs = nowNs
@@ -696,6 +720,9 @@ internal class SustainedDeliveryMeter(
         val linkBound = startBacklogged && backlogged && heldNs <= cycleNs * maxHeldFraction
         if (!linkBound) {
             streakStartNs = Long.MIN_VALUE
+            if (leadCapped && startBacklogged && backlogged && lastAtNs != Long.MIN_VALUE && nowNs - lastAtNs <= holdNs) {
+                lastAtNs = nowNs
+            }
             return
         }
         if (streakStartNs == Long.MIN_VALUE) streakStartNs = startNs

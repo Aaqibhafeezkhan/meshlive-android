@@ -15,7 +15,8 @@ import com.google.android.material.materialswitch.MaterialSwitch
  * - The switch shows the effective value: the user's explicit choice, else the shipped default.
  * - Touching it stores an explicit choice, which then wins over later changes of the default.
  * - A benchmark launch shows the launch options and cannot be changed (its extras are the only switch).
- * - A feature with [FeatureSpec.dependsOn] is greyed out while its parent is off.
+ * - A feature with [FeatureSpec.dependsOn] is greyed out while one of the features it needs is off.
+ * - A constant ([FeatureSpec.constant]) has no row.
  */
 internal class FeatureSettingsBlock(
     private val container: ViewGroup,
@@ -27,8 +28,8 @@ internal class FeatureSettingsBlock(
         /** True in a DEBUG benchmark launch: the switches show the extras and cannot be changed. */
         val benchmarkLaunch: Boolean
 
-        /** A launch extra, read only in a benchmark launch. */
-        fun extra(name: String): Boolean
+        /** A launch extra; null when the launch does not carry it ([FeatureCatalog.resolve]). */
+        fun extra(name: String): Boolean?
 
         /**
          * Called before a feature is switched ON. Return true when the host takes over (shows an
@@ -51,7 +52,7 @@ internal class FeatureSettingsBlock(
         if (rows.isEmpty()) {
             val inflater = LayoutInflater.from(container.context)
             // A spec with no title (titleRes 0) has no Settings row: it is still registered and follows its default.
-            specs.filter { it.titleRes != 0 }.forEachIndexed { index, spec ->
+            specs.filter { it.titleRes != 0 && !it.constant }.forEachIndexed { index, spec ->
                 val view = inflater.inflate(R.layout.item_feature_switch, container, false)
                 val switch = view.findViewById<MaterialSwitch>(R.id.featureRowSwitch)
                 // Settings redesign (2026-10-17): icon, then the label (a tap opens the explanation), then the switch
@@ -84,7 +85,7 @@ internal class FeatureSettingsBlock(
         val snapshot = FeatureCatalog.resolveAll(host.benchmarkLaunch, host::extra, ::stored)
         binding = true
         rows.forEach { row ->
-            val parentOn = row.spec.dependsOn?.let(snapshot::isOn) ?: true
+            val parentOn = row.spec.dependsOn.all(snapshot::isOn)
             row.switch.isChecked = snapshot.isOn(row.spec)
             row.switch.isEnabled = !host.benchmarkLaunch && parentOn
         }
@@ -107,7 +108,7 @@ internal class FeatureSettingsBlock(
     }
 
     private fun commit(spec: FeatureSpec, enabled: Boolean) {
-        prefs.edit().putBoolean(spec.prefKey, enabled).apply()
+        prefs.edit().putBoolean(spec.prefKey ?: return, enabled).apply()
         refresh()
         host.onChanged(spec, enabled)
     }

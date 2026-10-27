@@ -93,4 +93,11 @@ class WeakPairReachTest {
 
         assertTrue("the Meet scan matches in software by default", DebugTunables.meetSoftwareFilter)
     }
+
+    @Test
+    fun aContactCallWaitsLongEnoughForATwoRelayRouteOnlyWithRelayedCallsOn() {
+        assertEquals(WeakPairReach.RELAYED_CONTACT_WAIT_MS, WeakPairReach.contactDialWaitMs(10_000L, relayedCalls = true))
+        assertEquals(10_000L, WeakPairReach.contactDialWaitMs(10_000L, relayedCalls = false))
+        assertEquals(60_000L, WeakPairReach.contactDialWaitMs(60_000L, relayedCalls = true))
+    }
 }

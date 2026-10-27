@@ -138,6 +138,10 @@ internal class PeerDeliveryEstimate {
         }
         lastRawBytes = rawBytes
         lastRawClock = rawClock
+        // No byte counted yet: the clock has no arrival to time (older endpoints and the Windows app
+        // report "0 bytes at 0 ms" before the first media). As a rate sample it stretched the first
+        // interval back to the link's start, over the whole ring (w2-pcs22-video 2026-10-27: 11 kbps).
+        if (received <= 0L) return true
         // The clock is the arrival of the last counted byte: unchanged means nothing new arrived.
         if (history.isNotEmpty() && clockMs <= history.last()[0]) return true
         history.lastOrNull()?.let { previous ->
@@ -259,9 +263,17 @@ internal class CallDeliveryReports(val enabled: Boolean) {
         return true
     }
 
-    /** The delivery to attach to the next report, or null for version 2. */
+    /**
+     * The delivery to attach to the next report, or null for version 2. Null also until the first
+     * media byte arrived: the clock is the arrival time of the last counted byte, and with none it
+     * read 0 ms, the start of the link (the endpoint handshake, before the ring). A Windows caller
+     * mapped that "0 bytes at 0 ms" to its first media write, so its one-way-delay floor sat the whole
+     * ring too low and every later report read the ring as queue: 10.4 and 13.3 s against 9.7 and
+     * 12.6 s of ringing, cutting its video 138 -> 26 kbps and 15 -> 5 FPS (w2-pcs22-video-1/2,
+     * 2026-10-27). The version-1 hello already told the peer this hop accepts version 3.
+     */
     fun deliveryFor(callKnown: Boolean, relayHops: Int, snapshot: () -> LinkDelivery): LinkDelivery? =
-        if (enabled && peerAccepts && callKnown && relayHops == 0) snapshot() else null
+        if (enabled && peerAccepts && callKnown && relayHops == 0) snapshot().takeIf { it.receivedBytes > 0L } else null
 
     /** The peer's delivery to use, or null in the control arm. */
     fun accepted(report: LinkCapacityReport): LinkDelivery? = report.delivery?.takeIf { enabled }

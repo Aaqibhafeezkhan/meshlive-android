@@ -106,6 +106,23 @@ class Bmh3Presentation(
     init {
         if (!Bmh3Crypto.isCanonicalSpki(identity.publicKeyEncoded)) throw Bmh3Failure("identity key is not the canonical P-256 SPKI")
     }
+
+    companion object {
+        /**
+         * The one place that decides what a throwaway presentation signs (review 2026-10-27, S2). A LINK block of a
+         * **responder** clears link-hello bit 3, so no `BDO1` (and no salt) follows until the user accepts; an initiator's
+         * keeps it, because a responder that answers with its real key still exchanges the opening
+         * ([RelayIdentityPolicy.skipsLinkOpening]). End-to-end blocks keep bit 3 (the reveal uses `BDX1`).
+         */
+        fun stranger(identity: SigningIdentity, capabilities: NodeCapabilities, purpose: Bmh3Purpose, responder: Boolean): Bmh3Presentation {
+            val signed = if (purpose == Bmh3Purpose.LINK && responder) {
+                capabilities.copy(transportMask = capabilities.transportMask and RotatingDiscoveryIds.LINK_HELLO_BIT.inv())
+            } else {
+                capabilities
+            }
+            return Bmh3Presentation(identity, signed, pseudonym = true)
+        }
+    }
 }
 
 /** The identity and capabilities this phone presents in one handshake. */
@@ -125,8 +142,14 @@ class Bmh3Config(
      * BMH3 Phase 1 exactly.
      */
     val stranger: Bmh3Presentation? = null,
+    /**
+     * Design OR (DEBUG prototype): the `RELAY_SEEK` feature bits this phone signs in a responder block of a LINK
+     * handshake (a listener that would admit a search now); null signs nothing, exactly as before.
+     */
+    relaySeek: Int? = null,
 ) {
     val buildTag: BuildTag? = if (purpose == Bmh3Purpose.LINK) buildTag else null
+    val relaySeek: Int? = if (purpose == Bmh3Purpose.LINK) relaySeek else null
 
     /** The presentation that carries the real identity. */
     val real: Bmh3Presentation = Bmh3Presentation(identity, capabilities, pseudonym = false)
@@ -148,6 +171,8 @@ class Bmh3Extensions(
     internal val buildTagSeen: Boolean = buildTag != null,
     /** The `PSEUDONYM` marker: the key of this block is a throwaway (PROTOCOL "Phase 2: pseudonymous stranger identities"). */
     val pseudonym: Boolean = false,
+    /** Type 5 `RELAY_SEEK` (Design OR, DEBUG prototype): the feature bits of a helper that would admit a search; responder LINK blocks only. */
+    val relaySeek: Int? = null,
 ) {
     init {
         opening?.let { value ->
@@ -156,9 +181,10 @@ class Bmh3Extensions(
             }
         }
         require(intent == null || intent in 0..0xff)
+        require(relaySeek == null || relaySeek in 0..0xff)
     }
 
-    /** The 96-byte extension area: the extensions in ascending type order behind a `PAD` of zeros. */
+    /** The 112-byte extension area ([Bmh3Wire.EXTENSION_BYTES]): the extensions in ascending type order behind a `PAD` of zeros. */
     fun encodeArea(): ByteArray {
         val body = ByteArrayOutputStream()
         opening?.let { value ->
@@ -186,6 +212,12 @@ class Bmh3Extensions(
             body.write(0)
             body.write(0)
         }
+        relaySeek?.let { value ->
+            body.write(TYPE_RELAY_SEEK)
+            body.write(0)
+            body.write(1)
+            body.write(value)
+        }
         val used = body.size()
         val spare = Bmh3Wire.EXTENSION_BYTES - used
         require(spare >= 0 && (spare == 0 || spare >= 3)) { "Extensions do not fit the 112-byte area" }
@@ -206,6 +238,7 @@ class Bmh3Extensions(
         const val TYPE_INTENT = 2
         const val TYPE_BUILD_TAG = 3
         const val TYPE_PSEUDONYM = 4
+        const val TYPE_RELAY_SEEK = 5
         const val BUILD_TAG_BYTES = 2
         const val CRITICAL_BIT = 0x80
         val NONE = Bmh3Extensions()
@@ -220,6 +253,7 @@ class Bmh3Extensions(
             var buildTag: BuildTag? = null
             var buildTagSeen = false
             var pseudonym = false
+            var relaySeek: Int? = null
             while (position < area.size) {
                 if (position + 3 > area.size) throw Bmh3Failure("truncated extension")
                 val type = area[position].toInt() and 0xff
@@ -252,11 +286,15 @@ class Bmh3Extensions(
                         if (value.isNotEmpty()) throw Bmh3Failure("pseudonym marker malformed")
                         pseudonym = true
                     }
+                    TYPE_RELAY_SEEK -> {
+                        if (value.size != 1) throw Bmh3Failure("relay seek malformed")
+                        relaySeek = value[0].toInt() and 0xff
+                    }
                     else -> if (type and CRITICAL_BIT != 0) throw Bmh3Failure("unknown critical extension")
                 }
                 position += 3 + length
             }
-            return Bmh3Extensions(opening, intent, buildTag, buildTagSeen, pseudonym)
+            return Bmh3Extensions(opening, intent, buildTag, buildTagSeen, pseudonym, relaySeek)
         }
     }
 }
@@ -274,6 +312,9 @@ class Bmh3Peer internal constructor(
 
     /** True when the peer's block declared its key a throwaway: never admit, pin or display it as an identity. */
     val pseudonymous: Boolean get() = extensions.pseudonym
+
+    /** Design OR: the `RELAY_SEEK` feature bits the peer signed (0 when none). */
+    val relaySeek: Int get() = extensions.relaySeek ?: 0
 
     /** The opening entries the peer proved in its block (rotating-ID discovery binding), or null when it sent none. */
     fun openingEntries(): List<OpeningEntry>? = extensions.opening?.let { value ->
@@ -559,6 +600,7 @@ internal abstract class Bmh3Party(
             extensions.intent,
             config.buildTag,
             pseudonym = presented.pseudonym,
+            relaySeek = if (role == "Responder") config.relaySeek else null,
         )
         prefix.write(ownExtensions.encodeArea())
         val prefixBytes = prefix.toByteArray()
@@ -625,6 +667,9 @@ internal abstract class Bmh3Party(
     private fun checkPlacement(extensions: Bmh3Extensions, responderBlock: Boolean, message: Int, blockOrder: Bmh3Order) {
         if (extensions.buildTagSeen && config.purpose != Bmh3Purpose.LINK) throw Bmh3Failure("build tag outside the link handshake")
         if (extensions.opening != null && !responderBlock) throw Bmh3Failure("opening outside a responder block")
+        if (extensions.relaySeek != null && (!responderBlock || config.purpose != Bmh3Purpose.LINK)) {
+            throw Bmh3Failure("relay seek outside a responder link block")
+        }
         // A throwaway key must not open a rotating ID: the salt would let a prober confirm the owner of a node ID.
         if (extensions.opening != null && extensions.pseudonym) throw Bmh3Failure("opening in a pseudonymous block")
         if (extensions.intent != null && (responderBlock || message != 3 || blockOrder != Bmh3Order.I_FIRST)) {
@@ -789,7 +834,7 @@ internal class Bmh3Initiator(
 
 /**
  * The responder. [mode] picks the order (SR4); [tagKeys] are the `K_tag` values of its own lease keys for the
- * current epoch window. [beforeReply] runs for an R_FIRST msg1 without a matching tag, before a key is drawn or a
+ * current epoch window. [beforeReply] runs for every R_FIRST msg1 (told whether its tag matched), before a key is drawn or a
  * signature made (the stranger tarpit, SR11); it may sleep or throw. [admitInitiator] runs after the initiator's
  * block verified: false refuses it (R_FIRST) or withholds the responder's identity (I_FIRST).
  */
@@ -849,7 +894,8 @@ internal class Bmh3Responder(
         qrMatched = qrHit
         val chosen = if (mode == Bmh3ResponderMode.EVERYONE || tagMatched) Bmh3Order.R_FIRST else Bmh3Order.I_FIRST
         if (chosen == Bmh3Order.I_FIRST && flags and Bmh3Wire.FLAG_MAY_REVEAL_FIRST == 0) throw Bmh3Failure("order conflict")
-        if (chosen == Bmh3Order.R_FIRST && !tagMatched) beforeReply(false)
+        // Every R_FIRST msg1 passes the hook (a lease holder too: the Meet screen refuses everything but its code).
+        if (chosen == Bmh3Order.R_FIRST) beforeReply(tagMatched)
         order = chosen
         // Rule P: an R_FIRST answer to a msg1 whose tag did not match is the stranger presentation, if there is one.
         // I_FIRST answers only an admitted initiator, so it stays real.

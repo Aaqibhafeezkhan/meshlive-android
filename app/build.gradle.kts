@@ -2,7 +2,6 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
 }
 
 // Optional 32-bit ARM build (default OFF, the shipped ABI set is unchanged): -PenableArmeabiV7a=true
@@ -77,8 +76,8 @@ android {
         applicationId = appId
         minSdk = 29
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.3.2-beta"
+        versionCode = 6
+        versionName = "0.4.0-beta"
         // versionCode/versionName are literals: no date, git hash or counter, so a rebuild of a commit gets
         // the same version (the make_release.py and fastlane changelog readers parse these two lines).
 
@@ -175,9 +174,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    kotlinOptions {
-        jvmTarget = "11"
-    }
+    // Built-in Kotlin (AGP 9) replaces the kotlin-android plugin and kotlinOptions: jvmTarget now follows
+    // compileOptions.targetCompatibility (11), the value kotlinOptions set before.
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")

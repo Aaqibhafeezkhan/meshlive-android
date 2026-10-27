@@ -9,10 +9,11 @@ import android.content.pm.PackageManager
 /**
  * Experimental, default off (user question Q-N2; device-family backlog B-06): resume the foreground service after the phone
  * restarts or the app is updated, so a relay phone that rebooted overnight is back on the mesh without someone opening the
- * app. Register entry `boot-resume-after-restart`, switch `test_boot_resume` (debug) or the opt-in user setting.
+ * app. Register entry `boot-resume-after-restart`, switch `test_boot_resume` (debug). A release opt-in setting is
+ * not built (PLAN; user question Q-N2): until it is, a release build never starts anything at boot.
  *
  * Default off means inert: [BootResumeReceiver] is declared `android:enabled="false"` in the manifest and
- * [setEnabled] turns the component on only while the user's opt-in is on, so a default install runs nothing at boot.
+ * [syncComponent] turns the component on only while the DEBUG switch is on, so a default install runs nothing at boot.
  *
  * Only the connectedDevice type is started (Android 15 forbids camera, microphone, mediaPlayback and others from
  * BOOT_COMPLETED; connectedDevice is allowed, and BOOT_COMPLETED / MY_PACKAGE_REPLACED are exemptions from the Android 12
@@ -21,8 +22,6 @@ import android.content.pm.PackageManager
  * (a root decision); [afterStart] is the single hook for it.
  */
 internal object BootResume {
-    private const val KEY_ENABLED = "boot_resume_enabled"
-
     val ACTIONS: Set<String> = setOf(
         Intent.ACTION_BOOT_COMPLETED,
         Intent.ACTION_MY_PACKAGE_REPLACED,
@@ -40,15 +39,11 @@ internal object BootResume {
     /** Root hook: called after the service start was requested (for example to start a headless relay host). */
     @Volatile var afterStart: ((Context) -> Unit)? = null
 
-    fun isEnabled(context: Context): Boolean = ServiceSwitches.bootResume || prefs(context).getBoolean(KEY_ENABLED, false)
+    /** The DEBUG switch ([ServiceSwitches.bootResume]); [context] stays for the release opt-in that PLAN keeps open. */
+    @Suppress("UNUSED_PARAMETER")
+    fun isEnabled(context: Context): Boolean = ServiceSwitches.bootResume
 
-    /** The user's opt-in (relay settings). Enables or disables the receiver component to match. */
-    fun setEnabled(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_ENABLED, enabled).apply()
-        syncComponent(context)
-    }
-
-    /** Make the manifest component match the current opt-in (also after the debug switch or an emergency wipe). */
+    /** Make the manifest component match the switch (after the debug switch or an emergency wipe). */
     fun syncComponent(context: Context) {
         val state = if (isEnabled(context)) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED
         runCatching {
@@ -57,9 +52,6 @@ internal object BootResume {
             )
         }
     }
-
-    private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(OnboardingActivity.PREFERENCES, Context.MODE_PRIVATE)
 }
 
 class BootResumeReceiver : BroadcastReceiver() {
