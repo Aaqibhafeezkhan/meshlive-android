@@ -86,8 +86,8 @@ Bluetooth on its own reaches about 10 to 30 metres. MeshLive turns every phone r
 | Platform | Status |
 | --- | --- |
 | Android 10+ | Available: [GitHub releases](https://github.com/MeshLive/meshlive-android/releases/latest), [Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/MeshLive/meshlive-android) |
-| Windows | Coming soon (calls with phones) |
-| iPhone and Mac | In progress |
+| Windows | Beta: [GitHub releases](https://github.com/MeshLive/meshlive-windows/releases/latest) (unsigned zip) |
+| iPhone and Mac | Source build: [meshlive-apple](https://github.com/MeshLive/meshlive-apple) (Mac app experimental; iPhone not yet tested on hardware) |
 
 ## Privacy
 
