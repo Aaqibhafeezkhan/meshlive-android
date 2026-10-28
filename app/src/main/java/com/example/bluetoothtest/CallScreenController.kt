@@ -222,6 +222,9 @@ internal class CallScreenController(
         remoteStateText.visibility = if (text == null) View.GONE else View.VISIBLE
     }
 
+    /** The other person's video fills the screen (the self-view is the small one, or absent). */
+    val remoteLarge: Boolean get() = largeView() === remoteContainer
+
     private fun largeView(): FrameLayout =
         if (localLarge && localPreview != LocalPreview.NONE) localContainer else remoteContainer
 

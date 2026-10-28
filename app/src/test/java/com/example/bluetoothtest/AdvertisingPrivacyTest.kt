@@ -110,13 +110,14 @@ class AdvertisingPrivacyTest {
     }
 
     @Test
-    fun theNeutralNameOptionIsOffByDefaultAndABenchmarkLaunchNeedsItsOwnExtra() {
+    fun theNeutralNameOptionIsOnByDefaultAndABenchmarkLaunchNeedsItsOwnExtra() {
         val spec = NeutralNameOption.spec
         val none = { _: String -> false }
         val unset = { _: String -> null as Boolean? }
-        // A normal launch follows the stored choice; the default is off.
-        assertFalse(FeatureCatalog.resolve(spec, false, none, unset))
+        // A normal launch follows the stored choice; the default is on (2026-10-27), a stored off stays off.
+        assertTrue(FeatureCatalog.resolve(spec, false, none, unset))
         assertTrue(FeatureCatalog.resolve(spec, false, none) { if (it == NeutralNameOption.PREF) true else null })
+        assertFalse(FeatureCatalog.resolve(spec, false, none) { if (it == NeutralNameOption.PREF) false else null })
         // A benchmark launch ignores the stored choice and renames only with the extra or its alias.
         assertFalse(FeatureCatalog.resolve(spec, true, none) { true })
         assertTrue(FeatureCatalog.resolve(spec, true, { it == NeutralNameOption.EXTRA }, unset))
@@ -143,8 +144,9 @@ class AdvertisingPrivacyTest {
         assertEquals(NeutralBluetoothName.Action(null, null, false), on(null, "Pixel of Sam"))
         // A failed earlier rename left the original in place while the copy exists: write "Phone" again.
         assertEquals(NeutralBluetoothName.Action("Phone", "Pixel of Sam", false), on("Pixel of Sam", "Pixel of Sam"))
-        // Turning it off: restore only our own "Phone".
-        assertEquals(NeutralBluetoothName.Action("Pixel of Sam", null, true), off("Phone", "Pixel of Sam"))
+        // Turning it off: restore only our own "Phone"; the saved copy stays until the adapter reads it back.
+        assertEquals(NeutralBluetoothName.Action("Pixel of Sam", null, false), off("Phone", "Pixel of Sam"))
+        assertEquals(NeutralBluetoothName.Action(null, null, true), off("Pixel of Sam", "Pixel of Sam"))
         // The user chose another name meanwhile: keep it and drop the saved copy.
         assertEquals(NeutralBluetoothName.Action(null, null, true), off("My phone", "Pixel of Sam"))
         // Nothing saved (data cleared): nothing to restore.

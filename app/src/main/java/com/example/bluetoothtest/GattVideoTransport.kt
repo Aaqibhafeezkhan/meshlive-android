@@ -936,6 +936,13 @@ object GattVideoClient {
         val activeGattRef = AtomicReference<BluetoothGatt?>()
         // One requested-vs-observed PHY/MTU/priority/interval line (BluetoothTransportPolicy).
         val linkDiag = LeLinkDiagnostics.create("gatt-video", device.address).also { it.requestedPhy = phyPreference.label }
+        // Experimental phy_after_priority (off): the setup PHY waits while the link sits outside the requested priority window.
+        val phyHold = PhyAfterPriority(
+            link = "gatt-video",
+            schedule = { delayMs, action -> Handler(Looper.getMainLooper()).postDelayed({ action() }, delayMs) },
+            nowMs = SystemClock::elapsedRealtime,
+            log = { line -> Log.i("BluetoothVideo", line) },
+        )
         val priorityKeeper = LeConnectionPriorityKeeper(
             link = "gatt-video",
             sendRequest = { priority -> activeGattRef.get()?.requestConnectionPriority(priority.requestValue) == true },
@@ -943,6 +950,7 @@ object GattVideoClient {
             active = { !cancelled.get() && !teardown.disconnected },
             log = { line -> Log.i("BluetoothVideo", line) },
             gate = gate,
+            phyHold = phyHold,
         )
 
         fun logSetup(stage: String, details: String = "", terminal: Boolean = false) {
@@ -1216,14 +1224,16 @@ object GattVideoClient {
                         if (phyMasks.txMask != phyMasks.rxMask) {
                             Log.i("BluetoothVideo", "BENCHMARK gatt_phy_split: link=gatt-video | requested=${DebugTunables.experimentalPhySplit?.debugValue} | txMask=${phyMasks.txMask} | rxMask=${phyMasks.rxMask}")
                         }
-                        gate.submit(
-                            LlProcedure.PHY,
-                            "gatt_video_phy",
-                            expectedTx = LePhy.valueForMask(phyMasks.txMask),
-                            fallback = { activeGatt.setPreferredPhy(LePhy.MASK_1M, LePhy.MASK_1M, phyMasks.option); true },
-                        ) {
-                            activeGatt.setPreferredPhy(phyMasks.txMask, phyMasks.rxMask, phyMasks.option)
-                            true
+                        phyHold.submit("gatt_video_phy", isActive = { !cancelled.get() && !teardown.disconnected }) {
+                            gate.submit(
+                                LlProcedure.PHY,
+                                "gatt_video_phy",
+                                expectedTx = LePhy.valueForMask(phyMasks.txMask),
+                                fallback = { activeGatt.setPreferredPhy(LePhy.MASK_1M, LePhy.MASK_1M, phyMasks.option); true },
+                            ) {
+                                activeGatt.setPreferredPhy(phyMasks.txMask, phyMasks.rxMask, phyMasks.option)
+                                true
+                            }
                         }
                     }
                     activeGatt.readPhy()

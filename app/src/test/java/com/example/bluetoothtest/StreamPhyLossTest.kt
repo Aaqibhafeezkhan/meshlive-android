@@ -196,13 +196,13 @@ class StreamPhyLossTest {
 
     @Test
     fun aStalledDirectCallSetupIsRememberedUnderTheAdvertisedPrefix() {
-        val prefix = byteArrayOf(0xd6.toByte(), 0xdd.toByte(), 0x86.toByte(), 0x7d, 0xe9.toByte(), 0x1f)
+        val prefix = byteArrayOf(0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f)
         assertEquals(
-            "d6dd867de91f",
+            "5a5b5c5d5e5f",
             AdaptivePhyMemory.advertisedPeerToRemember(true, stalled = true, direct = true, rotating = false, nodePrefix = prefix),
         )
         // The same key phyFor reads back before the next dial.
-        assertEquals(AdaptivePhyMemory.prefixLabel(prefix), "d6dd867de91f")
+        assertEquals(AdaptivePhyMemory.prefixLabel(prefix), "5a5b5c5d5e5f")
     }
 
     @Test

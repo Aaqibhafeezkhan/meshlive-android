@@ -1,6 +1,6 @@
 # Links and framing
 
-Part of the [protocol reference](README.md): the records carried on every hop, the GATT byte stream and the compact-header draft.
+Part of the [protocol reference](README.md): the records carried on every hop, the GATT byte stream and the compact-header and video-codec drafts.
 
 ## Hop and endpoint records
 
@@ -249,3 +249,140 @@ plaintext   : item count (1, 2..64) | count x [ inner hop type (1) | length (uns
 - Handshakes (`BMH2`, `BMH3`), `BDO1`, `BRS1`, `BFG1`, `BGK1`, labels and `BMC2` payloads, call video fragments, store-and-forward records, all AEAD keys, nonces and tags (16 bytes).
 - The exact-next hop sequence, the increasing endpoint sequence, mesh replay and duplicate rules, admission and overload guards.
 - Separately reviewed proposals, not part of `CH1`: one AEAD layer on direct calls, and amortised signatures on audio-only live records (DECISIONS "Design CH", sections P3 and P6).
+
+## Draft: HEVC and H.264 video codecs (Design HC, revision 3 after reviews 1 and 2, ready for implementation)
+
+Status: wire draft only. Nothing sends it.
+- Reasons, platform coverage, switches and open questions: DECISIONS "Design HC".
+- Numbers: "Draft number registry". The H.264 numbers are the ones pencilled in DECISIONS "iPhone interoperability".
+- With the masters `hevc_codec` and `h264_codec` off (the default), no HEVC or H.264 bit is set anywhere and every byte is today's.
+
+### Numbers
+
+| Where | H.264 (AVC) | HEVC (H.265) |
+| --- | --- | --- |
+| `BTV3` video codec ID | 4 | 5 |
+| Encode and decode masks, link and end-to-end hellos | bit 2 (`0x04`) | bit 3 (`0x08`) |
+| Announcement `capabilitySummary` (call offers and video stream offers) | bit 2 (`0x04`) | bit 7 (`0x80`) |
+| Compact (iPhone) UUID codec bits | 56 (pencilled first) | none (proposed in open question Q-HC2: take bit 56, so H.264 has none) |
+
+**End-to-end decode-mask bit 4** (`0x10`, `DECODE_AV1_SOFTWARE`) means "my AV1 decoding is software". It is carried only in end-to-end call hellos, like bit 7: link hellos never carry it, it is not a codec, and codec tests ignore it.
+
+**One mapping table.** The hello bits and the summary bits differ: summary bit 3 is the dual-listening hint and bit 4 is relay consent. Implementations map codec ID, hello bit and summary bit with one explicit table (VP9 `0x01`, AV1 `0x02`, H.264 `0x04`, HEVC `0x80`), and never copy a hello mask into a summary. A video offer never sets bit 6; the audio-only marker stays exactly `0x40`. The pencilled end-to-end bit 6 ("prefer H.264") is not used and stays pencilled.
+
+**Old readers.** Every shipped reader tests codec bits with a mask: Android uses bits 0-1 (`codecCapabilityMask`), iOS `& 0x3`, Windows `& 7` against a decode mask that has no bit 2. For them, summary bits 2 and 7 and hello bits 2 to 4 mean "no common codec" or nothing. Results:
+- A 22-byte stream offer in only these codecs is listed dimmed as not decodable and cannot be joined.
+- A PC announcement kind-2 offer (Design QV) with `0x80` is hidden by its strict readers.
+- A `BTV3` header with codec 4 or 5 fails closed as an unsupported codec.
+- No reader rejects an unknown mask bit.
+
+### Negotiation
+
+- **Calls.** Each sender chooses for its own direction from the peer's end-to-end decode mask, which relays copy unchanged.
+  1. A family `CallVp9Compatibility` policy on the sender gives VP9 when the selected codec is 3, 4 or 5.
+  2. Peer bit 7 (prefer VP9), counted only when the peer also sets VP9 bit 0: a sender that can encode VP9 sends VP9.
+  3. Otherwise the first eligible encoder whose codec the peer decodes, in the order hardware AV1, hardware HEVC, hardware VP9, hardware H.264, then today's software order. If peer bit 4 is set, AV1 moves below the sender's hardware HEVC and hardware VP9 encoders that the peer decodes, and only below those.
+
+  These steps build one ordered, filtered list per direction, and fallback walks only that list. A codec whose prefer switch is off is not in the Automatic list at all. A manual choice the peer decodes is sent as chosen; steps 2 and 3 do not override it. A receiver checks the header's codec against its own advertised decode mask, as today.
+- **Streams.** The source's order follows open question Q-HC1 (recommended: hardware AV1, hardware VP9, hardware HEVC, hardware H.264, then software, tied to the coverage table in DECISIONS). The source checks no viewer. Admission refuses a viewer or forwarder whose decode mask lacks the codec's bit, as for any codec. A forwarder derives its offer summary from the authenticated header through the table.
+- **Eligible encoders.**
+  - Hardware only: MediaCodec `isHardwareAccelerated`, VideoToolbox with `RequireHardwareAcceleratedVideoEncoder`, Media Foundation hardware MFTs.
+  - The size range and the measured or achievable frame rate cover the session.
+  - CBR is explicit where the encoder declares it. An encoder whose only mode is CQ is not eligible. An encoder that declares no modes keeps its resolved mode, with the requested and effective modes logged.
+  - B-frames and temporal layers are disabled.
+- **Decode bits mean the whole wire envelope.** The H.264 bit means Constrained Baseline, Main and High (8-bit 4:2:0); the HEVC bit means Main. Each bit is advertised only when the full decode path is probed at the advertised maximum size and FPS; hardware or platform software decoders both count. A sender never infers decoder support from its own encoder list.
+- **Compact discovery.** While Q-HC2 is open, HEVC is not representable. An iPhone does not stream HEVC, and compact call offers carry their VP9/AV1 bits and negotiate HEVC and H.264 in the hello. If Q-HC2 is answered A:
+  - bit 56 means HEVC, and current decoders map it explicitly to and from summary `0x80` (never by shifting the summary);
+  - shipped decoders map it to summary bit 2 and find no common codec;
+  - no compact sender announces an H.264 stream.
+- **PC call offer (PC announcement kind 0).** Its packed three-bit codec field (byte 8, bits 0-2, below the route cost in bits 3-6) carries VP9, AV1 and H.264 hints only. HEVC is never encoded there and is negotiated only in the hello. A PC always has a representable fallback (VP9).
+- **Unchanged.** An open-broadcast source (`BOB1` `CARD`) uses VP9 or AV1 only. `BTL1` and the call fragment format are unchanged. The PC announcement's kind-2 summary rule (Design QV) gains `0x80` when built.
+
+### Sender rules (both codecs)
+
+- **Byte stream.** Annex B, one access unit (AU) per `BTV3` video packet, exactly one coded picture in exactly one slice. The discardable flag (bit 7) is never set. Wider subsets (several slices, CRA) need a later revision with vectors.
+- **No codec-config packet.** A `FLAG_CODEC_CONFIG` video packet is never sent for codecs 4 and 5.
+- **Parameter sets** (HEVC VPS, SPS and PPS; H.264 SPS and PPS) go in-band, in that order, before the first slice of every keyframe AU, and in no other AU.
+  - The sender merges the encoder's consecutive codec-config buffers into one cached set, replacing the cache when the encoder emits new ones.
+  - It prepends the cached sets to every keyframe AU whose own sets are missing, and strips sets from non-keyframe AUs.
+  - It does not ask the encoder to prepend them (`KEY_PREPEND_HEADER_TO_SYNC_FRAMES` is not used).
+- **Keyframes.** A keyframe is an IDR: HEVC `IDR_W_RADL` (19) or `IDR_N_LP` (20), or H.264 type 5. CRA is not sent. The `BTV3` keyframe flag is set from the NAL type, never from the encoder's buffer flag. Closed GOP is configured where offered.
+- **Keyframe requests.** A keyframe request must be answered by an IDR, judged from the emitted NAL types. If none follows within 1 s the request is repeated. After 3 misses the sender ends video with `no_idr` and the component is ineligible for this process.
+- **Order.** No B-frames or reordered pictures, and `BTV3` presentation timestamps strictly increase.
+  - HEVC: `sps_max_num_reorder_pics` 0.
+  - H.264: only I and P slices, and either `pic_order_cnt_type` 2 or a VUI `bitstream_restriction` with `max_num_reorder_frames` 0.
+- **Stripped.** SEI, AUD and filler data are removed.
+- **Size changes.** As for VP9/AV1: a `FLAG_DISCONTINUITY` IDR whose in-band SPS carries the new size. The coded size is the SPS size minus its cropping:
+  - HEVC: `pic_width_in_luma_samples` and `pic_height_in_luma_samples` minus twice the conformance-window offsets;
+  - H.264: `(pic_width_in_mbs_minus1 + 1) x 16` and `(pic_height_in_map_units_minus1 + 1) x 16` minus twice the frame-crop offsets.
+
+### Access-unit validation (receiver, fail closed)
+
+A bounded structural parser checks every packet before a decoder sees it. It reads only the fields named here. Everything else in the codec syntax is left to the platform decoder: the parser is a gate, not a sanitizer, and an AU that passes still reaches that decoder.
+
+**Outcomes.**
+- A failed AU is dropped as corrupt video under the existing rules (drop, request a keyframe).
+- A `FLAG_CODEC_CONFIG` video packet, or `BTV3` flag bit 7 (discardable), on codec 4 or 5 closes the session as an unsupported stream.
+- Three rejected keyframes in a row within 10 s also close it.
+
+**Scanning and escapes.** One pass over the payload finds start codes and NAL units and checks the escapes. Inside a NAL unit:
+- `00 00 03` followed by `00`, `01`, `02` or `03` is an escape, and only that `03` is removed;
+- `00 00 03` as the last bytes of the NAL unit is allowed;
+- `00 00 00`, `00 00 01` and `00 00 02` end the NAL unit or are forbidden there;
+- `00 00 03` followed by a byte above `03` rejects the AU.
+
+**Parse budget.** Parameter-set parsing reads at most the first 512 unescaped bytes, and slice-header parsing the first 64. If a field this section needs lies beyond the budget, or a read passes the end, the AU is rejected. A `ue(v)` with more than 31 leading zeros, or an Exp-Golomb value that overflows 32 bits, also rejects it. Loops (scaling lists, HRD CPB entries, POC cycle offsets) are bounded by their specification maxima.
+
+**Log only.** Values above the usual range are accepted up to the specification's maximum and logged as `au_unusual`.
+
+1. **Framing.** The payload is 1 byte up to the `BTV3` video payload limit and starts with `00 00 01` or `00 00 00 01`. Zero bytes before a start code are trailing zeros. An AU has at most 8 NAL units, each of at least the NAL header size.
+2. **NAL header.**
+   - HEVC: `forbidden_zero_bit` 0, `nuh_layer_id` 0, `nuh_temporal_id_plus1` 1.
+   - H.264: `forbidden_zero_bit` 0.
+3. **Allowed types.** Any other type rejects the AU, including HEVC CRA (21), which is deferred.
+   - HEVC: 0 and 1 (trailing), 19 and 20 (IDR), 32 VPS, 33 SPS, 34 PPS, 35 AUD, 38 filler, 39 and 40 SEI.
+   - H.264: 1 (non-IDR slice), 5 (IDR slice), 6 SEI, 7 SPS, 8 PPS, 9 AUD, 12 filler.
+4. **One picture, one slice.** Exactly one slice NAL unit per AU. Parameter sets, AUD and prefix SEI come before it; filler and HEVC suffix SEI come after it.
+   - **HEVC slice header.** `first_slice_segment_in_pic_flag` must be 1. Then `no_output_of_prior_pics_flag` (IDR only) and `slice_pic_parameter_set_id`. Then `num_extra_slice_header_bits` reserved bits, the count taken from the referenced PPS. Then `slice_type`, which must be 1 (P) or 2 (I), and 2 in an IDR.
+   - **H.264 slice header.** `first_mb_in_slice` 0, `slice_type` 0, 2, 5 or 7 (P or I; I only in an IDR), then `pic_parameter_set_id`.
+5. **Keyframes and parameter-set activation.**
+   - The keyframe flag is set if and only if the slice is an IDR.
+   - An IDR AU carries exactly one VPS (HEVC), one SPS and one PPS, in that order, each at most 1,024 bytes.
+   - The chain must resolve inside that AU: slice PPS ID to that PPS, PPS SPS ID to that SPS, and the HEVC SPS VPS ID to that VPS.
+   - Only after the whole AU passes does this set become the active configuration, atomically. If it differs from the previous one, the decoder is flushed and rebuilt before the AU is queued.
+   - A non-IDR AU carries no parameter set, and its slice must name the active PPS.
+   - A rejected IDR leaves the previous active configuration. Non-IDR AUs are then dropped until the next valid IDR.
+6. **Session envelope** (rules 8 and 9). Both coded dimensions, not just the visible ones, are bounded per axis against the `BTV3` header's maximum width and height, rounded up to a multiple of 16. Either orientation is accepted: the larger coded side is compared with the larger header side. Crops use checked arithmetic. Crop offsets are in the codec's crop units (2 luma samples for 4:2:0 frames), and the visible width and height must stay at least 16.
+7. **HEVC VPS.** `vps_max_layers_minus1` 0 and `vps_max_sub_layers_minus1` 0.
+8. **HEVC SPS.**
+   - `sps_max_sub_layers_minus1` 0, so `profile_tier_level` is the fixed 12-byte general part.
+   - `general_profile_space` 0, and `general_profile_idc` 1 or `general_profile_compatibility_flag[1]` set (Main).
+   - `chroma_format_idc` 1, and both bit depths 8.
+   - `pic_width_in_luma_samples` and `pic_height_in_luma_samples` within the envelope; the conformance window as in rule 6.
+   - `sps_max_num_reorder_pics` 0.
+   - Log only: `general_level_idc` above 123, up to 186; `sps_max_dec_pic_buffering_minus1` above 5, up to 15.
+9. **H.264 SPS.**
+   - `profile_idc` 66, 77 or 100 (no constraint-flag requirement; rule 10 excludes the Baseline features we do not use).
+   - For profile 100: `chroma_format_idc` 1, both bit depths 8, and scaling lists parsed and accepted.
+   - `pic_order_cnt_type` 2, or 0 or 1 with VUI `bitstream_restriction_flag` 1 and `max_num_reorder_frames` 0.
+   - `frame_mbs_only_flag` 1.
+   - Macroblock width and height within the envelope; frame cropping as in rule 6.
+   - Log only: `level_idc` above 41, up to 62; `max_num_ref_frames` above 4, up to 16.
+10. **PPS.**
+    - HEVC: `pps_pic_parameter_set_id` at most 63, and `num_extra_slice_header_bits` read for rule 4.
+    - H.264: `pic_parameter_set_id` at most 255, `num_slice_groups_minus1` 0 (no FMO), `redundant_pic_cnt_present_flag` 0.
+11. **Removed.** SEI, AUD and filler are removed before decoding; their contents are never parsed.
+
+**Decoder input.**
+- Decoders run in low-latency mode where offered: Android `KEY_LOW_LATENCY` when `FEATURE_LowLatency` is supported, Media Foundation `CODECAPI_AVLowLatencyMode`.
+- Android queues the Annex B AU. csd comes from the active configuration: H.264 csd-0 SPS and csd-1 PPS; HEVC csd-0 VPS+SPS+PPS. The decoder is rebuilt when the sets or the size change.
+- Apple converts to 4-byte length-prefixed NAL units, builds the format description from the keyframe's sets (`CMVideoFormatDescriptionCreateFromHEVCParameterSets` or `...FromH264ParameterSets`) and rebuilds the session when they change.
+- Windows feeds Annex B to the `MFVideoFormat_HEVC` or `MFVideoFormat_H264` decoder MFT, which loads in the app's process.
+
+**Logs.**
+- `BENCHMARK encoder_choice: ... codec=HEVC|H264 | reason=...` (DECISIONS "Design HC").
+- `BENCHMARK au_reject: codec= | rule=<1..11> | type= | bytes=`.
+- `BENCHMARK au_unusual: codec= | field= | value=`.
+- `BENCHMARK decoder_hold: codec= | p50_ms= | p95_ms=`.
+
+**Vectors** (written with the code): a keyframe AU and a non-keyframe AU captured from each platform's hardware encoder for each codec, plus one negative AU per rule above.

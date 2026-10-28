@@ -498,6 +498,14 @@ internal data object PreferredEncoderTieBreak : DevicePolicyEffect {
     override fun describe(): String = "encoder tie-break: matching component first"
 }
 
+/**
+ * A matching hardware AV1 encoder component is never chosen by Automatic (it stays selectable by hand); see
+ * [AutomaticEncoderChoice]. No registry entry uses it yet: no hardware AV1 encoder is known bad.
+ */
+internal data object NoAutomaticHardwareAv1 : DevicePolicyEffect {
+    override fun describe(): String = "Automatic encoder: skip this hardware AV1 component"
+}
+
 /** Matching Opus decoders are tried before the framework's choice. */
 internal data object PreferredOpusDecoder : DevicePolicyEffect {
     override fun describe(): String = "Opus decoder: matching component tried first"
@@ -650,7 +658,7 @@ internal class ResolvedDevicePolicy(
 
 internal object DeviceFamilyPolicy {
     /** Bump when entries, matchers or effects change. */
-    const val REVISION = "2026-10-27.1"
+    const val REVISION = "2026-10-28.1"
 
     val entries: List<DevicePolicyEntry> get() = DevicePolicyRegistry.entries
 

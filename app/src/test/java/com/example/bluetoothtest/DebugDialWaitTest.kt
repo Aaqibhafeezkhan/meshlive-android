@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * lane10 b1b-calls-a15s-s24 audio-a15s-s24-r1 (and lane9 b9-newbuild-calls2 audio-a15s-s24): `voice_call:0096b299a99f`
+ * lane10 b1b-calls-a15s-s24 audio-a15s-s24-r1 (and lane9 b9-newbuild-calls2 audio-a15s-s24): `voice_call:d1a10000a001`
  * was accepted ("applied") 80 ms after a lifecycle scan restart. The dial then waited the fixed 3 s for a fresh sighting;
  * the first sighting of the new scanner came 4.5 s after its start and the expiry changed only a status text, so no
  * invite and no log line followed for 140 s.
@@ -59,17 +59,17 @@ class DebugDialWaitTest {
     @Test
     fun aDebugDialWaitsLongEnoughForThatSighting() {
         assertEquals(10_000L, DebugDialWait.refreshTimeoutMs(auto = false))
-        val dial = DebugDialWait.Pending("0096b299a99f", CallType.VOICE, messageSync = false, startedAtMs = dialAcceptedAtMs)
+        val dial = DebugDialWait.Pending("d1a10000a001", CallType.VOICE, messageSync = false, startedAtMs = dialAcceptedAtMs)
         assertFalse(dial.expired(firstSightingAtMs))
         assertEquals(dialAcceptedAtMs + 10_000L - firstSightingAtMs, dial.remainingMs(firstSightingAtMs))
         assertEquals(4_493L, dial.waitedMs(firstSightingAtMs))
-        assertTrue(dial.matches("0096B299A99F"))
-        assertFalse(dial.matches("1e3f0761977b"))
+        assertTrue(dial.matches("D1A10000A001"))
+        assertFalse(dial.matches("d1a20000a002"))
     }
 
     @Test
     fun theWaitIsBoundedAndNeverNegative() {
-        val dial = DebugDialWait.Pending("0096b299a99f", CallType.VIDEO, messageSync = false, startedAtMs = 1_000L)
+        val dial = DebugDialWait.Pending("d1a10000a001", CallType.VIDEO, messageSync = false, startedAtMs = 1_000L)
         assertFalse(dial.expired(10_999L))
         assertTrue(dial.expired(11_000L))
         assertEquals(0L, dial.remainingMs(20_000L))
@@ -79,8 +79,8 @@ class DebugDialWaitTest {
     @Test
     fun everyOutcomeHasAGreppableLine() {
         assertEquals(
-            "BENCHMARK call_invite: failed | node=0096b299a99f | reason=refresh_timeout | waitedMs=10000",
-            DebugDialWait.line("failed", "0096b299a99f", "reason" to "refresh_timeout", "waitedMs" to 10_000L),
+            "BENCHMARK call_invite: failed | node=d1a10000a001 | reason=refresh_timeout | waitedMs=10000",
+            DebugDialWait.line("failed", "d1a10000a001", "reason" to "refresh_timeout", "waitedMs" to 10_000L),
         )
         assertEquals("BENCHMARK call_invite: peer_seen | node=ab", DebugDialWait.line("peer_seen", "ab"))
     }
@@ -150,13 +150,13 @@ class DebugDialWaitTest {
      */
     @Test
     fun aContactDialMatchesItsPrefixOrARecognisedRotatingIdAndNothingElse() {
-        val contact = DebugDialWait.Pending("1c5fbbcd07e0", CallType.VIDEO, false, startedAtMs = 0L, displayName = "Asha", contact = true)
-        assertTrue(contact.matchesPerson("1C5FBBCD07E0", null))
-        assertTrue("a rotating ID recognised as this contact", contact.matchesPerson("a1b2c3d4e5f6", "1c5fbbcd07e0"))
+        val contact = DebugDialWait.Pending("a15a15a15a15", CallType.VIDEO, false, startedAtMs = 0L, displayName = "Asha", contact = true)
+        assertTrue(contact.matchesPerson("A15A15A15A15", null))
+        assertTrue("a rotating ID recognised as this contact", contact.matchesPerson("a1b2c3d4e5f6", "a15a15a15a15"))
         assertFalse("recognised as someone else", contact.matchesPerson("a1b2c3d4e5f6", "9c8d7e6f5a40"))
         assertFalse("not recognised", contact.matchesPerson("a1b2c3d4e5f6", null))
-        val row = DebugDialWait.Pending("1c5fbbcd07e0", CallType.VIDEO, false, startedAtMs = 0L, displayName = "Asha")
-        assertFalse("a row or DEBUG dial matches its advertised key only", row.matchesPerson("a1b2c3d4e5f6", "1c5fbbcd07e0"))
+        val row = DebugDialWait.Pending("a15a15a15a15", CallType.VIDEO, false, startedAtMs = 0L, displayName = "Asha")
+        assertFalse("a row or DEBUG dial matches its advertised key only", row.matchesPerson("a1b2c3d4e5f6", "a15a15a15a15"))
         assertFalse(contact.expired(DebugDialWait.WAIT_MS - 1))
         assertTrue(contact.expired(DebugDialWait.WAIT_MS))
     }

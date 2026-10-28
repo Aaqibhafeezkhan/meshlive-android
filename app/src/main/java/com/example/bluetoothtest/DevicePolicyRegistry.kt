@@ -605,21 +605,44 @@ internal object DevicePolicyRegistry {
         proposal(
             id = "pre-android-13-coc-congested-write-loss",
             area = PolicyArea.BLUETOOTH_TRANSPORT,
-            validation = PolicyValidation.UPSTREAM_DOCUMENTED,
+            validation = PolicyValidation.EXPERIMENTAL,
             title = "Android <= 12 CoC data loss under congestion",
             matcher = DeviceMatcher(sdkMax = 32),
-            behaviour = "Pace LE CoC writes below the socket's congestion point and report a CoC 'Secure link decrypt " +
-                "failed' on these stacks as a candidate stack data loss (btif_sock_thread read stale poll entries and " +
-                "dropped data on congested channels until Android 13).",
+            behaviour = "Forwarding LE CoC writers (call relays, stream relays and forwarders, and a helper's parent link " +
+                "once it becomes a relay hop) write SDUs of up to 8,000 bytes (within the peer's receive limit) instead of " +
+                "245-byte single-PDU SDUs, so the SDU-counted L2CAP queue stays below its congestion quota for the same " +
+                "bytes; nothing is paced or dropped and endpoint links are unchanged. Before Android 13 btif_sock_thread " +
+                "could read stale poll entries while several sockets were busy and drop data read from a socket whose " +
+                "channel was congested. A 'Secure link decrypt failed' or record-sequence failure on a hop from such a " +
+                "forwarder is a candidate stack data loss (the hop_integrity line tells a shifted stream from a changed " +
+                "byte). DEBUG test_relay_coc_coalesce=true applies it where this matcher holds.",
             sources = listOf(
                 PolicySource(
                     AOSP_COMMIT,
                     "https://android.googlesource.com/platform/packages/modules/Bluetooth/+/46bd51ede06ccda8aefaba46172d75d88f61e510",
-                    "'Fix potential data loss when writing to congested L2CAP CoC' (2022-03-24, b/223974328); first in android13-release",
+                    "'Fix potential data loss when writing to congested L2CAP CoC' (2022-03-24, b/223974328): several poll " +
+                        "events in one poll call, poll_count raised without updating pfds, process_data_sock reads stale " +
+                        "entries and the data read is dropped because the channel is congested; first in android13-release",
+                ),
+                PolicySource(
+                    AOSP_SOURCE,
+                    "https://android.googlesource.com/platform/system/bt/+/refs/heads/android12-release/btif/src/btif_sock_thread.cc",
+                    "android12-release before the fix: process_data_sock loops to ts[h].poll_count over the pfds prepared " +
+                        "before poll",
                 ),
             ),
-            evidence = listOf("none attributed: the ASUS CoC corruption that CocSocketOutput fixed is a candidate, not proven"),
+            evidence = listOf(
+                "benchmarks/runs (2026-10-26..28, LE CoC): every hop-integrity failure had a pre-13 forwarder as the " +
+                    "transmitter: M31 (API 31) relay -> ASUS phyprio-ab-20261028/trace-pp11-a15s-m31-asus-ble-ctl (tag failure, " +
+                    "header intact), M31 relay -> A15s relay-showcase-20261026/trace-y1-asus-s22-m31-a15s-video-ble and " +
+                    "trace-m1-asus-s24-m31-a15s-video-ble-CPdef, A15s (API 29) relay -> S24/ASUS/M31 trace-h1, 55-t03, " +
+                    "45-x03, 53-t07, trace-s6a, trace-k2, 69-n12 (tag failures, skipped sequences, damaged headers)",
+                "no hop-integrity failure on a direct (non-forwarding) CoC link in the same runs; the ASUS (API 30) relayed " +
+                    "17 CoC calls without one; no HCI snoop yet, so stack loss is the leading candidate, not proven",
+            ),
             confidence = LOW,
+            confidenceNote = "Matches the upstream bug's conditions (two busy sockets, congestion) and the failure signature; " +
+                "needs the A/B (M31 and A15s as CoC helpers, both directions, HCI snoop on helper and receiver).",
         ),
         proposal(
             id = "android-14-gatt-mtu-517",

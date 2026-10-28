@@ -77,9 +77,9 @@ class PrivacyDefaultsTest {
     }
 
     @Test
-    fun theNeutralBluetoothNameIsNotPartOfTheDefault() {
-        // Opt-in only: a user launch without a stored choice keeps the phone's own name.
-        assertFalse(FeatureCatalog.resolve(NeutralNameOption.spec, false, { false }) { null })
+    fun theNeutralBluetoothNameIsPartOfTheDefaultButNotOfABenchmarkLaunch() {
+        // On by default since 2026-10-27 (the rename itself waits for the user's answer, NeutralNameDefaultTest).
+        assertTrue(FeatureCatalog.resolve(NeutralNameOption.spec, false, { false }) { null })
         assertEquals("neutral_bluetooth_name", NeutralNameOption.PREF)
         assertFalse(FeatureCatalog.resolve(NeutralNameOption.spec, true, { false }) { true })
     }

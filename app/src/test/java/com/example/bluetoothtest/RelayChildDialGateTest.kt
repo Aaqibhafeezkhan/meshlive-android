@@ -13,7 +13,7 @@ import org.junit.Test
  * [RelayChildDialGate] decides, in the discovery callback and before the presence is stopped, whether a sighting is dropped.
  */
 class RelayChildDialGateTest {
-    private val child = "1c5fbbcd07e0"
+    private val child = "a15a15a15a15"
 
     private fun verdict(marked: Boolean = false, heldMs: Long = 0L, fallbackOn: Boolean = true, holdoffOn: Boolean = true) =
         RelayChildDialGate.verdict(fallbackOn, marked, holdoffOn, heldMs)

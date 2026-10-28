@@ -22,13 +22,14 @@ import com.google.android.material.button.MaterialButton
 
 /**
  * First run, one idea per screen (2026-10-17 redesign): welcome, what you can do, permissions (each with why and
- * its state), optionally keep working with the screen off ([BatteryExemptionPrompt], design decision Q38), and ready.
+ * its state), hide your phone's name ([NeutralNameChoice], 2026-10-27), optionally keep working with the screen off
+ * ([BatteryExemptionPrompt], design decision Q38), and ready.
  * Shown once, only for a plain user launch (never for benchmark intents, see [shouldShowOnboarding]), and again after
  * an emergency wipe.
  */
 class OnboardingActivity : AppCompatActivity() {
     /** The pages in order; Background only when Android may still stop the app in the background. */
-    private enum class Page { WELCOME, HOW, PERMISSIONS, FULL_SCREEN_CALLS, BACKGROUND, READY }
+    private enum class Page { WELCOME, HOW, PERMISSIONS, HIDE_NAME, FULL_SCREEN_CALLS, BACKGROUND, READY }
 
     private lateinit var pages: List<Page>
     private var index = 0
@@ -40,13 +41,16 @@ class OnboardingActivity : AppCompatActivity() {
 
     private val permissionRequest = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) {
+    ) { answers ->
         requested = true
+        OnboardingState.recordAnswers(answers)
         render()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The main screen underneath asks for nothing while this is open (release smoke 2026-10-28).
+        OnboardingState.open = true
         DebugTunables.playBatteryGuidance = intent.getBooleanExtra("test_play_battery_guidance", true)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_onboarding_flow)
@@ -60,6 +64,8 @@ class OnboardingActivity : AppCompatActivity() {
             add(Page.WELCOME)
             // Copy audit 2026-10-21: one idea per page; the welcome page says what the app does (HOW is kept, not shown).
             add(Page.PERMISSIONS)
+            // After permissions: renaming needs Nearby devices. Both answers are stored and win over the default.
+            add(Page.HIDE_NAME)
             if (FullScreenIntentAccess.showGuidance(Build.VERSION.SDK_INT, DebugTunables.fullScreenCallGuidance, FullScreenIntentAccess.canUse(this@OnboardingActivity))) add(Page.FULL_SCREEN_CALLS)
             if (BatteryExemptionPrompt.shouldOffer(this@OnboardingActivity, BatteryOfferTrigger.ONBOARDING)) add(Page.BACKGROUND)
             add(Page.READY)
@@ -99,6 +105,17 @@ class OnboardingActivity : AppCompatActivity() {
         if (::content.isInitialized) render()
     }
 
+    override fun onPause() {
+        super.onPause()
+        // Before the main screen resumes: Start (or Back on the first page) hands the prompts back to it.
+        if (isFinishing) OnboardingState.open = false
+    }
+
+    override fun onDestroy() {
+        if (isFinishing) OnboardingState.open = false
+        super.onDestroy()
+    }
+
     private val page: Page get() = pages[index]
 
     private fun onPrimary() {
@@ -118,6 +135,10 @@ class OnboardingActivity : AppCompatActivity() {
                     next()
                 }
             }
+            Page.HIDE_NAME -> {
+                NeutralNameChoice.record(NeutralNameChoice.settings(this), hide = true)
+                next()
+            }
             Page.READY -> finishOnboarding()
             else -> next()
         }
@@ -129,6 +150,10 @@ class OnboardingActivity : AppCompatActivity() {
             Page.WELCOME, Page.HOW -> {
                 index = pages.indexOf(Page.PERMISSIONS)
                 render()
+            }
+            Page.HIDE_NAME -> {
+                NeutralNameChoice.record(NeutralNameChoice.settings(this), hide = false)
+                next()
             }
             else -> next()
         }
@@ -175,6 +200,11 @@ class OnboardingActivity : AppCompatActivity() {
                     permission(R.drawable.ic_phone_in_talk, R.string.ob_perm_notif_title, R.string.ob_perm_notif_text, Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
+            Page.HIDE_NAME -> {
+                hero(R.drawable.ic_bluetooth)
+                title(R.string.ob_name_title)
+                body(R.string.ob_name_text)
+            }
             Page.FULL_SCREEN_CALLS -> {
                 hero(R.drawable.ic_phone_in_talk)
                 title(R.string.ob_full_screen_title)
@@ -201,6 +231,7 @@ class OnboardingActivity : AppCompatActivity() {
                 Page.PERMISSIONS -> if (missing.isNotEmpty() && !requested) R.string.ob_allow else R.string.ob_next
                 Page.FULL_SCREEN_CALLS -> if (FullScreenIntentAccess.canUse(this)) R.string.ob_next else R.string.ob_full_screen_settings
                 Page.BACKGROUND -> if (bgPending) R.string.ob_allow else R.string.ob_next
+                Page.HIDE_NAME -> R.string.ob_name_hide
                 Page.READY -> R.string.ob_start
                 else -> R.string.ob_next
             },
@@ -209,6 +240,7 @@ class OnboardingActivity : AppCompatActivity() {
             Page.WELCOME -> 0
             Page.HOW -> R.string.ob_skip
             Page.PERMISSIONS -> if (missing.isNotEmpty() && !requested) R.string.ob_not_now else 0
+            Page.HIDE_NAME -> R.string.ob_name_keep
             Page.FULL_SCREEN_CALLS -> R.string.ob_not_now
             Page.BACKGROUND -> if (bgPending) R.string.ob_not_now else 0
             Page.READY -> 0

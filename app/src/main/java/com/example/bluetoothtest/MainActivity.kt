@@ -23,6 +23,8 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import org.json.JSONObject
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
@@ -194,6 +196,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var destinationLabel: TextView
     private lateinit var deviceSpinner: Spinner
     private lateinit var codecSpinner: Spinner
+    /** A DEBUG `test_codec` launch picked the encoder (logged as user_choice, never Automatic). */
+    private var debugCodecRequested = false
     private lateinit var rateControlSpinner: Spinner
     private lateinit var advancedSettingsSwitch: com.google.android.material.materialswitch.MaterialSwitch
     private lateinit var advancedSettingsDescriptionText: TextView
@@ -246,6 +250,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var neutralBluetoothNameDescriptionText: TextView
     private lateinit var neutralBluetoothNameStatusText: TextView
     private var neutralNameSwitchBinding = false
+    /** "Hide phone name" as the last applyNeutralName() resolved it for the radio (false until the user answered). */
+    private var neutralNameOptionOn = false
+    /** Android refused the last neutral-name write. */
+    private var neutralNameRefused = false
+    /** What the Settings switch shows (off with a reason while the name cannot be hidden). */
+    private var neutralNameShown = NeutralNameChoice.Shown.OFF
+    /** The one-time question after an update was shown in this process. */
+    private var neutralNameQuestionShown = false
     private var gapNameProbeStarted = false
     private lateinit var experimentalRelayedCallsSwitch: MaterialSwitch
     private lateinit var experimentalRelayedCallsDescriptionText: TextView
@@ -332,6 +344,11 @@ class MainActivity : AppCompatActivity() {
     private var streamSourceLookup: String? = null
     private val bluetoothStateReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: Intent) {
+            // The stack reported the adapter's new name: confirms a "Hide phone name" write (it is asynchronous).
+            if (intent.action == BluetoothAdapter.ACTION_LOCAL_NAME_CHANGED) {
+                applyNeutralName()
+                return
+            }
             updateHomeReadiness()
             refreshCallReachability()
             // The camera screen's "Bluetooth is off" notice follows the adapter too.
@@ -587,6 +604,9 @@ class MainActivity : AppCompatActivity() {
     ) { granted -> Log.i("BluetoothVideo", "Call alert notifications permission granted=$granted") }
     @Volatile private var privateCallRemoteSurface: Surface? = null
     private var privateCallSurfaceFormat: SurfaceVideoFormat? = null
+    /** This call's double-tap framing choice for the other person's video. [RemoteVideoFit] */
+    private val privateCallRemoteFit = RemoteVideoFitState()
+    private var privateCallRemoteShownMode: VideoScaleMode? = null
     private var privateCallRemoteVideoStarted = false
     private var debugPrivateCallSurfacePending = false
     private var privateCallMediaStartedAtNs = 0L
@@ -1287,6 +1307,7 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.callStallTolerance = intent.getBooleanExtra("test_call_stall_tolerance", false)
         DebugTunables.callLivenessHangUp = intent.getBooleanExtra("test_call_liveness_hang_up", true)
         DebugTunables.callRingTimeout = intent.getBooleanExtra("test_call_ring_timeout", true)
+        DebugTunables.remoteVideoFit = intent.getBooleanExtra("test_remote_video_fit", true)
         DebugTunables.skipRedundantPriority = intent.getBooleanExtra("test_skip_redundant_priority", false)
         DebugTunables.streamJoinRetry = intent.getBooleanExtra("test_stream_join_retry", true)
         DebugTunables.viewerAdmissionBounds = intent.getBooleanExtra("test_viewer_admission_bounds", true)
@@ -1486,6 +1507,7 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.relayUpstreamDck = intent.getBooleanExtra("test_relay_upstream_dck", false)
         DebugTunables.relayRecoveryGrace = intent.getBooleanExtra("test_relay_recovery_grace", true)
         DebugTunables.relayParentTrickle = intent.getBooleanExtra("test_relay_parent_trickle", true)
+        DebugTunables.viewerLinkSilence = intent.getBooleanExtra("test_viewer_link_silence", true)
         // B2: the child-side watch and same-parent preference, apart from relay_child_reanchor (absent: follow it).
         DebugTunables.relayParentWatch = if (intent.hasExtra("test_relay_parent_watch")) {
             intent.getBooleanExtra("test_relay_parent_watch", true)
@@ -1601,12 +1623,15 @@ class MainActivity : AppCompatActivity() {
             null
         }
         DebugTunables.cocSequencedPhy = intent.getBooleanExtra("test_coc_sequenced_phy", true)
+        DebugTunables.phyAfterPriority = intent.getBooleanExtra("test_phy_after_priority", false)
+        DebugTunables.psmReadLinkQuiet = intent.getBooleanExtra("test_psm_read_link_quiet", false)
         DebugTunables.gattMtuProbe = intent.getBooleanExtra("test_gatt_mtu_probe", true)
         DebugTunables.receiverUiStability = intent.getBooleanExtra("test_receiver_ui_stability", true)
         DebugTunables.streamRowGrouping = intent.getBooleanExtra("test_stream_row_grouping", true)
         DebugTunables.cocPhyAfterConnect = intent.getBooleanExtra("test_coc_phy_after_connect", false)
         DebugTunables.peerAddressBook = intent.getBooleanExtra("test_peer_address_book", false)
         DebugTunables.cocCoalesceSdus = intent.getBooleanExtra("test_coc_coalesce_sdus", false)
+        DebugTunables.relayCocCoalesce = intent.getBooleanExtra("test_relay_coc_coalesce", false)
         DebugTunables.lePriorityRetry = intent.getBooleanExtra("test_le_priority_retry", true)
         DebugTunables.forwarderChildIntervalUnits = intent.getIntExtra("test_forwarder_child_interval_units", -1).takeIf { it > 0 }
         DebugTunables.forwarderCocPriority = intent.getStringExtra("test_forwarder_coc_priority")
@@ -1614,6 +1639,7 @@ class MainActivity : AppCompatActivity() {
             ?.let(BleConnectionPriority::fromDebugValue)
         DebugTunables.adaptivePhy = intent.getBooleanExtra("test_adaptive_phy", true)
         DebugTunables.relayPhyGuard = intent.getBooleanExtra("test_relay_phy_guard", true)
+        DebugTunables.directCallHopMemory = intent.getBooleanExtra("test_direct_call_hop_memory", true)
         QlConsent.enabled = intent.getBooleanExtra("test_ql_consent_ui", true)
         DebugTunables.relayOnePduMove = intent.getBooleanExtra("test_relay_one_pdu_move", false)
         DebugTunables.relayColdStart = intent.getBooleanExtra("test_relay_cold_start", true)
@@ -1649,9 +1675,12 @@ class MainActivity : AppCompatActivity() {
                     "cocFreshAcl=${BleCocFreshAcl.enabled()} | " +
                     "blePhy=${BlePhyPreference.TWO_M.label} | " +
                     "cocSequencedPhy=${DebugTunables.cocSequencedPhy} | " +
+                    "phyAfterPriority=${DebugTunables.phyAfterPriority} | " +
+                    "psmReadLinkQuiet=${DebugTunables.psmReadLinkQuiet} | " +
                     "cocPhyAfterConnect=${DebugTunables.cocPhyAfterConnect} | " +
                     "peerAddressBook=${DebugTunables.peerAddressBook} | " +
                     "cocCoalesceSdus=${DebugTunables.cocCoalesceSdus}(effective=${CocSduCoalescing.effective()}) | " +
+                    "relayCocCoalesce=${DebugTunables.relayCocCoalesce}(effective=${ForwardingCocCoalescing.effective()}) | " +
                     "lePriorityRetry=${DebugTunables.lePriorityRetry} | " +
                     "gattMtuProbe=${DebugTunables.gattMtuProbe} | " +
                     "receiverUiStability=${DebugTunables.receiverUiStability} | " +
@@ -1662,6 +1691,7 @@ class MainActivity : AppCompatActivity() {
                     "messageAdaptivePhy=${DebugTunables.messageAdaptivePhy} | " +
                     "streamAdaptivePhy=${DebugTunables.streamAdaptivePhy} | " +
                     "stallRemembers2m=${DebugTunables.stallRemembersTwoM} | " +
+                    "directCallHopMemory=${DebugTunables.directCallHopMemory} | " +
                     "stallRediscoverMs=${DebugTunables.stallRediscoverMs} | " +
                     "setupRetryAclWait=${DebugTunables.setupRetryAclWait} | " +
                     "stallRetryDials=${DebugTunables.stallRetryDials} | " +
@@ -1675,6 +1705,7 @@ class MainActivity : AppCompatActivity() {
                     "messageProgressTotal=${DebugTunables.messageProgressTotal} | " +
                     "relayOnePduMove=${DebugTunables.relayOnePduMove} | " +
                     "relayParentTrickle=${DebugTunables.relayParentTrickle} | " +
+                    "viewerLinkSilence=${DebugTunables.viewerLinkSilence} | " +
                     "relayChildStallGuard=${DebugTunables.relayChildStallGuard} | " +
                     "relayStallHoldoff=${DebugTunables.relayStallHoldoff} | " +
                     "relayStallSeparate=${DebugTunables.relayStallSeparate} | " +
@@ -1744,6 +1775,7 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.sceneCutShaping = SceneCutShapingMode.fromDebugValue(intent.getIntExtra("test_scene_cut_shaping", 0))
         DebugTunables.vp9QuantizerFloor = intent.getIntExtra("test_vp9_q_floor", -1).takeIf { it > 0 }
         DebugTunables.experimentalEncoderRanking = intent.getBooleanExtra("test_encoder_ranking", false)
+        DebugTunables.preferHardwareAv1 = intent.getBooleanExtra("test_prefer_hw_av1", true)
         DebugTunables.experimentalBurstDrain = intent.getBooleanExtra("test_burst_drain", false)
         DebugTunables.playoutBurstGrowth = intent.getFloatExtra("test_playout_burst_growth", -1f)
             .takeIf { it >= 1f }?.toDouble()
@@ -2072,6 +2104,7 @@ class MainActivity : AppCompatActivity() {
         applyDebugCodecSelection()
         codecSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                AutomaticEncoderChoice.userChoice = debugCodecRequested || position != 0
                 refreshRateControlPicker()
                 refreshVideoModes()
                 updateDeviceCapabilities()
@@ -2264,12 +2297,13 @@ class MainActivity : AppCompatActivity() {
                 recreated = savedInstanceState != null,
             )
             // The Live tab (the stream browser) is the landing screen; its scan and the permission
-            // prompts wait for the first-run explanation.
-            showReceiverBrowser(askPermissions = !onboarding)
-            if (onboarding) {
-                landOnCallsAfterOnboarding = true
-                startActivity(Intent(this, OnboardingActivity::class.java))
-            }
+            // prompts wait for the first-run explanation, also when this activity is recreated
+            // underneath it (release smoke 2026-10-28: a Location prompt over the Welcome page).
+            if (onboarding) OnboardingState.open = true
+            val waiting = onboardingHolds()
+            showReceiverBrowser(askPermissions = !waiting)
+            if (onboarding || waiting) landOnCallsAfterOnboarding = true
+            if (onboarding) startActivity(Intent(this, OnboardingActivity::class.java))
         }
         // A launch with benchmark/control extras is automation: do not show onboarding later.
         if (launchSkipsOnboarding()) {
@@ -2342,8 +2376,10 @@ class MainActivity : AppCompatActivity() {
         }
         callPeerList.adapter = peopleAdapter
         refreshContactNames()
-        // A tap on the video brings the call controls back (or hides them).
+        // A tap on the video brings the call controls back (or hides them); a double-tap on the other person's
+        // large video switches between the whole picture and filling the screen ([RemoteVideoFit]).
         callScreen.setOnClickListener { callChromeAutoHide.toggle() }
+        bindRemoteVideoFitGesture()
         callSecurityChip.setOnClickListener { showLinkHealthSheet() }
         homeReadinessAction.setOnClickListener { onHomeReadinessAction() }
         findViewById<View>(R.id.homePushToTalkButton).setOnClickListener { onHomePushToTalk() }
@@ -3536,6 +3572,8 @@ class MainActivity : AppCompatActivity() {
                 return
             }
             codecSpinner.setSelection(codecIndex, false)
+            debugCodecRequested = true
+            AutomaticEncoderChoice.userChoice = true
             refreshVideoModes()
             Log.i("BluetoothVideo", "Test encoder: ${codecs[codecIndex].displayName} / ${codecs[codecIndex].encoderName}")
         }
@@ -3655,7 +3693,10 @@ class MainActivity : AppCompatActivity() {
         transportSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val selected = BluetoothTransportOption.entries[position]
-                if (outgoingTransport != selected) {
+                // The initial selection is also reported, after this listener is set, whenever an accessibility
+                // service is on (AdapterView.selectionChanged posts it): that is not a choice, so it asks nothing.
+                val changed = outgoingTransport != selected
+                if (changed) {
                     stopStreamPresence()
                     bleDiscovery?.close()
                     bleDiscovery = null
@@ -3682,7 +3723,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 updateDestinationControlsVisibility()
                 updateSettingsLabels()
-                if (appScreen != AppScreen.HOME &&
+                if (changed && appScreen != AppScreen.HOME &&
                     (appScreen != AppScreen.SETTINGS || debugLaunchRequested)
                 ) {
                     ensurePermissionsAndRefresh()
@@ -4639,28 +4680,32 @@ class MainActivity : AppCompatActivity() {
                 .showTracked()
         }
         neutralNameSwitchBinding = true
-        neutralBluetoothNameSwitch.isChecked = appPreferences.getBoolean(NeutralNameOption.PREF, false)
+        neutralBluetoothNameSwitch.isChecked = neutralNameShown.checked
         neutralNameSwitchBinding = false
         neutralBluetoothNameSwitch.setOnCheckedChangeListener { _, enabled ->
             if (neutralNameSwitchBinding) return@setOnCheckedChangeListener
             if (!enabled) {
-                appPreferences.edit().putBoolean(NeutralNameOption.PREF, false).apply()
+                NeutralNameChoice.record(appPreferences, hide = false)
                 applyNeutralName()
+                // Still "Phone" with no own name to restore: ask for it rather than leave the phone stuck.
+                if (needsOwnBluetoothName()) showOwnBluetoothNameDialog(hideAfter = false)
                 return@setOnCheckedChangeListener
             }
             // Ask first: this renames the phone for everything, not only for this app.
             neutralNameSwitchBinding = true
             neutralBluetoothNameSwitch.isChecked = false
             neutralNameSwitchBinding = false
+            // Already "Phone" with no own name saved: ask for the name to restore later instead of "Your name now: Phone".
+            if (needsOwnBluetoothName()) {
+                showOwnBluetoothNameDialog(hideAfter = true)
+                return@setOnCheckedChangeListener
+            }
             val name = NeutralBluetoothNameController.currentName(bluetoothAdapter)
                 ?: getString(R.string.neutral_bluetooth_name_unknown)
             com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
                 .setMessage(getString(R.string.neutral_bluetooth_name_confirm, name))
                 .setPositiveButton(R.string.neutral_bluetooth_name_turn_on) { _, _ ->
-                    appPreferences.edit().putBoolean(NeutralNameOption.PREF, true).apply()
-                    neutralNameSwitchBinding = true
-                    neutralBluetoothNameSwitch.isChecked = true
-                    neutralNameSwitchBinding = false
+                    NeutralNameChoice.record(appPreferences, hide = true)
                     applyNeutralName()
                 }
                 .setNegativeButton(R.string.action_cancel, null)
@@ -5329,12 +5374,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * The explicit option "Use a neutral Bluetooth name" (NeutralNameOption, default off, independent of the rotating
-     * switch). The name is written only when the option changes and when the app starts, gets its permissions or
-     * Bluetooth comes on; never per call, advertising session or epoch. A DEBUG benchmark launch changes the name only
-     * with `test_neutral_bluetooth_name` (alias `test_rotating_neutral_name`): test phones keep their names, and the
-     * legacy Classic candidate plan, which matches bonded phones by name, never sees several phones called "Phone".
-     * With the option off a name left by a build before 2026-10-11 (automatic rename) is restored once.
+     * The option "Hide phone name" (NeutralNameOption, default on since 2026-10-27, independent of the rotating switch).
+     * The name is written only when the option changes and when the app starts, gets its permissions or Bluetooth comes
+     * on; never per call, advertising session or epoch. A normal launch renames the phone only after the user answered
+     * the question (onboarding page, or [showNeutralNameQuestion] once after an update): [NeutralNameChoice]. A DEBUG
+     * benchmark launch changes the name only with `test_neutral_bluetooth_name` (alias `test_rotating_neutral_name`):
+     * test phones keep their names, and the legacy Classic candidate plan, which matches bonded phones by name, never
+     * sees several phones called "Phone". With the option off a name left by a build before 2026-10-11 (automatic
+     * rename) is restored once.
      */
     private fun applyNeutralName() {
         val benchmarkLaunch = benchmarkExtrasPresent()
@@ -5345,30 +5392,123 @@ class MainActivity : AppCompatActivity() {
             NeutralBluetoothNameController.savedOriginal(this) != null &&
             NeutralBluetoothNameController.currentName(bluetoothAdapter) == NeutralBluetoothName.NEUTRAL
         ) {
-            appPreferences.edit().putBoolean(NeutralNameOption.PREF, true).apply()
-            neutralNameSwitchBinding = true
-            if (::neutralBluetoothNameSwitch.isInitialized) neutralBluetoothNameSwitch.isChecked = true
-            neutralNameSwitchBinding = false
+            NeutralNameChoice.record(appPreferences, hide = true)
             Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + "rotid_name: migrated=kept")
             showNeutralNameMigrationNotice()
         }
-        val optionOn = FeatureCatalog.resolve(NeutralNameOption.spec, benchmarkLaunch, ::launchExtra, ::storedFeatureChoice)
+        val stored = NeutralNameChoice.storedChoice(appPreferences)
+        val resolved = FeatureCatalog.resolve(NeutralNameOption.spec, benchmarkLaunch, ::launchExtra, ::storedFeatureChoice)
+        // Default on, but never renamed before the user answered (the question is the rename consent).
+        var optionOn = NeutralNameChoice.renameOn(resolved, stored, benchmarkLaunch)
         // B2: the default of DiscoverableWhenNeutral follows the option; each set start still reads the actual name.
         DiscoverableWhenNeutral.neutralOptionOn = optionOn
-        if (hasRequiredPermissions() && bluetoothAdapter?.isEnabled == true) {
+        val canRename = canRenameAdapter()
+        if (!canRename) neutralNameRefused = false
+        if (canRename && bluetoothAdapter?.isEnabled == true) {
             val outcome = runCatching {
                 NeutralBluetoothNameController.apply(this, bluetoothAdapter, optionOn, appPreferences.contains(NeutralNameOption.PREF))
             }.getOrNull()
+            neutralNameRefused = outcome?.refused == true
             if (outcome?.paused == true && !benchmarkLaunch) {
                 // The user renamed the phone after the option was applied: their name wins; the option goes off.
-                appPreferences.edit().putBoolean(NeutralNameOption.PREF, false).apply()
-                neutralNameSwitchBinding = true
-                if (::neutralBluetoothNameSwitch.isInitialized) neutralBluetoothNameSwitch.isChecked = false
-                neutralNameSwitchBinding = false
+                NeutralNameChoice.record(appPreferences, hide = false)
+                optionOn = false
+                DiscoverableWhenNeutral.neutralOptionOn = false
                 Toast.makeText(this, R.string.neutral_bluetooth_name_paused, Toast.LENGTH_LONG).show()
             }
         }
-        refreshNeutralNameText(appPreferences.getBoolean(NeutralNameOption.PREF, false) || (benchmarkLaunch && optionOn))
+        neutralNameOptionOn = optionOn
+        neutralNameShown = NeutralNameChoice.shown(optionOn, canRename, neutralNameRefused)
+        if (::neutralBluetoothNameSwitch.isInitialized && neutralBluetoothNameSwitch.isChecked != neutralNameShown.checked) {
+            neutralNameSwitchBinding = true
+            neutralBluetoothNameSwitch.isChecked = neutralNameShown.checked
+            neutralNameSwitchBinding = false
+        }
+        refreshNeutralNameText()
+        // An update from a build where the option was off by default: ask once (a new install asks in onboarding).
+        if (NeutralNameChoice.needsAsking(stored, benchmarkLaunch) && OnboardingActivity.isDone(this)) showNeutralNameQuestion()
+    }
+
+    /** Renaming the adapter needs Nearby devices (BLUETOOTH_CONNECT) on Android 12+; older Android grants it at install. */
+    private fun canRenameAdapter(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+
+    /** The onboarding question "Hide your phone's name" as a dialog, once per process while it is unanswered. */
+    private fun showNeutralNameQuestion() {
+        if (neutralNameQuestionShown) return
+        neutralNameQuestionShown = true
+        runOnUiThread {
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.ob_name_title)
+                .setMessage(R.string.ob_name_text)
+                .setCancelable(false)
+                .setPositiveButton(R.string.ob_name_hide) { _, _ ->
+                    NeutralNameChoice.record(appPreferences, hide = true)
+                    applyNeutralName()
+                }
+                .setNegativeButton(R.string.ob_name_keep) { _, _ ->
+                    NeutralNameChoice.record(appPreferences, hide = false)
+                    applyNeutralName()
+                }
+                .showTracked()
+        }
+    }
+
+    /** The phone reads "Phone" and MeshLive has no own name saved to restore (NeutralBluetoothName.needsOwnName). */
+    private fun needsOwnBluetoothName(): Boolean =
+        canRenameAdapter() && bluetoothAdapter?.isEnabled == true &&
+            NeutralBluetoothName.needsOwnName(
+                NeutralBluetoothNameController.currentName(bluetoothAdapter),
+                NeutralBluetoothNameController.savedOriginal(this),
+            )
+
+    /**
+     * Recovery for a phone called "Phone" with no own name saved (app data cleared, or the lost-original state of the
+     * 0.4.1 release candidate). [hideAfter]: the option is being turned on (or is on), so the name is saved and the
+     * option restores it when turned off; otherwise the phone is renamed now. Prefilled with Android's device name.
+     */
+    private fun showOwnBluetoothNameDialog(hideAfter: Boolean) {
+        val suggestion = NeutralBluetoothName.suggestedOwnName(
+            runCatching { android.provider.Settings.Global.getString(contentResolver, android.provider.Settings.Global.DEVICE_NAME) }
+                .getOrNull(),
+            Build.MODEL,
+        )
+        val input = android.widget.EditText(this).apply {
+            hint = getString(R.string.neutral_bluetooth_name_own_title)
+            setText(suggestion.orEmpty())
+            setSelection(text.length)
+            isSingleLine = true
+        }
+        val container = android.widget.FrameLayout(this).apply {
+            val padding = (20 * resources.displayMetrics.density).toInt()
+            setPadding(padding, padding / 2, padding, 0)
+            addView(input)
+        }
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.neutral_bluetooth_name_own_title)
+            .setMessage(if (hideAfter) R.string.neutral_bluetooth_name_own_save else R.string.neutral_bluetooth_name_own_rename)
+            .setView(container)
+            .setPositiveButton(
+                if (hideAfter) R.string.action_save else R.string.neutral_bluetooth_name_own_rename_action,
+            ) { _, _ ->
+                val name = input.text?.toString().orEmpty()
+                if (NeutralBluetoothName.ownName(name.trim()) == null) {
+                    Toast.makeText(this, R.string.neutral_bluetooth_name_own_invalid, Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                if (hideAfter) {
+                    NeutralBluetoothNameController.saveOwnName(this, name)
+                    NeutralNameChoice.record(appPreferences, hide = true)
+                    applyNeutralName()
+                } else if (!NeutralBluetoothNameController.renameToOwnName(this, bluetoothAdapter, name)) {
+                    Toast.makeText(this, R.string.neutral_bluetooth_name_own_failed, Toast.LENGTH_LONG).show()
+                }
+                // A rename is confirmed by ACTION_LOCAL_NAME_CHANGED, which refreshes the switch and its text.
+                refreshNeutralNameText()
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .showTracked()
     }
 
     /** Once, after an update from a build that renamed the phone automatically: the name stays, the choice is theirs. */
@@ -5381,10 +5521,7 @@ class MainActivity : AppCompatActivity() {
                 .setMessage(getString(R.string.neutral_bluetooth_name_migrated, saved))
                 .setPositiveButton(R.string.neutral_bluetooth_name_keep, null)
                 .setNegativeButton(R.string.neutral_bluetooth_name_restore) { _, _ ->
-                    appPreferences.edit().putBoolean(NeutralNameOption.PREF, false).apply()
-                    neutralNameSwitchBinding = true
-                    if (::neutralBluetoothNameSwitch.isInitialized) neutralBluetoothNameSwitch.isChecked = false
-                    neutralNameSwitchBinding = false
+                    NeutralNameChoice.record(appPreferences, hide = false)
                     applyNeutralName()
                 }
                 .showTracked()
@@ -5392,7 +5529,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** The advice and saved-name lines under the neutral-name switch, and the legacy-controller note. */
-    private fun refreshNeutralNameText(optionOn: Boolean = appPreferences.getBoolean(NeutralNameOption.PREF, false)) {
+    private fun refreshNeutralNameText(optionOn: Boolean = neutralNameOptionOn) {
         if (!::neutralBluetoothNameStatusText.isInitialized || !::rotatingIdsLegacyNoteText.isInitialized) return
         val reuse = AdvertisingPrivacy.addressReuse(bluetoothAdapter)
         val advice = AdvertisingPrivacy.neutralNameAdvice(
@@ -5413,17 +5550,33 @@ class MainActivity : AppCompatActivity() {
             },
         )
         val saved = NeutralBluetoothNameController.savedOriginal(this)
+        val needsOwn = needsOwnBluetoothName()
         neutralBluetoothNameStatusText.text = buildString {
+            // Option on but the name cannot be hidden: the switch shows off, with the reason first.
+            when (neutralNameShown) {
+                NeutralNameChoice.Shown.OFF_NO_PERMISSION -> append(getString(R.string.neutral_bluetooth_name_off_permission)).append('\n')
+                NeutralNameChoice.Shown.OFF_REFUSED -> append(getString(R.string.neutral_bluetooth_name_off_refused)).append('\n')
+                else -> Unit
+            }
             append(adviceText)
             // Shown while a restore is pending too (switched off while Bluetooth was off), not only while it is on.
             if (saved != null) {
                 append('\n')
                 append(getString(R.string.neutral_bluetooth_name_saved, saved))
+            } else if (needsOwn) {
+                append('\n')
+                append(getString(R.string.neutral_bluetooth_name_own_needed))
             } else if (optionOn) {
                 append('\n')
                 append(getString(R.string.neutral_bluetooth_name_no_saved))
             }
         }
+        // Normally behind the info button; shown under the switch, and tappable, while the phone is stuck at "Phone".
+        neutralBluetoothNameStatusText.visibility = if (needsOwn) View.VISIBLE else View.GONE
+        neutralBluetoothNameStatusText.setOnClickListener(
+            if (needsOwn) View.OnClickListener { showOwnBluetoothNameDialog(hideAfter = optionOn) } else null,
+        )
+        if (!needsOwn) neutralBluetoothNameStatusText.isClickable = false
         rotatingIdsLegacyNoteText.visibility =
             if (advancedSettings && reuse == AdvertisingPrivacy.AddressReuse.SUSPECTED) View.VISIBLE else View.GONE
     }
@@ -6687,7 +6840,32 @@ class MainActivity : AppCompatActivity() {
      * to keep scene cuts small and keep up with the frame rate becomes the default choice. Off: the
      * static hardware-first order. The order and records are logged in both arms (DEBUG).
      */
-    private fun rankEncoders(available: List<VideoCodec>): List<VideoCodec> {
+    /** One `BENCHMARK encoder_choice` line per stream session (DEBUG); calls log theirs after negotiation. */
+    private fun logStreamEncoderChoice(codec: VideoCodec) {
+        if (!BuildConfig.DEBUG) return
+        val reason = AutomaticEncoderChoice.reason(
+            sent = codec,
+            requested = codec,
+            available = codecs,
+            userChoice = AutomaticEncoderChoice.userChoice,
+            preferHwAv1 = DebugTunables.preferHardwareAv1,
+            peerDecodeMask = null,
+            excluded = AutomaticEncoderChoice::policyExcluded,
+        )
+        Log.i(
+            "BluetoothVideo",
+            AutomaticEncoderChoice.logLine("stream", codec, reason, DebugTunables.preferHardwareAv1, null),
+        )
+    }
+
+    private fun rankEncoders(detected: List<VideoCodec>): List<VideoCodec> {
+        // Design decision 2026-10-27: Automatic prefers an eligible hardware AV1 encoder (control arm
+        // test_prefer_hw_av1=false). A phone without one keeps the static order unchanged.
+        val available = AutomaticEncoderChoice.order(
+            detected,
+            DebugTunables.preferHardwareAv1,
+            AutomaticEncoderChoice::policyExcluded,
+        )
         val store = EncoderBurstProfileStore(this)
         val records = available.associate { it.encoderName to runCatching { store.load(it.encoderName) }.getOrNull() }
         val ranked = if (DebugTunables.experimentalEncoderRanking) {
@@ -7290,6 +7468,7 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("MissingPermission")
     private fun refreshNearbyStreams() {
+        if (onboardingHolds()) return
         val adapter = bluetoothAdapter ?: return
         if (!isSeekingStreamRoute() || !hasRequiredPermissions()) return
         if (nearbyStreamDiscovery != null) return
@@ -7622,6 +7801,8 @@ class MainActivity : AppCompatActivity() {
         contactsTabScreen.visibility = View.GONE
         callScreen.visibility = View.VISIBLE
         privateCallRemoteVideoStarted = false
+        privateCallRemoteFit.reset()
+        privateCallRemoteShownMode = null
         callRemotePreview.alpha = 0f
         callScreenController.reset()
         callScreenController.setForeground(activityResumed)
@@ -7668,6 +7849,8 @@ class MainActivity : AppCompatActivity() {
      * and earlier failures, which with the flag off is exactly the selected transport.
      */
     private fun startPrivateCallEndpoint(forcedChoice: CocTransportChoice? = null) {
+        // First run: no advertising before onboarding (and its "Hide your phone's name" answer).
+        if (onboardingHolds()) return
         val onCallScreen = appScreen == AppScreen.CALL_BROWSER
         // Always reachable (CallReachability): Home starts the same endpoint, without scanning.
         val homeStart = !onCallScreen && idleEndpointScreen() &&
@@ -10873,14 +11056,95 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyPrivateCallSurfaceTransform() {
         val format = privateCallSurfaceFormat ?: return
+        if (callRemotePreview.width == 0 || callRemotePreview.height == 0) return
+        val mode = RemoteVideoFit.mode(
+            enabled = DebugTunables.remoteVideoFit,
+            chosenMode = format.scaleMode,
+            override = privateCallRemoteFit.override,
+            encodedWidth = format.width,
+            encodedHeight = format.height,
+            rotationDegrees = format.rotationDegrees,
+            viewWidth = callRemotePreview.width,
+            viewHeight = callRemotePreview.height,
+        )
+        if (mode != privateCallRemoteShownMode) {
+            privateCallRemoteShownMode = mode
+            Log.i(
+                "BluetoothVideo",
+                "Call screen: remote video ${mode.name.lowercase()} | video=${format.width}x${format.height}" +
+                    " rot=${format.rotationDegrees} | view=${callRemotePreview.width}x${callRemotePreview.height}" +
+                    " | override=${privateCallRemoteFit.override?.name?.lowercase() ?: "none"}",
+            )
+        }
         VideoSurfaceTransform.apply(
             callRemotePreview,
             format.width,
             format.height,
             format.rotationDegrees,
-            format.scaleMode,
+            mode,
             debugTraceSession = debugMediaTraceSession,
         )
+    }
+
+    /** Double-tap framing toggle applies only while the other person's video is large and decoding. */
+    private fun remoteVideoFitToggleAvailable(): Boolean =
+        DebugTunables.remoteVideoFit && privateCallSurfaceFormat != null && callScreenController.remoteLarge &&
+            callRemoteCameraOff.visibility != View.VISIBLE
+
+    private fun toggleRemoteVideoFit() {
+        val current = privateCallRemoteShownMode ?: return
+        val next = privateCallRemoteFit.toggle(current)
+        applyPrivateCallSurfaceTransform()
+        callScreen.announceForAccessibility(
+            if (next == VideoScaleMode.FIT) "Showing the whole picture" else "Filling the screen",
+        )
+    }
+
+    /**
+     * A single tap still shows or hides the call controls. While a double-tap can switch framing, the single tap
+     * waits for the double-tap timeout first (as video players do); otherwise it acts at once.
+     */
+    private fun bindRemoteVideoFitGesture() {
+        var tapHandled = false
+        val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent): Boolean {
+                tapHandled = false
+                return true
+            }
+
+            override fun onSingleTapUp(e: MotionEvent): Boolean {
+                if (!remoteVideoFitToggleAvailable()) {
+                    tapHandled = true
+                    callScreen.performClick()
+                }
+                return true
+            }
+
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                if (!tapHandled) callScreen.performClick()
+                return true
+            }
+
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (remoteVideoFitToggleAvailable()) {
+                    tapHandled = true
+                    toggleRemoteVideoFit()
+                } else if (!tapHandled) {
+                    callScreen.performClick()
+                }
+                return true
+            }
+        })
+        @Suppress("ClickableViewAccessibility") // Taps reach performClick(), so accessibility clicks still work.
+        callScreen.setOnTouchListener { _, event -> detector.onTouchEvent(event) }
+        ViewCompat.addAccessibilityAction(callScreen, "Switch between whole picture and fill screen") { _, _ ->
+            if (remoteVideoFitToggleAvailable()) {
+                toggleRemoteVideoFit()
+                true
+            } else {
+                false
+            }
+        }
     }
 
     private fun endPrivateCall() {
@@ -10918,6 +11182,8 @@ class MainActivity : AppCompatActivity() {
         privateCallRemoteSurface?.release()
         privateCallRemoteSurface = null
         privateCallSurfaceFormat = null
+        privateCallRemoteFit.reset()
+        privateCallRemoteShownMode = null
         privateCallRemoteVideoStarted = false
         debugPrivateCallSurfacePending = false
         activeStreamSettings = null
@@ -11541,14 +11807,26 @@ class MainActivity : AppCompatActivity() {
         sessionHandler.removeCallbacks(receiverBrowserNoticeTimeoutRunnable)
     }
 
+    /** First run: onboarding is in front, so nothing is asked, scanned or advertised here (RuntimePermissionPlan.mainScreenWaits). */
+    private fun onboardingHolds(): Boolean = RuntimePermissionPlan.mainScreenWaits(OnboardingState.open, launchSkipsOnboarding())
+
+    /** Refused on onboarding's permission page; consumed by the first request after it ([RuntimePermissionPlan.afterOnboarding]). */
+    private var postOnboardingRefused: Set<String> = emptySet()
+
     private fun ensurePermissionsAndRefresh() {
+        if (onboardingHolds()) return
         val needed = requiredPermissions().filter { permission ->
             ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
         }
-        if (needed.isEmpty()) {
-            ensureBluetoothEnabledAndRefresh()
-        } else {
-            permissionRequest.launch(needed.toTypedArray())
+        val ask = RuntimePermissionPlan.afterOnboarding(needed, postOnboardingRefused)
+        postOnboardingRefused = emptySet()
+        when {
+            needed.isEmpty() -> ensureBluetoothEnabledAndRefresh()
+            ask.isNotEmpty() -> permissionRequest.launch(ask.toTypedArray())
+            else -> {
+                setStatus(missingPermissionsText())
+                updateStartEnabled()
+            }
         }
     }
 
@@ -11565,8 +11843,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requiredPermissions(): List<String> {
-        val capturesMedia = (sessionRole == SessionRole.SEND || appScreen == AppScreen.CALL ||
-            (!DebugTunables.callReadinessPermissions && appScreen == AppScreen.CALL_BROWSER)) && requestedTransportExperiment == null
+        val capturesMedia = RuntimePermissionPlan.screenCapturesMedia(
+            sending = sessionRole == SessionRole.SEND,
+            onCallScreen = appScreen == AppScreen.CALL,
+            onCallList = appScreen == AppScreen.CALL_BROWSER,
+            callReadiness = DebugTunables.callReadinessPermissions,
+            transportExperiment = requestedTransportExperiment != null,
+        )
         val needsBleAccess = outgoingTransport.isBle || requestedTransportExperiment != null ||
             usesBroadcastDiscovery() || debugAutoSelectStream || sessionRole == SessionRole.RELAY ||
             appScreen == AppScreen.CALL_BROWSER || appScreen == AppScreen.CALL
@@ -11926,6 +12209,7 @@ class MainActivity : AppCompatActivity() {
         }
         val device = selectedDestination() ?: return
         val codec = codecs.getOrNull(codecSpinner.selectedItemPosition) ?: return
+        logStreamEncoderChoice(codec)
         if (debugReplayPath != null) stopIdleCameraPreview()
         ActiveVideoSessionService.start(this, usesCamera = debugReplayPath == null)
         bleDiscovery?.close()
@@ -12113,6 +12397,7 @@ class MainActivity : AppCompatActivity() {
         val audioConfig = audioLive.source?.sendConfig?.takeIf { audioLive.mode } // AUDIO-LIVE hook
         val codec = codecs.getOrNull(codecSpinner.selectedItemPosition)
             ?: if (audioConfig != null) AudioLiveSendConfig.PLACEHOLDER_CODEC else return
+        if (audioConfig == null) logStreamEncoderChoice(codec)
         val activeSettings = activeStreamSettings ?: settings
         val rotationDegrees = if (audioConfig != null) 0 else outgoingVideoRotationDegrees()
         broadcaster?.let { activeBroadcaster ->
@@ -13184,6 +13469,10 @@ class MainActivity : AppCompatActivity() {
         activityResumed = true
         if (landOnCallsAfterOnboarding && OnboardingActivity.isDone(this)) {
             landOnCallsAfterOnboarding = false
+            // The onboarding question "Hide your phone's name" was answered: apply it now.
+            applyNeutralName()
+            // Ask only for what is still missing; what was just refused on the permission page waits for a tap.
+            postOnboardingRefused = OnboardingState.takeRefused()
             showCallsNearby()
         }
         // Back from Wi-Fi settings: the call or stream the Wi-Fi advice paused goes on (audit 2026-10-21).
@@ -13193,7 +13482,10 @@ class MainActivity : AppCompatActivity() {
         }
         if (!startupAborted) debugRawObserver?.start()
         if (!bluetoothStateReceiverRegistered) {
-            registerReceiver(bluetoothStateReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+            val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED).apply {
+                addAction(BluetoothAdapter.ACTION_LOCAL_NAME_CHANGED)
+            }
+            registerReceiver(bluetoothStateReceiver, filter)
             bluetoothStateReceiverRegistered = true
         }
         updateHomeReadiness()

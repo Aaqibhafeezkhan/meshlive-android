@@ -9,7 +9,7 @@ import org.junit.Test
 /** Calling a saved contact: expiring codes by default, leases in the call that verifies, Recent rows, names, hints, Go live title. */
 class SavedContactCallsTest {
     private val lease = DiscoveryExchange.PresenceLease(1, 1_990_656L, 2962, listOf(ByteArray(32) { 1 }, ByteArray(32) { 2 }))
-    private val fingerprint = "1c5fbbcd07e0" + "ab".repeat(26)
+    private val fingerprint = "a15a15a15a15" + "ab".repeat(26)
 
     /** Delivers [actions] of one side to [peer]; returns the peer's resulting actions. */
     private fun deliver(actions: List<PresenceSession.Action>, peer: PresenceSession): List<PresenceSession.Action> =

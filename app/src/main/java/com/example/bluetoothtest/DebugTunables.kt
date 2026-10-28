@@ -305,6 +305,16 @@ object DebugTunables {
         }
 
     /**
+     * Remote call video framing (default on; DEBUG control arm `test_remote_video_fit=false`): a remote video whose
+     * shape differs strongly from the view's is shown whole with black bars, close shapes still fill, and a
+     * double-tap toggles for the call. Off: the app-wide framing setting only, no double-tap. [RemoteVideoFit]
+     */
+    @Volatile var remoteVideoFit: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
      * F17 Stage A (Experimental, default off, `test_call_stall_tolerance`): keep a call whose peer went quiet while this
      * phone's own writes still complete, up to [CallStallTolerance.TOLERANCE_NS], showing "Poor connection" from 3 s.
      */
@@ -868,6 +878,16 @@ object DebugTunables {
         }
 
     /**
+     * A viewer link without the relay parent-link watch (a direct link, or GATT) is closed when a started, live,
+     * camera-on video stream delivered no byte for 8 s, so link-loss recovery reconnects ([ViewerLinkSilenceWatch]).
+     * Default on; DEBUG launch extra `test_viewer_link_silence=false` is the control arm.
+     */
+    @Volatile var viewerLinkSilence: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
      * Child side of relay recovery, split out of [relayChildReanchor] (switch audit B2, [RelayRecoveryConfig]): a relayed child
      * watches its parent link and closes it when silent for 5 s (and, with [relayParentTrickle], when it trickles). Null (the
      * default, and always in release) follows [relayChildReanchor], so `test_relay_child_reanchor=false` alone still turns it
@@ -1055,6 +1075,28 @@ object DebugTunables {
         }
 
     /**
+     * Experimental (default off since 2026-10-28): an LE central's setup PHY request (LE CoC control client and GATT video
+     * client) waits while the link's last reported interval is outside the requested priority window, until the requested
+     * update lands (then 100 ms) or 1.5 s ([PhyAfterPriority]). Built for M31 relay child links that died after a PHY update
+     * between the discovery 7.5 ms and the requested 15 ms updates; the phone A/B (phyprio-ab-20261028) did not confirm that
+     * cause (child deaths 2 of 12 with it, 1 of 11 without; the deaths followed the 15 ms update with or without a PHY).
+     * DEBUG launch extra `test_phy_after_priority=true` turns it on.
+     */
+    @Volatile var phyAfterPriority: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default off): the GATT link that only reads the LE CoC PSM before a fresh ACL requests no priority, PHY
+     * or MTU ([PsmReadLinkQuiet]). DEBUG launch extra `test_psm_read_link_quiet=true` turns it on.
+     */
+    @Volatile var psmReadLinkQuiet: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
      * Experimental (default off; A/B arm): an LE CoC central requests the preferred PHY only after the
      * CoC socket is connected and hop authentication has finished, and waits for onPhyUpdate (readPhy
      * fallback after 1 s) before the end-to-end handshake and media ([CocPhyAfterConnect]); the control
@@ -1082,6 +1124,17 @@ object DebugTunables {
      * single-PDU SDUs ([cocWriteChunkBytes]). DEBUG launch extra `test_coc_coalesce_sdus=true` turns it on.
      */
     @Volatile var cocCoalesceSdus: Boolean = false
+        set(value) {
+            field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Experimental (default off): on stacks the `pre-android-13-coc-congested-write-loss` proposal matches
+     * (API <= 32), forwarding CoC writers (call relays, stream relays and forwarders, and a helper's parent link once it
+     * becomes a relay hop) use coalesced SDUs of up to [COC_COALESCED_SDU_BYTES] instead of 245-byte single-PDU SDUs
+     * ([ForwardingCocCoalescing]). Endpoint links are unchanged. DEBUG launch extra `test_relay_coc_coalesce=true`.
+     */
+    @Volatile var relayCocCoalesce: Boolean = false
         set(value) {
             field = value && BuildConfig.DEBUG
         }
@@ -1133,6 +1186,18 @@ object DebugTunables {
     @Volatile var inboundProbeKbps: Int? = null
 
     @Volatile var relayPhyGuard: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
+        }
+
+    /**
+     * Default on: a call endpoint whose hop is known to be the call's own peer (the hop authenticated as the end-to-end peer, or
+     * this caller dialed a direct offer) ignores the hop's call-relay capability bit when it decides whether to write bad-2M memory
+     * ([AdaptivePhyMemory.callHopRelays]). The bit is signed by every idle helper, so with relayed calls on a direct call never
+     * remembered a bad 2M pair (relay-showcase-20261026 trace-s4 A15s -> ASUS: `bad2m=not_recorded | hop_relays=true`, 4 of 4
+     * calls on 2M). DEBUG launch extra `test_direct_call_hop_memory=false` is the control arm (the bit alone skips the memory).
+     */
+    @Volatile var directCallHopMemory: Boolean = true
         set(value) {
             field = value || !BuildConfig.DEBUG
         }
@@ -1387,7 +1452,7 @@ object DebugTunables {
         }
 
     /**
-     * Relayed calls between strangers (owner decision 2026-10-26, with the safeguards of review CP-1): a relayed call whose
+     * Relayed calls between strangers (design decision 2026-10-26, with the safeguards of review CP-1): a relayed call whose
      * end-to-end caller is a throwaway rings, labelled "via a phone nearby", and a caller may place a relayed call to a target
      * it holds no contact tag for. A relay in the middle can pose as the caller of such a call. DEBUG launch extra
      * `test_relayed_stranger_calls=false` is the control arm (contacts only).
@@ -1537,6 +1602,16 @@ object DebugTunables {
     @Volatile var experimentalEncoderRanking: Boolean = false
         set(value) {
             field = value && BuildConfig.DEBUG
+        }
+
+    /**
+     * Automatic prefers an eligible hardware AV1 encoder (design decision 2026-10-27, release 0.4.1; default on).
+     * DEBUG launch extra `test_prefer_hw_av1=false` is the control arm: hardware AV1 ranks after the other
+     * hardware encoders (hardware VP9 first). Release builds always prefer it.
+     */
+    @Volatile var preferHardwareAv1: Boolean = true
+        set(value) {
+            field = value || !BuildConfig.DEBUG
         }
 
     /**

@@ -105,7 +105,7 @@ What a helper learns about identities: with BMH3 a middle helper learns neither 
 
 **OR-T (sketch, separate review): a target-verified search proof.** The caller adds to `SEEK` a 16-byte proof `HMAC-SHA-256(K_seek, nonce || RDI || u32 epoch)[0:16]` with `K_seek = HKDF-Expand(L_d, "BluetoothVideoMesh/RelaySeek/Proof/1", 32)`, which only holders of that day's lease can compute. The last helper hands it to the target as the first record on its link; the target verifies it with its own day key, keeps a per-epoch replay cache of nonces, and closes the link when it does not verify, which the helper reports as "no route", indistinguishable from absence. A non-holder who only saw the ID could then no longer learn whether the target is within reach, unless the asked helper itself hears the target (which it knows anyway). It adds a hop record on the target's link and touches BMH3/lease rules, hence the separate review; `RELAY_SEEK` bit 1 is reserved for it.
 
-**Who carries the risk (owner rule, 2026-10-27).** Where a tradeoff cannot be avoided, the extra exposure or cost must fall on the forger, spammer or prober, never on the genuine user. Applied to every part of the search:
+**Who carries the risk (design rule, 2026-10-27).** Where a tradeoff cannot be avoided, the extra exposure or cost must fall on the forger, spammer or prober, never on the genuine user. Applied to every part of the search:
 
 | Threat | Who would carry it under revision 3 | Rule now | Residual |
 | --- | --- | --- | --- |

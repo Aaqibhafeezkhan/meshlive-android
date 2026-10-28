@@ -147,6 +147,15 @@
     <string name="neutral_name_advice_refused">Recommended on this phone: its Bluetooth refused to hide the name, so phones that connect can read it.</string>
     <string name="neutral_name_advice_rotating_off">Without Private Bluetooth ID the name is readable by phones that connect. Turn it on to hide it on Android 14 and newer, or use this option on any phone.</string>
     <string name="neutral_name_advice_not_needed">While Private Bluetooth ID is on, phones that connect to you without being paired cannot read the name on this phone. Calls you place and streams you send still show it to the phone you connect to, and Classic Bluetooth lookups see it; this option hides it there too.</string>
+    <string name="neutral_bluetooth_name_off_permission">Off for now: allow Nearby devices for MeshLive in Android settings to hide the name.</string>
+    <string name="neutral_bluetooth_name_off_refused">Off for now: Android did not allow MeshLive to rename the phone.</string>
+    <string name="neutral_bluetooth_name_own_title">Your phone\'s name</string>
+    <string name="neutral_bluetooth_name_own_rename">This phone is called \"Phone\" and MeshLive does not know its earlier name. Enter the name to give it.</string>
+    <string name="neutral_bluetooth_name_own_save">This phone is already called \"Phone\" and MeshLive does not know its own name. Enter it, so that turning this option off can restore it.</string>
+    <string name="neutral_bluetooth_name_own_rename_action">Rename</string>
+    <string name="neutral_bluetooth_name_own_needed">This phone is called \"Phone\" and MeshLive does not know its own name. Tap here to set it.</string>
+    <string name="neutral_bluetooth_name_own_invalid">Enter a name other than \"Phone\".</string>
+    <string name="neutral_bluetooth_name_own_failed">Android did not rename the phone. Set its name in Android settings.</string>
     <string name="neutral_bluetooth_name_paused">You renamed the phone, so the neutral name is switched off. Your name stays.</string>
     <string name="neutral_bluetooth_name_migrated">An earlier version renamed this phone to \"Phone\" while rotating IDs were on. It keeps that name for now and the option below is on. Your original name was: %1$s</string>
     <string name="neutral_bluetooth_name_keep">Keep \"Phone\"</string>

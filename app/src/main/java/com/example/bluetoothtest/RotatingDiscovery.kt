@@ -519,9 +519,12 @@ object RecoveryHint {
     }
 }
 
-/** The explicit option "Use a neutral Bluetooth name" (default off; PROTOCOL "Pre-handshake exposure"). */
+/**
+ * The option "Hide phone name" (PROTOCOL "Pre-handshake exposure"). Default on since 2026-10-27 (DECISIONS "Hide phone
+ * name on by default"); the phone is renamed only after the user answered [NeutralNameChoice]'s question.
+ */
 object NeutralNameOption {
-    /** Advanced setting, default off, independent of the rotating switch. */
+    /** The user's explicit choice (Settings > Privacy, or the onboarding question); independent of the rotating switch. */
     const val PREF = "neutral_bluetooth_name"
 
     /** DEBUG launch extra; [EXTRA_ALIAS] is the earlier name (it renamed with the rotating switch) kept so launch lines keep working. */
@@ -529,13 +532,14 @@ object NeutralNameOption {
     const val EXTRA_ALIAS = "test_rotating_neutral_name"
 
     /**
-     * A DEBUG benchmark launch changes the name only with its extra (or the alias); otherwise the stored choice (default
-     * off), with or without the Advanced view. Resolved by [FeatureCatalog.resolve]; its switch is the Advanced privacy row.
+     * A DEBUG benchmark launch changes the name only with its extra (or the alias), default off; otherwise the stored
+     * choice, else on, with or without the Advanced view. Resolved by [FeatureCatalog.resolve]; its switch is the
+     * Settings > Privacy row. Off-switch: the stored choice (Settings, onboarding "Keep my name").
      */
     val spec = FeatureSpec(
         id = "neutral_bluetooth_name",
         prefKey = PREF,
-        defaultEnabled = false,
+        defaultEnabled = true,
         benchmarkExtra = EXTRA,
         extraAliases = listOf(EXTRA_ALIAS),
         group = ConnectivityFeatures.GROUP,
@@ -562,22 +566,54 @@ object NeutralBluetoothName {
     data class Action(val setName: String?, val saveOriginal: String?, val clearSaved: Boolean, val pause: Boolean = false)
 
     /**
-     * [currentName] is the adapter's name now (null: unreadable or Bluetooth off), [savedOriginal] the saved copy and
-     * [applied] whether the app has already written [NEUTRAL] under this option. Before the first successful write a
-     * name other than [NEUTRAL] is the user's own (also after a failed attempt); after it, any other name is the user's
-     * later choice and wins: the option pauses instead of fighting a deliberate rename.
+     * A name that can be the user's own: not blank and not [NEUTRAL]. The neutral name is never saved as "the
+     * original" (release recheck 2026-10-28: a phone left called "Phone" with nothing to restore).
      */
-    fun onEnabled(currentName: String?, savedOriginal: String?, applied: Boolean = false): Action = when {
-        currentName == null -> Action(null, null, false)
-        currentName == NEUTRAL -> Action(null, null, false)
-        applied -> Action(null, null, clearSaved = true, pause = true)
-        else -> Action(NEUTRAL, currentName, false)
+    fun ownName(name: String?): String? = name?.takeIf { it.isNotBlank() && it != NEUTRAL }
+
+    /** A suggestion for the user's own name when none was saved: Android's device name, else the model. */
+    fun suggestedOwnName(deviceName: String?, model: String?): String? =
+        ownName(deviceName?.trim()) ?: ownName(model?.trim())
+
+    /**
+     * The phone reads [NEUTRAL] but no own name is saved to restore (app data cleared, or the lost-original state of
+     * the 0.4.1 release candidate): Settings offers to rename the phone instead of leaving it stuck.
+     */
+    fun needsOwnName(currentName: String?, savedOriginal: String?): Boolean =
+        currentName == NEUTRAL && ownName(savedOriginal) == null
+
+    /**
+     * [currentName] is the adapter's name now (null: unreadable or Bluetooth off), [savedOriginal] the saved copy,
+     * [applied] whether the adapter has been READ as [NEUTRAL] under this option, and [pending] a name the app wrote
+     * that the adapter has not reported back yet. Android applies a rename asynchronously (AOSP AdapterProperties:
+     * setName() returns once the request is queued; getName() changes only in the stack's property callback, which
+     * also sends ACTION_LOCAL_NAME_CHANGED), so a read right after a write can still return the old name. Before the
+     * name was read back a name other than [NEUTRAL] is the user's own (also after a failed attempt); after it, any
+     * other name is the user's later choice and wins: the option pauses instead of fighting a deliberate rename.
+     */
+    fun onEnabled(currentName: String?, savedOriginal: String?, applied: Boolean = false, pending: String? = null): Action {
+        val saved = ownName(savedOriginal)
+        return when {
+            currentName == null -> Action(null, null, false)
+            // A restore is still on its way, so "Phone" read now may be stale: write it again, after the restore.
+            pending != null && pending != NEUTRAL -> Action(NEUTRAL, saved ?: ownName(pending), false)
+            currentName == NEUTRAL -> Action(null, null, false)
+            applied -> Action(null, null, clearSaved = true, pause = true)
+            else -> Action(NEUTRAL, ownName(currentName) ?: saved, false)
+        }
     }
 
-    fun onDisabled(currentName: String?, savedOriginal: String?): Action = when {
-        savedOriginal == null -> Action(null, null, false)
-        // Restore only our own neutral name; a name the user chose since then is kept.
-        currentName == NEUTRAL -> Action(savedOriginal, null, true)
-        else -> Action(null, null, true)
+    /**
+     * Restores the saved name over our own [NEUTRAL]; a name the user chose since then is kept. The saved copy stays
+     * until the adapter reads it back ([clearSaved] false while restoring), and a "Phone" write not reported back yet
+     * ([pending] = [NEUTRAL]) is followed by the restore even while the old name still reads.
+     */
+    fun onDisabled(currentName: String?, savedOriginal: String?, pending: String? = null): Action {
+        val saved = ownName(savedOriginal) ?: return Action(null, null, savedOriginal != null)
+        return when {
+            currentName == null -> Action(null, null, false)
+            currentName == NEUTRAL || (pending == NEUTRAL && currentName == saved) -> Action(saved, null, false)
+            else -> Action(null, null, true)
+        }
     }
 }

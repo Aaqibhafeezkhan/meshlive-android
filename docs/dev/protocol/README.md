@@ -14,10 +14,11 @@ For implementers and security reviewers: the normative wire formats and security
    - [Emergency wipe](identity.md#emergency-wipe)
    - [Confidentiality and failure boundaries](identity.md#confidentiality-and-failure-boundaries)
    - [Verification](identity.md#verification)
-2. **Links and framing**: the records carried on every hop, the GATT byte stream and the compact-header draft.
+2. **Links and framing**: the records carried on every hop, the GATT byte stream and the compact-header and video-codec drafts.
    - [Hop and endpoint records](links.md#hop-and-endpoint-records)
    - [GATT byte stream and draft lost-chunk recovery](links.md#gatt-byte-stream-and-draft-lost-chunk-recovery)
    - [Draft: compact headers and aggregation `CH1` (Design CH, draft 2026-10-27, not reviewed, not built)](links.md#draft-compact-headers-and-aggregation-ch1-design-ch-draft-2026-10-27-not-reviewed-not-built)
+   - [Draft: HEVC and H.264 video codecs (Design HC, revision 3 after reviews 1 and 2, ready for implementation)](links.md#draft-hevc-and-h264-video-codecs-design-hc-revision-3-after-reviews-1-and-2-ready-for-implementation)
 3. **Discovery and advertising**: what a phone broadcasts, how it is found, and the names it shows.
    - [Peer labels: handles, names, call subjects and stream titles](discovery.md#peer-labels-handles-names-call-subjects-and-stream-titles)
    - [Naming v2: generated names, label timing, name pages and verification codes (design 2026-10-12, not built)](discovery.md#naming-v2-generated-names-label-timing-name-pages-and-verification-codes-design-2026-10-12-not-built)

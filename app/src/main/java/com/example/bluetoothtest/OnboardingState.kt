@@ -6,6 +6,20 @@ import android.content.Context
 internal object OnboardingState {
     private const val PREF_ONBOARDING_DONE = "onboarding_done_v1"
 
+    /** In this process, the first-run screens are in front: the main screen waits ([RuntimePermissionPlan.mainScreenWaits]). */
+    @Volatile
+    var open: Boolean = false
+
+    /** What the user refused on the permission page in this process; the screen after onboarding does not ask again. */
+    @Volatile
+    private var refused: Set<String> = emptySet()
+
+    fun recordAnswers(granted: Map<String, Boolean>) {
+        refused = granted.filterValues { !it }.keys
+    }
+
+    fun takeRefused(): Set<String> = refused.also { refused = emptySet() }
+
     /** UI-only preferences file; listed in EmergencyWipe.KNOWN_PREFERENCES. */
     const val PREFERENCES = "bluetooth_video_ui"
 

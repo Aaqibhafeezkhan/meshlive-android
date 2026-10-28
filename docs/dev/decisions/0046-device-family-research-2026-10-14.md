@@ -18,7 +18,7 @@ guidance; T thermal, memory and native (corrected forecast sampling, battery-tem
 safe mode); V camera and encoder configuration; D decoder robustness; U audio capture, routing and focus. Phase 2
 a design record and review first.
 
-**Review decisions (root, 2026-10-14).**
+**Review decisions (2026-10-14).**
 
 - **G-03, busy-write wedge detection: default `legacy`.** The check ends a link on one busy answer while nothing is in
   flight on SDK 33-34, which covers three of the four lane phones (A15s, ASUS, M31). Without a phone A/B under load that

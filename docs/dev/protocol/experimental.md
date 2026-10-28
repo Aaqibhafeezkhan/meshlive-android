@@ -13,10 +13,12 @@ Settings > Advanced > Connection "Listen on both links" (DEBUG `test_dual_listen
 | Bit | Meaning |
 | --- | --- |
 | 0, 1 | VP9, AV1 (existing) |
-| 2 | Reserved for H.264 (compact codec field bit 56; PLAN iPhone interoperability) |
+| 2 | H.264 (draft, Design HC; compact codec field bit 56) |
 | 3 | **Dual: also reachable over GATT** (this section) |
 | 4 | Relay consent (relayed calls) |
-| 5-7 | Reserved, zero |
+| 5 | BMH3 hint (version 2 offers; "Experimental BMH3 identity-hiding link handshake") |
+| 6 | Zero (`0x40` is the stream audio-only marker) |
+| 7 | HEVC (draft, Design HC) |
 
 **Who may set it (all must hold).** The switch is on; the endpoint's transport is LE CoC (the user's choice, or what the CoC-to-GATT safety net left); the offer is a private-call offer (`FLAG_PRIVATE_CALL_AVAILABLE`, not `FLAG_STREAM_AVAILABLE`) at route cost 0, version 2 or 5; it is not a relay-helper offer (`FLAG_RELAY_CAPABLE` clear: a helper stays single-bearer, "One bearer end to end"); and the GATT call service is registered and the second server started successfully **before** the offer is composed. The bit is never advertised for something that does not exist: if the service cannot be registered the offer is the plain CoC offer. It is never set on stream offers, viewer requests, Classic or GATT-primary offers, relay offers or reach pages. Compact (iPhone) form: no bit exists and none is sent; an iPhone offer is GATT-primary and never carries the hint.
 

@@ -423,21 +423,72 @@ object LinkOpeningExchange {
 
 /**
  * Applies the explicit option "Use a neutral Bluetooth name ("Phone")" (NeutralBluetoothName has the pure rules;
- * PROTOCOL "Pre-handshake exposure"). Called when the option changes and when the app starts or resumes, never
- * per call, advertising session or epoch. The saved original name lives in this app's preferences (it is lost
- * with the app's data; the adapter name itself survives uninstall), and is shown in Settings whenever it exists.
+ * PROTOCOL "Pre-handshake exposure"). Called when the option changes, when the app starts or resumes and when the
+ * stack reports a new name (ACTION_LOCAL_NAME_CHANGED), never per call, advertising session or epoch. The saved
+ * original name lives in this app's preferences (it is lost with the app's data; the adapter name itself survives
+ * uninstall), and is shown in Settings whenever it exists.
+ *
+ * A rename is asynchronous on Android (AOSP AdapterProperties.setName queues the write; getName changes only in the
+ * stack's property callback). So a write is recorded as pending and "applied" only once the adapter READS the
+ * neutral name; the original is committed before the write; a write still in flight is not repeated. Release
+ * recheck 2026-10-28: two applies back to back after onboarding (onResume, then the permission-ready path) read
+ * the old name after an accepted write, took it for a user rename, dropped the original and switched the option
+ * off, and the phone then became "Phone" with nothing to restore.
  */
 object NeutralBluetoothNameController {
-    private const val PREFS = "rotating_discovery_name"
+    internal const val PREFS = "rotating_discovery_name"
     private const val KEY_ORIGINAL = "originalName"
     private const val KEY_APPLIED = "applied"
+    private const val KEY_PENDING = "pendingName"
 
-    /** [paused]: the user renamed the phone after the option was applied; the option must be switched off. */
-    class Outcome(val changed: Boolean, val restored: Boolean, val paused: Boolean = false)
+    /** An accepted write not read back yet is not repeated within this time in the same process. */
+    const val IN_FLIGHT_MS = 5_000L
 
-    /** The name saved when the option was turned on (null: none), for the Settings text. */
-    fun savedOriginal(context: Context): String? =
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_ORIGINAL, null)
+    /** Accepted writes of one name that never read back, in this process, before the rename counts as refused. */
+    const val MAX_UNCONFIRMED_WRITES = 3
+
+    /** The adapter's name as the controller sees it; [AdapterRadio] on a phone, a fake in tests. */
+    interface Radio {
+        /** Null when unreadable (Bluetooth off, no permission). */
+        fun name(): String?
+
+        /** True when Android accepted the request; the name changes later. */
+        fun setName(name: String): Boolean
+    }
+
+    private class AdapterRadio(private val adapter: BluetoothAdapter) : Radio {
+        override fun name(): String? = currentName(adapter)
+
+        @SuppressLint("MissingPermission")
+        override fun setName(name: String): Boolean = adapter.setName(name)
+    }
+
+    /**
+     * [paused]: the user renamed the phone after the option was applied; the option must be switched off. [refused]:
+     * the neutral name was due but Android did not accept the write (Settings shows the option off with a reason).
+     * [pending]: a write was accepted and the adapter has not reported the new name yet.
+     */
+    class Outcome(
+        val changed: Boolean,
+        val restored: Boolean,
+        val paused: Boolean = false,
+        val refused: Boolean = false,
+        val pending: Boolean = false,
+        val logged: String? = null,
+    )
+
+    private var inFlightName: String? = null
+    private var inFlightSinceMs = 0L
+    private var unconfirmedWrites = 0
+
+    private fun prefs(context: Context): SharedPreferences =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** The name saved when the option was turned on (null: none, or not a usable own name), for the Settings text. */
+    fun savedOriginal(context: Context): String? = savedOriginal(prefs(context))
+
+    internal fun savedOriginal(prefs: SharedPreferences): String? =
+        NeutralBluetoothName.ownName(prefs.getString(KEY_ORIGINAL, null))
 
     /** The adapter's name now, or null when it cannot be read. */
     @SuppressLint("MissingPermission")
@@ -447,32 +498,115 @@ object NeutralBluetoothNameController {
      * Makes the adapter name match [optionOn]. [everChosen] is false while the preference was never written: a
      * restore then undoes the automatic rename of builds before 2026-10-11 and is logged as a migration.
      */
-    @SuppressLint("MissingPermission")
     fun apply(context: Context, adapter: BluetoothAdapter?, optionOn: Boolean, everChosen: Boolean = true): Outcome {
         adapter ?: return Outcome(changed = false, restored = false)
-        val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val current = currentName(adapter)
+        val outcome = apply(prefs(context), AdapterRadio(adapter), optionOn, everChosen, SystemClock.elapsedRealtime())
+        outcome.logged?.let { Log.i("BluetoothVideo", (if (BuildConfig.DEBUG) "BENCHMARK " else "") + it) }
+        return outcome
+    }
+
+    /** One application at a time (main thread and receivers alike), so a decision never reads a half-written state. */
+    @Synchronized
+    internal fun apply(prefs: SharedPreferences, radio: Radio, optionOn: Boolean, everChosen: Boolean, nowMs: Long): Outcome {
+        val current = runCatching { radio.name() }.getOrNull()
         val saved = prefs.getString(KEY_ORIGINAL, null)
+        var pending = prefs.getString(KEY_PENDING, null)
+        // The adapter now reads what was written: the write is confirmed.
+        if (pending != null && current == pending) {
+            prefs.edit().remove(KEY_PENDING).commit()
+            pending = null
+        }
+        if (pending == null) forgetInFlight()
         val applied = prefs.getBoolean(KEY_APPLIED, false)
         val action = if (optionOn) {
-            NeutralBluetoothName.onEnabled(current, saved, applied)
+            NeutralBluetoothName.onEnabled(current, saved, applied, pending)
         } else {
-            NeutralBluetoothName.onDisabled(current, saved)
+            NeutralBluetoothName.onDisabled(current, saved, pending)
         }
-        action.saveOriginal?.let { prefs.edit().putString(KEY_ORIGINAL, it).apply() }
-        val changed = action.setName?.let { name -> runCatching { adapter.setName(name) }.getOrDefault(false) } ?: false
-        if (action.clearSaved && (action.setName == null || changed)) prefs.edit().remove(KEY_ORIGINAL).apply()
-        // "Applied" means a write of Phone succeeded, or the adapter already read Phone with the option on.
-        if (optionOn && (changed || current == NeutralBluetoothName.NEUTRAL)) prefs.edit().putBoolean(KEY_APPLIED, true).apply()
-        if (!optionOn || action.pause) prefs.edit().remove(KEY_APPLIED).apply()
-        val restored = !optionOn && changed
-        if (action.setName != null || action.pause || (!optionOn && action.clearSaved)) {
-            Log.i(
-                "BluetoothVideo",
-                (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
-                    "rotid_name: option=$optionOn | changed=$changed | paused=${action.pause} | migrated=${restored && !everChosen}",
-            )
+        // The original is on disk before the adapter is touched, and it is never the neutral name.
+        NeutralBluetoothName.ownName(action.saveOriginal)?.let { own ->
+            if (own != saved) prefs.edit().putString(KEY_ORIGINAL, own).commit()
         }
-        return Outcome(changed, restored, action.pause)
+        var accepted = false
+        action.setName?.let { name ->
+            when {
+                // Single flight: the same write is already on its way.
+                inFlightName == name && nowMs - inFlightSinceMs < IN_FLIGHT_MS -> accepted = true
+                // Accepted several times and never read back: Android is not applying it (reported as refused).
+                inFlightName == name && unconfirmedWrites >= MAX_UNCONFIRMED_WRITES -> Unit
+                else -> {
+                    prefs.edit().putString(KEY_PENDING, name).commit()
+                    accepted = runCatching { radio.setName(name) }.getOrDefault(false)
+                    if (accepted) {
+                        unconfirmedWrites = if (inFlightName == name) unconfirmedWrites + 1 else 1
+                        inFlightName = name
+                        inFlightSinceMs = nowMs
+                    } else {
+                        prefs.edit().remove(KEY_PENDING).commit()
+                        forgetInFlight()
+                    }
+                }
+            }
+        }
+        if (action.clearSaved) prefs.edit().remove(KEY_ORIGINAL).commit()
+        // "Applied" only once the adapter reads Phone with no other write of ours still on its way.
+        if (optionOn && current == NeutralBluetoothName.NEUTRAL && pending == null) {
+            prefs.edit().putBoolean(KEY_APPLIED, true).commit()
+        }
+        if (!optionOn || action.pause) prefs.edit().remove(KEY_APPLIED).commit()
+        if (action.pause) {
+            prefs.edit().remove(KEY_PENDING).commit()
+            forgetInFlight()
+        }
+        val restored = !optionOn && accepted
+        val stillPending = prefs.getString(KEY_PENDING, null) != null
+        val logged = if (action.setName != null || action.pause || (!optionOn && action.clearSaved)) {
+            "rotid_name: option=$optionOn | changed=$accepted | pending=$stillPending | paused=${action.pause} | " +
+                "migrated=${restored && !everChosen}"
+        } else {
+            null
+        }
+        return Outcome(
+            changed = accepted,
+            restored = restored,
+            paused = action.pause,
+            refused = optionOn && action.setName != null && !accepted,
+            pending = stillPending,
+            logged = logged,
+        )
     }
+
+    /**
+     * Recovery when the phone reads "Phone" and no own name is saved: remember [name] as the user's own (the option
+     * then restores it when turned off). False for a blank name or the neutral name itself.
+     */
+    fun saveOwnName(context: Context, name: String): Boolean = saveOwnName(prefs(context), name)
+
+    internal fun saveOwnName(prefs: SharedPreferences, name: String): Boolean {
+        val own = NeutralBluetoothName.ownName(name.trim()) ?: return false
+        return prefs.edit().putString(KEY_ORIGINAL, own).commit()
+    }
+
+    /** Recovery with the option off: renames the phone to the user's own [name] now. */
+    fun renameToOwnName(context: Context, adapter: BluetoothAdapter?, name: String): Boolean {
+        adapter ?: return false
+        return renameToOwnName(prefs(context), AdapterRadio(adapter), name)
+    }
+
+    @Synchronized
+    internal fun renameToOwnName(prefs: SharedPreferences, radio: Radio, name: String): Boolean {
+        val own = NeutralBluetoothName.ownName(name.trim()) ?: return false
+        prefs.edit().remove(KEY_PENDING).remove(KEY_ORIGINAL).remove(KEY_APPLIED).commit()
+        forgetInFlight()
+        return runCatching { radio.setName(own) }.getOrDefault(false)
+    }
+
+    private fun forgetInFlight() {
+        inFlightName = null
+        inFlightSinceMs = 0L
+        unconfirmedWrites = 0
+    }
+
+    /** Process recreation in tests: the in-memory single-flight state is gone, the preferences stay. */
+    internal fun resetProcessForTest() = forgetInFlight()
 }

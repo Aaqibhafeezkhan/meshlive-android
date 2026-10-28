@@ -66,16 +66,19 @@ object OfflineAppShareGate {
     fun liveSessionActive(): Boolean = runCatching { liveSessionCheck?.invoke() == true }.getOrDefault(true)
 }
 
-/** One Wi-Fi Direct group creation attempt, in the order [OfflineAppSharePolicy.bandAttempts] gives. */
+/**
+ * One Wi-Fi Direct group creation attempt, in the order [OfflineAppSharePolicy.bandAttempts] gives. Every attempt passes
+ * a WifiP2pConfig with our own random name/passphrase and persistent mode off, so the group is temporary. There is
+ * deliberately no createGroup(channel, listener) attempt: that call creates a PERSISTENT group, and a saved persistent
+ * group stops Android re-randomising this phone's Wi-Fi Direct MAC address (a lasting linkability leak that apps cannot
+ * delete). WifiP2pConfig.Builder exists from API 29 and minSdk is 29, so no older fallback is needed.
+ */
 internal enum class GroupBandAttempt {
     /** WifiP2pConfig.Builder with GROUP_OWNER_BAND_5GHZ and our own name/passphrase. */
     BAND_5GHZ,
 
     /** WifiP2pConfig.Builder with GROUP_OWNER_BAND_AUTO (the framework picks; usually 2.4 GHz). */
     BAND_AUTO,
-
-    /** createGroup(channel, listener): the framework picks band, name and passphrase. */
-    LEGACY,
 }
 
 /** Pure rules, unit-tested without Android. */
@@ -130,11 +133,10 @@ internal object OfflineAppSharePolicy {
     fun validPassphrase(passphrase: String): Boolean =
         passphrase.length in 8..63 && passphrase.all { it.code in 0x20..0x7e }
 
-    /** 5 GHz first only where the phone reports 5 GHz support; legacy last (it always exists on API 29+). */
+    /** 5 GHz first only where the phone reports 5 GHz support, then auto band. Never a persistent-group attempt. */
     fun bandAttempts(supports5Ghz: Boolean): List<GroupBandAttempt> = buildList {
         if (supports5Ghz) add(GroupBandAttempt.BAND_5GHZ)
         add(GroupBandAttempt.BAND_AUTO)
-        add(GroupBandAttempt.LEGACY)
     }
 
     sealed class FailureStep {

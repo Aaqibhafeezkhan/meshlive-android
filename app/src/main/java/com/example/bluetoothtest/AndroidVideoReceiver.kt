@@ -78,6 +78,10 @@ class AndroidVideoReceiver(
     @Volatile private var parentStreamPaused = false
     /** The parent's stream header arrived on this link: media can flow, so the trickle test may judge. */
     @Volatile private var parentMediaStarted = false
+    /** The parent's media state says the camera is off: no video needs to flow ([ViewerLinkSilenceWatch]). */
+    @Volatile private var parentVideoOff = false
+    /** The authenticated header is audio-only live, which [ViewerLinkSilenceWatch] does not judge. */
+    @Volatile private var parentAudioOnly = false
     /**
      * Experimental relay child thinning only: the relay paused this child's video for a weak link (audio still arrives). The
      * trickle close treats such a window like the parent's own pause (B10): audio alone is far below bitrate/8 of the video
@@ -567,11 +571,23 @@ class AndroidVideoReceiver(
             RotatingDiscovery.offAir(RotatingDiscoveryIds.ROLE_VIEWER_REQUEST)
             gattParentLink = connection
             var linkAuthenticated = false
+            parentStreamPaused = false
+            parentMediaStarted = false
+            parentVideoOff = false
+            parentAudioOnly = false
+            // The GATT read has no watch of its own: the viewer link silence watch closes a link that delivers nothing.
+            val gattReads = SocketReadGapStats()
+            val gattSilenceWatch = startViewerLinkSilenceWatch(
+                BluetoothTransportOption.BLE_GATT,
+                routeCost,
+                relayParentWatchRunning = false,
+                gattReads,
+            ) { runCatching { connection.close() } }
             try {
                 receiveSecure(
                     context,
                     adapter,
-                    BufferedInputStream(connection.inputStream, ioConfig.bufferBytes),
+                    BufferedInputStream(gattReads.wrap(connection.inputStream), ioConfig.bufferBytes),
                     BufferedOutputStream(connection.outputStream, ioConfig.bufferBytes),
                     BluetoothTransportOption.BLE_GATT,
                     identity,
@@ -618,6 +634,7 @@ class AndroidVideoReceiver(
                     onStatus("Incoming GATT stream stopped: ${error.message ?: error.javaClass.simpleName}")
                 }
             } finally {
+                gattSilenceWatch?.interrupt()
                 gattParentLink = null
                 onStreamActive(false)
                 closeDecoders()
@@ -698,6 +715,8 @@ class AndroidVideoReceiver(
         val output = BufferedOutputStream(socket.mediaOutputStream(), ioConfig.bufferBytes)
         parentStreamPaused = false
         parentMediaStarted = false
+        parentVideoOff = false
+        parentAudioOnly = false
         weakLinkPaused = false
         // A relay's re-anchor closes this link, but on a starved link (mesh4-659efc38 0001/0005:
         // 0 kbps) even the close may never arrive and this child waited 30 s, unseen by the relay's
@@ -711,7 +730,8 @@ class AndroidVideoReceiver(
         val trickle = if (DebugTunables.relayParentTrickle) RelayParentTrickle(streamBitrateKbps, startedNs) else null
         parentTrickle = trickle
         // The child-side parent-link watch (RelayRecoveryConfig.parentWatch; follows relay_child_reanchor unless set apart).
-        val silenceWatch = if (routeCost > 0 && RelayRecoveryConfig.current().parentWatch) {
+        val relayParentWatchRunning = routeCost > 0 && RelayRecoveryConfig.current().parentWatch
+        val silenceWatch = if (relayParentWatchRunning) {
             thread(name = "ReceiverParentSilence") {
                 try {
                     while (running.get()) {
@@ -749,12 +769,52 @@ class AndroidVideoReceiver(
         } else {
             null
         }
+        // A direct link (or a relayed one whose parent watch is off) gets the viewer link silence watch instead.
+        val linkSilenceWatch = startViewerLinkSilenceWatch(transport, routeCost, relayParentWatchRunning, readGaps) {
+            runCatching { socket.close() }
+        }
         try {
             receiveSecureWithDetails(context, adapter, input, output, socket, readGaps, transport, identity,
                 capabilities, expectedSourceNodeIdPrefix, streamToken, routeCost, streamBitrateKbps,
                 phyPreference, ioConfig)
         } finally {
             silenceWatch?.interrupt()
+            linkSilenceWatch?.interrupt()
+        }
+    }
+
+    /**
+     * Viewer link silence watch ([ViewerLinkSilenceWatch], `viewer_link_silence`): closes a started, live, camera-on video
+     * link that delivered no byte for [ViewerLinkSilenceWatch.SILENCE_NS], so link-loss recovery reconnects. Null when it
+     * does not run on this link (switch off, or the relay parent-link watch already watches it).
+     */
+    private fun startViewerLinkSilenceWatch(
+        transport: BluetoothTransportOption,
+        routeCost: Int,
+        relayParentWatchRunning: Boolean,
+        reads: SocketReadGapStats,
+        closeLink: () -> Unit,
+    ): Thread? {
+        if (!ViewerLinkSilenceWatch.applies(DebugTunables.viewerLinkSilence, relayParentWatchRunning)) return null
+        val watch = ViewerLinkSilenceWatch()
+        return thread(name = "ViewerLinkSilence", isDaemon = true) {
+            try {
+                while (running.get()) {
+                    Thread.sleep(ViewerLinkSilenceWatch.CHECK_MS)
+                    val silentMs = watch.onTick(
+                        System.nanoTime(),
+                        reads.lastReadAtNs,
+                        mediaStarted = parentMediaStarted,
+                        silenceExpected = parentStreamPaused || parentVideoOff || parentAudioOnly || weakLinkPaused,
+                    ) ?: continue
+                    Log.i("BluetoothVideo", ViewerLinkSilenceWatch.benchmarkLine(silentMs, transport, routeCost))
+                    onStatus("No video arrived for ${silentMs / 1_000L} s; reconnecting.")
+                    closeLink()
+                    return@thread
+                }
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
         }
     }
 
@@ -995,6 +1055,7 @@ class AndroidVideoReceiver(
                 markerMismatchMarkedAudio = mismatch.offerMarkedAudioOnly
                 throw mismatch
             }
+            parentAudioOnly = header.isAudioOnly
             parentMediaStarted = true
             forwardedGrant?.let { grant ->
                 require(streamReader.meshStreamId == grant.streamId) {
@@ -1427,6 +1488,7 @@ class AndroidVideoReceiver(
                         }
                         is ReceivedStreamContent.State -> {
                             lifecycleRecords++
+                            parentVideoOff = content.state.cameraOff
                             if (BuildConfig.DEBUG && debugPresentationTiming) {
                                 Log.i(
                                     "BluetoothVideo",

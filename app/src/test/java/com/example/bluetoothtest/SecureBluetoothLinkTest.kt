@@ -285,7 +285,8 @@ class SecureBluetoothLinkTest {
         val failure = assertThrows(GeneralSecurityException::class.java) {
             SecureRecordReader(ByteArrayInputStream(modified), key).read()
         }
-        assertTrue(failure.message.orEmpty().contains("Secure link decrypt failed: type=END_TO_END_CONTENT sequence=0"))
+        // The details moved to the hop_integrity log line (HopIntegrityLogTest); the message reaches the user's screen.
+        assertEquals("Secure link decrypt failed", failure.message)
         assertTrue(failure.cause is GeneralSecurityException)
     }
 

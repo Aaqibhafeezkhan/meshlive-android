@@ -33,7 +33,7 @@ class FeatureResolutionMatrixTest {
 
     private val cases = listOf(
         Case(RotatingDiscoveryFeature.spec) { l, x, s, _ -> if (l.benchmark) x == true else s ?: true },
-        Case(NeutralNameOption.spec) { l, x, s, _ -> if (l.benchmark) x == true else s ?: false },
+        Case(NeutralNameOption.spec) { l, x, s, _ -> if (l.benchmark) x == true else s ?: true }, // default on since 2026-10-27
         // MessagingV2Feature.resolve (inside Messages): `messages && (bench ? extra : stored) ?: default`.
         Case(MessagingV2Feature.spec, constantKey = true) { l, x, s, _ -> (if (l.benchmark) x else s) ?: true },
         // MessagingV2ChatFeature.resolve: bench ? getBooleanExtra(EXTRA, true) : stored ?: true.
@@ -85,7 +85,8 @@ class FeatureResolutionMatrixTest {
     fun theNeutralNameAliasStillSwitchesABenchmarkLaunch() {
         val spec = NeutralNameOption.spec
         assertTrue(FeatureCatalog.resolve(spec, true, { if (it == NeutralNameOption.EXTRA_ALIAS) true else null }, { null }))
-        assertFalse(FeatureCatalog.resolve(spec, false, { true }, { null }))
+        // A user launch ignores the extra: a stored off stays off (default on since 2026-10-27).
+        assertFalse(FeatureCatalog.resolve(spec, false, { true }, { false }))
     }
 
     @Test

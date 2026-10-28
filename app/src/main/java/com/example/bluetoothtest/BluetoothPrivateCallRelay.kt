@@ -855,11 +855,14 @@ class BluetoothPrivateCallRelay(
     ) {
         var forwardedRecord = false
         var reading = true
+        val counters = RelayForwardCounters()
+        var ended: Exception? = null
         try {
             while (running.get()) {
                 reading = true
                 val record = source.reader.read()
                 reading = false
+                counters.onRead()
                 markProgress(direction)
                 require(
                     record.type == SecureRecordType.END_TO_END_HANDSHAKE ||
@@ -875,10 +878,12 @@ class BluetoothPrivateCallRelay(
                     destination.writer.write(record.type, record.payload)
                 }
                 destination.writer.flush()
+                counters.onForwarded(record)
                 markProgress(if (direction == "caller") "callee" else "caller")
                 forwardedRecord = true
             }
         } catch (error: Exception) {
+            ended = error
             if (forwardedRecord) armConnectionCloseDrain()
             // Diagnostics only: a failure in the hop-loss note must never keep this relay from closing its links.
             if (running.get()) {
@@ -889,6 +894,21 @@ class BluetoothPrivateCallRelay(
                 closeConnections()
                 worker?.interrupt()
                 reverseWorker?.interrupt()
+            }
+        } finally {
+            // Diagnostics only: per-direction counts at close, so a hop_integrity line on the next phone can be matched
+            // to the record this relay sent (its hop sequence is destinationWritten at that moment).
+            runCatching {
+                android.util.Log.i(
+                    "BluetoothVideo",
+                    counters.line(
+                        direction,
+                        stage = if (ended == null) "stopped" else if (reading) "read" else "write",
+                        ended = ended,
+                        sourceRead = source.reader.recordsRead,
+                        destinationWritten = destination.writer.recordsWritten,
+                    ),
+                )
             }
         }
     }
@@ -1166,7 +1186,7 @@ class BluetoothPrivateCallRelay(
             handshake = { socket ->
                 SecureBluetoothHandshake.initiate(
                     BufferedInputStream(socket.inputStream, BUFFER_BYTES),
-                    BufferedOutputStream(socket.mediaOutputStream(), BUFFER_BYTES),
+                    BufferedOutputStream(socket.mediaOutputStream(forwarding = true), BUFFER_BYTES),
                     identity,
                     capabilities,
                     bmh3 = Bmh3Wiring.initiator(context, callee.announcement, Bmh3Policy.Layer.LINK),
@@ -1307,7 +1327,7 @@ class BluetoothPrivateCallRelay(
 
     private fun socketConnection(socket: BluetoothSocket, phySummary: () -> String = { "" }) = TransportConnection(
         socket.inputStream,
-        socket.mediaOutputStream(),
+        socket.mediaOutputStream(forwarding = true),
         socket::close,
         socket,
         phySummary,

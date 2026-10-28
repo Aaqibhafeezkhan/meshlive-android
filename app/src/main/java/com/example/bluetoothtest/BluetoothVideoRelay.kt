@@ -148,7 +148,7 @@ class BluetoothVideoRelay(
         }
         val input = gatt?.inputStream ?: socket?.inputStream
             ?: error("Relay child input is unavailable")
-        val output = gatt?.outputStream ?: socket?.mediaOutputStream()
+        val output = gatt?.outputStream ?: socket?.mediaOutputStream(forwarding = true)
             ?: error("Relay child output is unavailable")
         val session = SecureBluetoothHandshake.initiate(
             BufferedInputStream(input, BUFFER_BYTES),
@@ -199,7 +199,7 @@ class BluetoothVideoRelay(
             handshake = { socket ->
                 SecureBluetoothHandshake.initiate(
                     BufferedInputStream(socket.inputStream, BUFFER_BYTES),
-                    BufferedOutputStream(socket.mediaOutputStream(), BUFFER_BYTES),
+                    BufferedOutputStream(socket.mediaOutputStream(forwarding = true), BUFFER_BYTES),
                     identity,
                     capabilities,
                 )
@@ -279,7 +279,7 @@ class BluetoothVideoRelay(
         upstreamSocket = socket
         upstreamDiscoveryAdvertiser?.close()
         upstreamDiscoveryAdvertiser = null
-        return socket.inputStream to socket.mediaOutputStream()
+        return socket.inputStream to socket.mediaOutputStream(forwarding = true)
     }
 
     @SuppressLint("MissingPermission")
@@ -305,7 +305,7 @@ class BluetoothVideoRelay(
         upstreamSocket = socket
         controlServer.stopAdvertising()
         onStatus("Relay is keeping upstream GATT control active for CoC link priority.")
-        return socket.inputStream to socket.mediaOutputStream()
+        return socket.inputStream to socket.mediaOutputStream(forwarding = true)
     }
 
     private fun acceptGattSource(

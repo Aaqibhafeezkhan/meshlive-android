@@ -181,6 +181,40 @@ class AdaptivePhyMemoryTest {
     }
 
     @Test
+    fun aDirectCallToAnIdleHelperRecordsItsEarlyLoss() {
+        // relay-showcase-20261026 trace-s4-voice-a15s-asus-direct-gatt: the A15s dialed the ASUS's own offer; the ASUS helper was
+        // RUNNING, so its link hello carried the call-relay bit and the A15s logged bad2m=not_recorded | hop_relays=true on every call.
+        val idleHelperHello = 0x03 or RelayedCalls.LINK_HELLO_SETUP_BIT or PrivateCallRelayChain.CALL_RELAY_CAPABILITY
+        val callerDialedDirect = AdaptivePhyMemory.callHopIsCallPeer(
+            enabled = true, linkPeerIsEndpointPeer = false, callerDialedDirect = true,
+        )
+        val calleeHopIsCaller = AdaptivePhyMemory.callHopIsCallPeer(
+            enabled = true, linkPeerIsEndpointPeer = true, callerDialedDirect = false,
+        )
+        assertFalse(
+            AdaptivePhyMemory.skipsRelayingHop(
+                AdaptivePhyMemory.callHopRelays(false, 0, idleHelperHello, hopIsCallPeer = callerDialedDirect),
+                guard = true,
+            ),
+        )
+        assertFalse(AdaptivePhyMemory.callHopRelays(false, 0, idleHelperHello, hopIsCallPeer = calleeHopIsCaller))
+        // Control arm test_direct_call_hop_memory=false: the bit alone skips the memory again.
+        val controlArm = AdaptivePhyMemory.callHopIsCallPeer(enabled = false, linkPeerIsEndpointPeer = true, callerDialedDirect = true)
+        assertTrue(AdaptivePhyMemory.callHopRelays(false, 0, idleHelperHello, hopIsCallPeer = controlArm))
+    }
+
+    @Test
+    fun aRelayedCallStillSkipsTheMemoryWhateverTheHopProves() {
+        val relayHello = 0x03 or PrivateCallRelayChain.CALL_RELAY_CAPABILITY
+        // 0005: the callee's hop is the relay, not the authenticated caller, so the bit still counts.
+        val calleeBehindRelay = AdaptivePhyMemory.callHopIsCallPeer(enabled = true, linkPeerIsEndpointPeer = false, callerDialedDirect = false)
+        assertTrue(AdaptivePhyMemory.callHopRelays(false, 0, relayHello, hopIsCallPeer = calleeBehindRelay))
+        // A relayed offer or a relayed invitation count even if the hop were somehow proven to be the call peer.
+        assertTrue(AdaptivePhyMemory.callHopRelays(offerVia = true, relayHops = 0, hopTransportMask = 0, hopIsCallPeer = true))
+        assertTrue(AdaptivePhyMemory.callHopRelays(offerVia = false, relayHops = 1, hopTransportMask = relayHello, hopIsCallPeer = true))
+    }
+
+    @Test
     fun theOneTimeRelayedCallPurgeDropsOnlyViaEntries() {
         // relaycall-b9726176-loop4-1 0003: the M31 caller's via entry for the A15s put its ASUS hop on 1M.
         val keys = listOf(

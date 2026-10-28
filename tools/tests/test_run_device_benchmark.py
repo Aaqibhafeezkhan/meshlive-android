@@ -65,6 +65,11 @@ class BenchmarkPlanTest(unittest.TestCase):
     def test_coc_coalesce_sdus_tunable_maps_to_its_debug_extra(self):
         self.assertEqual({"test_coc_coalesce_sdus": True}, runner.tunable_extras({"coc_coalesce_sdus": True}))
 
+    def test_relay_coc_coalesce_tunable_maps_to_its_debug_extra(self):
+        self.assertEqual({"test_relay_coc_coalesce": True}, runner.tunable_extras({"relay_coc_coalesce": True}))
+        with self.assertRaises(ValueError):
+            runner.tunable_extras({"relay_coc_coalesce": "on"})
+
     def test_call_fragment_airtime_tunable_maps_to_its_integer_extra(self):
         # Fourth call head-of-line arm: fragments sized by link airtime (ms), 0/absent = fixed 2 KB.
         self.assertEqual(

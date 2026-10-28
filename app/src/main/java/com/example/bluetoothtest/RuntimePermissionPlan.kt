@@ -54,4 +54,31 @@ internal object RuntimePermissionPlan {
             add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
     }
+
+    /**
+     * Whether the main screen the user is on captures camera or microphone, so [required] asks for them. The Calls,
+     * Contacts and Chats lists only browse: with [callReadiness] a call asks for its media when it is placed or
+     * answered, never when the list opens (release smoke 2026-10-28: the Camera prompt appeared on the Calls tab right
+     * after onboarding, because that list runs as a sender).
+     */
+    fun screenCapturesMedia(
+        sending: Boolean,
+        onCallScreen: Boolean,
+        onCallList: Boolean,
+        callReadiness: Boolean,
+        transportExperiment: Boolean,
+    ): Boolean = !transportExperiment && (onCallScreen || (onCallList && !callReadiness) || (sending && !onCallList))
+
+    /**
+     * First run: while onboarding is open the main screen asks for nothing and starts no scan or advertising, so the
+     * first prompt comes from onboarding's permission page with its explanation. Automation launches never wait.
+     */
+    fun mainScreenWaits(onboardingOpen: Boolean, automationLaunch: Boolean): Boolean = onboardingOpen && !automationLaunch
+
+    /**
+     * What the main screen asks for right after onboarding: what is still [missing], except what the user has just
+     * refused on onboarding's page (asked again only when they act, such as placing a call).
+     */
+    fun afterOnboarding(missing: List<String>, refusedInOnboarding: Set<String>): List<String> =
+        missing.filterNot { it in refusedInOnboarding }
 }

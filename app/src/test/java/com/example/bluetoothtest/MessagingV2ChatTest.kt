@@ -131,19 +131,19 @@ class MessagingV2ChatTest {
     @Test
     fun theDebugThreadControlFindsAContactInTheCacheOrReadsTheStoreWhenTheCacheMisses() {
         fun entry(fingerprint: String) = ContactEntry(fingerprint, "", 1, true)
-        val s24 = entry("0096b299a99f" + "1".repeat(52))
+        val s24 = entry("d1a10000a001" + "1".repeat(52))
         val other = entry("aa11bb22cc33" + "2".repeat(52))
         var storeReads = 0
         val fresh = { storeReads++; listOf(s24, other) }
-        assertEquals(s24, DebugContactLookup.find("0096b299a99f", listOf(s24), fresh).entry)
+        assertEquals(s24, DebugContactLookup.find("d1a10000a001", listOf(s24), fresh).entry)
         assertEquals("a cache hit reads nothing", 0, storeReads)
-        val viaStore = DebugContactLookup.find("0096B299A99F", emptyList(), fresh)
+        val viaStore = DebugContactLookup.find("D1A10000A001", emptyList(), fresh)
         assertEquals(s24, viaStore.entry)
         assertTrue(viaStore.fromStore)
         assertEquals("not_verified", DebugContactLookup.find("ffffffffffff", emptyList(), fresh).why)
-        assertEquals("no_verified_contacts", DebugContactLookup.find("0096b299a99f", emptyList()) { emptyList() }.why)
+        assertEquals("no_verified_contacts", DebugContactLookup.find("d1a10000a001", emptyList()) { emptyList() }.why)
         assertEquals("bad_prefix", DebugContactLookup.find("xyz", emptyList(), fresh).why)
-        assertEquals("ambiguous_prefix", DebugContactLookup.find("0096", emptyList()) { listOf(s24, entry("0096" + "3".repeat(60))) }.why)
+        assertEquals("ambiguous_prefix", DebugContactLookup.find("d1a1", emptyList()) { listOf(s24, entry("d1a1" + "3".repeat(60))) }.why)
     }
 
     @Test

@@ -1,0 +1,6 @@
+Hide phone name is now on by default, with a question during setup. It keeps your phone's own name to restore; if a phone is stuck as "Phone", Settings > Privacy lets you set its name again.
+Shows the whole picture with black bars when the other side's video is a different shape; double-tap to fill the screen.
+Fixed calls from OPPO A15s-class phones.
+Fixed a privacy problem when sharing the app.
+Clearer "Call link lost" message.
+Setup now explains each permission before Android asks for it.

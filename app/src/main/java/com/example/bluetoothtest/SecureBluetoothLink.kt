@@ -48,6 +48,10 @@ class SecureRecordWriter internal constructor(
 ) : Closeable {
     private val key = key.copyOf()
     private var nextSequence = 0L
+
+    /** Records written so far, which is also the sequence of the next one (diagnostics: relay counters at close). */
+    val recordsWritten: Long
+        @Synchronized get() = nextSequence
     /** Experimental AEAD reuse (MeshAead.Context), null when off. */
     private val aead = if (DebugTunables.aeadCipherReuse) MeshAead.Context() else null
 
@@ -129,13 +133,24 @@ class SecureRecordReader internal constructor(
     /** A report carried the join burst sample; later reports leave it out. */
     fun joinBurstReported() = arrival.joinReported()
 
+    /** Records accepted so far (diagnostics: relay counters at close). */
+    val recordsRead: Long
+        @Synchronized get() = nextSequence
+
     @Synchronized
     fun read(): SecureRecord {
         arrival.beginRecord()
         val header = ByteArray(SecureRecordProtocol.HEADER_BYTES).also(input::readFully)
-        val decoded = SecureRecordProtocol.decodeHeader(header, acceptStoreForward, acceptDiscoveryOpening, acceptRelaySetup)
-        require(decoded.sequence == nextSequence) {
-            "Unexpected secure record sequence ${decoded.sequence}; expected $nextSequence"
+        val decoded = try {
+            SecureRecordProtocol.decodeHeader(header, acceptStoreForward, acceptDiscoveryOpening, acceptRelaySetup)
+        } catch (error: RuntimeException) {
+            HopIntegrityLog.headerFailure(header, error.message.orEmpty(), nextSequence, peekNextHeader(nextSequence + 1))
+            throw error
+        }
+        if (decoded.sequence != nextSequence) {
+            HopIntegrityLog.sequenceFailure(decoded.type, decoded.sequence, nextSequence, decoded.ciphertextBytes)
+            // The numbers are in the hop_integrity line; this message reaches the user's screen (calls, streams).
+            throw IllegalArgumentException("Unexpected secure record sequence")
         }
         require(decoded.ciphertextBytes <= maxCiphertextBytes) {
             "Secure record of ${decoded.ciphertextBytes} bytes exceeds this stream's limit $maxCiphertextBytes"
@@ -146,14 +161,37 @@ class SecureRecordReader internal constructor(
             aead?.decrypt(key, decoded.sequence, ciphertext, header)
                 ?: MeshAead.decrypt(key, decoded.sequence, ciphertext, header)
         } catch (error: GeneralSecurityException) {
-            throw GeneralSecurityException(
-                "Secure link decrypt failed: type=${decoded.type} sequence=${decoded.sequence} " +
-                    "ciphertextBytes=${decoded.ciphertextBytes}",
-                error,
-            )
+            HopIntegrityLog.tagFailure(decoded.type, decoded.sequence, decoded.ciphertextBytes, peekNextHeader(decoded.sequence + 1))
+            // Type, sequence and size are in the hop_integrity line; this message reaches the user's screen.
+            throw GeneralSecurityException("Secure link decrypt failed", error)
         }
         nextSequence++
         return SecureRecord(decoded.type, plaintext)
+    }
+
+    /**
+     * Diagnostics after a failed record (the link is ending anyway): reads the next header only when its 17 bytes are
+     * already available without blocking, and says whether it is a valid `BMS1` header with sequence [expected]. A
+     * middle SDU lost below the app shifts the stream (`invalid`); a byte changed in place leaves the next header
+     * intact (`valid_n1`). Nothing is accepted: the caller still throws.
+     */
+    private fun peekNextHeader(expected: Long): HopNextHeader = try {
+        val available = input.available()
+        if (available < SecureRecordProtocol.HEADER_BYTES) {
+            HopNextHeader("unavailable", available = available)
+        } else {
+            val next = ByteArray(SecureRecordProtocol.HEADER_BYTES).also(input::readFully)
+            val sequence = runCatching {
+                SecureRecordProtocol.decodeHeader(next, acceptStoreForward = true, acceptDiscoveryOpening = true, acceptRelaySetup = true).sequence
+            }.getOrNull()
+            when (sequence) {
+                null -> HopNextHeader("invalid", available = available)
+                expected -> HopNextHeader("valid_n1", sequence, available)
+                else -> HopNextHeader("valid_other", sequence, available)
+            }
+        }
+    } catch (_: Exception) {
+        HopNextHeader("unavailable")
     }
 
     override fun close() {
@@ -167,6 +205,51 @@ private data class SecureRecordHeader(
     val sequence: Long,
     val ciphertextBytes: Int,
 )
+
+/** What followed a failed hop record: `valid_n1`, `valid_other`, `invalid` or `unavailable` (see [SecureRecordReader]). */
+internal data class HopNextHeader(val state: String, val sequence: Long? = null, val available: Int? = null)
+
+/**
+ * `hop_integrity` lines for a failed `BMS1` record (diagnostics only; the link still fails closed exactly as before).
+ * The type, sequence and size are logged here instead of in the exception message, which reaches the user's screen.
+ * A relayed call (A15s -> M31 -> ASUS, LE CoC) ended on one tag failure whose cause, a byte changed in place or an SDU
+ * lost below the app, the old message could not tell apart.
+ */
+internal object HopIntegrityLog {
+    /** Replaced by JVM tests, where android.util.Log is not available. */
+    @Volatile var sink: (String) -> Unit = { line -> runCatching { android.util.Log.i("BluetoothVideo", line) } }
+
+    private val prefix: String
+        get() = if (BuildConfig.DEBUG) "BENCHMARK " else ""
+
+    fun tagFailure(type: SecureRecordType, sequence: Long, ciphertextBytes: Int, next: HopNextHeader) = sink(
+        "${prefix}hop_integrity: kind=tag | type=$type | sequence=$sequence | ciphertextBytes=$ciphertextBytes | " +
+            next.describe(),
+    )
+
+    fun sequenceFailure(type: SecureRecordType, sequence: Long, expected: Long, ciphertextBytes: Int) = sink(
+        "${prefix}hop_integrity: kind=sequence | type=$type | sequence=$sequence | expected=$expected | " +
+            "gap=${sequence - expected} | ciphertextBytes=$ciphertextBytes | next_header=skipped",
+    )
+
+    fun headerFailure(header: ByteArray, reason: String, expected: Long, next: HopNextHeader) {
+        val magicOk = header.size >= 4 && header[0] == 'B'.code.toByte() && header[1] == 'M'.code.toByte() &&
+            header[2] == 'S'.code.toByte() && header[3] == '1'.code.toByte()
+        val fields = if (header.size == 17) {
+            val raw = java.nio.ByteBuffer.wrap(header)
+            "rawType=${header[4].toInt() and 0xff} | rawSequence=${raw.getLong(5)} | rawCiphertextBytes=${raw.getInt(13)}"
+        } else {
+            "rawBytes=${header.size}"
+        }
+        sink(
+            "${prefix}hop_integrity: kind=header | reason=${reason.ifEmpty { "unknown" }} | magic=${if (magicOk) "ok" else "bad"} | " +
+                "$fields | expected=$expected | ${next.describe()}",
+        )
+    }
+
+    private fun HopNextHeader.describe(): String =
+        "next_header=$state" + (sequence?.let { " | next_sequence=$it" } ?: "") + (available?.let { " | available=$it" } ?: "")
+}
 
 private object SecureRecordProtocol {
     private val magic = byteArrayOf('B'.code.toByte(), 'M'.code.toByte(), 'S'.code.toByte(), '1'.code.toByte())
@@ -193,6 +276,8 @@ private object SecureRecordProtocol {
         val receivedMagic = ByteArray(magic.size).also(input::readFully)
         require(receivedMagic.contentEquals(magic)) { "Invalid secure record magic" }
         val typeValue = input.readUnsignedByte()
+        // The type byte stays in the message below: opt-in readers (types 11, 12, 13) are tested on it, and it names the
+        // protocol value refused, not a record's sequence or size.
         val type = SecureRecordType.entries.firstOrNull {
             it.wireValue == typeValue && (it != SecureRecordType.STORE_FORWARD || acceptStoreForward) &&
                 (it != SecureRecordType.DISCOVERY_OPENING || acceptDiscoveryOpening) &&
@@ -202,7 +287,7 @@ private object SecureRecordProtocol {
         require(sequence >= 0) { "Invalid secure record sequence" }
         val ciphertextBytes = input.readInt()
         require(ciphertextBytes in MeshAead.TAG_BYTES..SecureRecordWriter.MAX_PLAINTEXT_BYTES + MeshAead.TAG_BYTES) {
-            "Invalid secure record size $ciphertextBytes"
+            "Invalid secure record size"
         }
         return SecureRecordHeader(type, sequence, ciphertextBytes)
     }

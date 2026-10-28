@@ -12,7 +12,7 @@ import org.junit.Test
  * 92 sightings skipped, then four more 133 after the mark.
  */
 class RelayRefusalEscalationTest {
-    private val child = "1c5fbbcd07e0"
+    private val child = "a15a15a15a15"
 
     /** The relay's dial policy for the child, as ReceiverStreamForwarder applies it; every dial that is allowed fails with a 133. */
     private class Relay(val escalation: Boolean) {

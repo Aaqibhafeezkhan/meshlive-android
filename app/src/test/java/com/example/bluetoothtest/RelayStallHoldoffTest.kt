@@ -13,7 +13,7 @@ import org.junit.Test
  * The child's real next request comes after its route cooldown (8 to 13 s after it lost the link, so about +11 s or later).
  */
 class RelayStallHoldoffTest {
-    private val child = "1c5fbbcd07e0"
+    private val child = "a15a15a15a15"
 
     /** The relay's decision for one sighting of the child: dial (true) or skip (false), with the tracker as in ReceiverStreamForwarder. */
     private class Relay(val holdoff: RelayStallHoldoff?, val tracker: EstablishmentFailureTracker = EstablishmentFailureTracker()) {
@@ -75,7 +75,7 @@ class RelayStallHoldoffTest {
     fun anotherChildIsNeverHeldOff() {
         val holdoff = RelayStallHoldoff()
         holdoff.onStall(child, 0)
-        assertEquals(0L, holdoff.remainingMs("1e3f0761977b", 100))
+        assertEquals(0L, holdoff.remainingMs("d1a20000a002", 100))
     }
 
     @Test

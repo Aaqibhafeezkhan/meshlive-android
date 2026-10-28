@@ -75,13 +75,16 @@ the middle, so a relayed call from a stranger is marked "via a phone nearby".
   shows its name and address while it is discoverable.
 - **Paired phones.** A phone that is paired with yours through Android can work out your rotating LE addresses.
 - **The Bluetooth device name** can be read by any phone that connects, before the handshake, and is shown by Classic
-  lookups. MeshLive never renames the phone on its own. With rotating IDs on, connectable announcements are
+  lookups. MeshLive never renames the phone without asking. With rotating IDs on, connectable announcements are
   non-discoverable on Android 14 and newer, which makes the phone refuse the name to an unpaired phone that connects
   through them. In the test the S24 (Android 16) sent them that way and the ASUS (Android 11) and M31 (Android 12) did
   not, so on Android 13 and older the name stays readable. Links your phone opens itself still show the name to the
-  other side. Settings > Advanced has an option, off by default, to use the neutral name "Phone" instead; it renames the
-  phone for everything (headphones, car, watch, PC), shows your original name so you can restore it, and if you
-  uninstall the app while it is on the name stays "Phone" until you rename the phone in Android settings. While it is
+  other side. "Hide phone name" (Settings > Privacy) uses the neutral name "Phone" instead. It is the default: the
+  first time you open the app it asks "Hide your phone's name" (Hide name / Keep my name), and nothing is renamed
+  until you answer. It renames the phone for everything (headphones, car, watch, PC), so those devices show "Phone";
+  nearby phones and scanners no longer see your real name. It shows your original name so you can restore it, turning
+  it off restores that name, and if you uninstall the app while it is on the name stays "Phone" until you rename the
+  phone in Android settings. While it is
   on, the call-ready and viewer-request announcements let an unpaired device that connects read the name, so a Mac can
   call without asking to pair; the name it reads is "Phone" and nothing else is exposed. If the name changes away from
   "Phone", those announcements hide it again at once.
@@ -99,7 +102,7 @@ the middle, so a relayed call from a stranger is marked "via a phone nearby".
 - A stream title is public: anyone nearby can read it. Your optional name is sent only inside the encrypted session, to the people Settings > Your ID > Who sees my name allows.
 
 To reduce exposure further: switch Bluetooth off when you do not need it, switch **Allow calls** off when you are
-not expecting calls, leave your name and stream titles empty, use the neutral Bluetooth name option on Android 13 and older, and
+not expecting calls, leave your name and stream titles empty, keep "Hide phone name" on, and
 verify the people you call often (QR code or safety code).
 
 ## Audio-only live streams

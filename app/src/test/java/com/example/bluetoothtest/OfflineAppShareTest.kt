@@ -125,13 +125,28 @@ class OfflineAppShareTest {
     @Test
     fun fiveGigahertzIsTriedFirstOnlyWhenSupported() {
         assertEquals(
-            listOf(GroupBandAttempt.BAND_5GHZ, GroupBandAttempt.BAND_AUTO, GroupBandAttempt.LEGACY),
+            listOf(GroupBandAttempt.BAND_5GHZ, GroupBandAttempt.BAND_AUTO),
             OfflineAppSharePolicy.bandAttempts(supports5Ghz = true),
         )
         assertEquals(
-            listOf(GroupBandAttempt.BAND_AUTO, GroupBandAttempt.LEGACY),
+            listOf(GroupBandAttempt.BAND_AUTO),
             OfflineAppSharePolicy.bandAttempts(supports5Ghz = false),
         )
+    }
+
+    @Test
+    fun noAttemptIsEverAPersistentGroup() {
+        // Every attempt kind is a WifiP2pConfig band attempt (temporary group); the no-config createGroup that
+        // creates a persistent group, and with it a fixed Wi-Fi Direct MAC address, has no enum value to select.
+        assertEquals(
+            setOf("BAND_5GHZ", "BAND_AUTO"),
+            GroupBandAttempt.values().map { it.name }.toSet(),
+        )
+        for (supports5 in listOf(true, false)) {
+            val attempts = OfflineAppSharePolicy.bandAttempts(supports5)
+            assertTrue(attempts.isNotEmpty())
+            assertTrue(attempts.all { it == GroupBandAttempt.BAND_5GHZ || it == GroupBandAttempt.BAND_AUTO })
+        }
     }
 
     @Test

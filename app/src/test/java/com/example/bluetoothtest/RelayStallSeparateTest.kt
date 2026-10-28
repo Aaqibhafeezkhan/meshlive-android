@@ -10,7 +10,7 @@ import org.junit.Test
  * 0, 15,922 (outside the 10 s hold-off), then after the 5 minute mark: 323,165 and 338,206. Each pair withdrew the offer.
  */
 class RelayStallSeparateTest {
-    private val child = "1c5fbbcd07e0"
+    private val child = "a15a15a15a15"
     private val stallTimes = longArrayOf(0L, 15_922L, 323_165L, 338_206L)
 
     private fun replay(separate: Boolean): List<Boolean> {

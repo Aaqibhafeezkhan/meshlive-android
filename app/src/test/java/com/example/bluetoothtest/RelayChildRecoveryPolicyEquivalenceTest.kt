@@ -185,7 +185,7 @@ class RelayChildRecoveryPolicyEquivalenceTest {
         "Could not establish the hop",
         "Hop handshake ended: EOF",
     )
-    private val keys = listOf("1c5fbbcd07e0", "7a7a00stall0a4")
+    private val keys = listOf("a15a15a15a15", "7a7a00stall0a4")
     private val phys = listOf(null, BlePhyPreference.TWO_M, BlePhyPreference.ONE_M_ADAPTIVE)
 
     private fun allSwitches(): List<Switches> = (0 until 256).map { bits ->

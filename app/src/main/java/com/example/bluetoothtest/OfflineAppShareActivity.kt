@@ -265,23 +265,19 @@ class OfflineAppShareActivity : AppCompatActivity() {
         }
         groupLifecycle.creating()
         try {
-            when (attempt) {
-                GroupBandAttempt.LEGACY -> p2p.createGroup(ch, listener)
-                GroupBandAttempt.BAND_5GHZ, GroupBandAttempt.BAND_AUTO -> {
-                    val band = if (attempt == GroupBandAttempt.BAND_5GHZ) {
-                        WifiP2pConfig.GROUP_OWNER_BAND_5GHZ
-                    } else {
-                        WifiP2pConfig.GROUP_OWNER_BAND_AUTO
-                    }
-                    val config = WifiP2pConfig.Builder()
-                        .setNetworkName(networkName)
-                        .setPassphrase(passphrase)
-                        .setGroupOperatingBand(band)
-                        .enablePersistentMode(false)
-                        .build()
-                    p2p.createGroup(ch, config, listener)
-                }
+            // Always a temporary group with our own random name and passphrase; the no-config createGroup
+            // overload creates a persistent group and is never called (see GroupBandAttempt).
+            val band = when (attempt) {
+                GroupBandAttempt.BAND_5GHZ -> WifiP2pConfig.GROUP_OWNER_BAND_5GHZ
+                GroupBandAttempt.BAND_AUTO -> WifiP2pConfig.GROUP_OWNER_BAND_AUTO
             }
+            val config = WifiP2pConfig.Builder()
+                .setNetworkName(networkName)
+                .setPassphrase(passphrase)
+                .setGroupOperatingBand(band)
+                .enablePersistentMode(false)
+                .build()
+            p2p.createGroup(ch, config, listener)
         } catch (error: SecurityException) {
             cleanGroup(groupLifecycle.failed(), p2p, ch)
             stopSharing("security", getString(R.string.share_nearby_permission_denied))

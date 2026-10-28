@@ -42,6 +42,7 @@ internal object BleCocClient {
         deadline: SetupDeadline? = null,
         onControl: (BleL2capControlConnection?) -> Unit,
     ): BluetoothSocket {
+        val freshAcl = BleCocFreshAcl.enabled()
         val control = BleL2capPsmReader.open(
             context,
             device,
@@ -50,10 +51,11 @@ internal object BleCocClient {
             connectionPriority,
             establishBudget = establishBudget,
             deadline = deadline,
+            quietLink = PsmReadLinkQuiet.enabled(freshAcl),
         )
         onControl(control)
         val psm = control.psm
-        if (!BleCocFreshAcl.enabled()) {
+        if (!freshAcl) {
             // The control link is alive on this ACL and its PHY request is issued: a failure here is past establishment.
             val shared = markLinkReached({ true }) { connectChannel(device, psm, owner, onSocket, deadline = deadline) }
             // The control client stayed on this ACL and already exchanged the MTU: nothing to prime.

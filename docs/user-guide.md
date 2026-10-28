@@ -104,6 +104,8 @@ Signing certificate SHA-256 (also in each release's notes and `signing-cert.sha2
 - **Private calls.** Voice or video calls between two phones, started from a list of people nearby. Both directions
   are independent; mute, camera off and flip only affect your own side. Call audio focus, ringer and Do Not Disturb
   rules, and a proximity screen-off lock are built in.
+  When the other person's picture has a different shape from your screen (a laptop camera on a phone held upright),
+  the whole picture is shown with black bars; similar shapes fill the screen. Double-tap their video to switch for that call.
 - **Three Bluetooth transports.** LE GATT (the default, needs no pairing), Bluetooth Classic (higher throughput,
   one-time pairing) and LE L2CAP CoC (experimental). Discovery is always Bluetooth LE.
 - **Authenticated and encrypted.** Every phone has its own signing key. Links use signed handshakes and ordered
@@ -124,6 +126,7 @@ Signing certificate SHA-256 (also in each release's notes and `signing-cert.sha2
   screen off. Choose it from Go live.
 - **Privacy by default .** A rotating Bluetooth ID ("Private Bluetooth ID"), an identity-hiding call handshake ("Hide my ID from strangers") and throwaway
   identities for strangers ("New identity for each stranger") are on; each has a switch under Settings > Privacy > Advanced privacy.
+  "Hide phone name" (Settings > Privacy) is on too, after you say yes on the first start.
 - **Offline app sharing.** Hand the installed APK to a nearby phone (see [No internet at all](#no-internet-at-all)).
 - **Delete everything.** Delete the app's keys and data from inside the app (type DELETE to confirm; an optional
   triple-tap gesture).
@@ -144,6 +147,12 @@ enable Bluetooth.
   (About this app, the update switches, Check now, Share this app) and a red Delete everything at the bottom). The small status at the top right of every tab is a green dot when
   all is well, or the one thing that needs you (Bluetooth off, permissions, Hidden, battery saver, phone hot); tap it
   for details. Your code and ID are shown only on Add contact (Show my code).
+- **Hide your phone's name.** On the first start, after the permissions, one step asks whether to hide your phone's
+  name. **Hide name** (the default) renames the phone to "Phone": nearby devices no longer see its real name, and a Mac
+  or PC can call you without a pairing prompt; headphones, your car and other Bluetooth devices also show "Phone".
+  **Keep my name** leaves it alone. Change it any time in Settings > Privacy > Hide phone name; turning it off restores
+  your original name. If MeshLive may not use Nearby devices, the switch shows off with the reason. People updating
+  from an older version who never chose are asked once.
 - **Keeping the app helping in the background.** On the first start a short step ("Keep helping in the background")
   explains the cost and offers Android's one-tap "allow background running" dialog; "Not now" is fine and the same offer
   comes back once, with the reason, when you switch on Relay video for others or Allow calls, and any time from

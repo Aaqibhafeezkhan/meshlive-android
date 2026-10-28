@@ -426,7 +426,7 @@ class ReceiverStreamForwarder(
                         handshake = { candidate ->
                             SecureBluetoothHandshake.initiate(
                                 BufferedInputStream(candidate.inputStream, ioConfig.bufferBytes),
-                                BufferedOutputStream(candidate.mediaOutputStream(), ioConfig.bufferBytes),
+                                BufferedOutputStream(candidate.mediaOutputStream(forwarding = true), ioConfig.bufferBytes),
                                 identity,
                                 LocalNodeCapabilities.forTransport(transport, maxChildren = 1),
                             )
@@ -507,7 +507,7 @@ class ReceiverStreamForwarder(
                         }
                     }
                 }
-                val rawOutput = gatt?.outputStream ?: socket?.mediaOutputStream()
+                val rawOutput = gatt?.outputStream ?: socket?.mediaOutputStream(forwarding = true)
                     ?: error("Downstream Bluetooth output is unavailable")
                 val childLinkCapabilities = StreamHopOpening.linkCapabilities(
                     LocalNodeCapabilities.forTransport(transport, maxChildren = 1),

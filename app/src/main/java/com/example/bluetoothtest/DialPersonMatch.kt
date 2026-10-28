@@ -4,9 +4,9 @@ package com.example.bluetoothtest
  * A user dial keeps its person across a rotating-ID epoch boundary (default on; DEBUG control arm
  * `test_dial_follows_rotation=false`, which matches only the exact rotating key, as before).
  *
- * 2026-10-20 edge-case suite (asus-s22-fb0e step 3): the ASUS dialled the S22's rotating ID d7df8a2451a8 1.2 s after the
- * S22's epoch boundary. The S22 now announced 4b389aaf9073 from the same advertising address (`rotid_address_reuse ...
- * previousNode=d7df8a2451a8`), but the dial waited for the old key only and failed after 10 s (`refresh_timeout`). The
+ * 2026-10-20 edge-case suite (asus-s22-fb0e step 3): the ASUS dialled the S22's rotating ID 70e1a0000001 1.2 s after the
+ * S22's epoch boundary. The S22 now announced 70e2b0000002 from the same advertising address (`rotid_address_reuse ...
+ * previousNode=70e1a0000001`), but the dial waited for the old key only and failed after 10 s (`refresh_timeout`). The
  * DEBUG dial already followed the person (DebugDialWait.matchesPerson); the user dial did not.
  *
  * A sighting continues the pending dial when it carries the same key, or (switch on) when its rotating ID is recognised

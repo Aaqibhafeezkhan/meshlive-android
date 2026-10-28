@@ -497,7 +497,8 @@ class RotatingDiscoveryTest {
         assertNull(NeutralBluetoothName.onEnabled(NeutralBluetoothName.NEUTRAL, "Alex's Phone").setName)
         val disable = NeutralBluetoothName.onDisabled(NeutralBluetoothName.NEUTRAL, "Alex's Phone")
         assertEquals("Alex's Phone", disable.setName)
-        assertTrue(disable.clearSaved)
+        // Kept until the adapter reads it back (a rename is asynchronous).
+        assertFalse(disable.clearSaved)
         // The user picked a new name meanwhile: keep it, forget the old one.
         val renamed = NeutralBluetoothName.onDisabled("Kitchen", "Alex's Phone")
         assertNull(renamed.setName)

@@ -7,7 +7,7 @@ import org.junit.Test
 /** F14: a call that arrives while the user dials (ql-b57d0eaf m31-xiaomi, 21:32): busy for others, rings for the target. */
 class DialCollisionTest {
     private val m31 = "e7371febd3f0"
-    private val a15s = "1c5fbbcd07e0"
+    private val a15s = "a15a15a15a15"
 
     @Test
     fun noDialMeansEveryCallRingsAsBefore() {

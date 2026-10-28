@@ -410,6 +410,8 @@ TUNABLES = {
     # values sized to whole 251-octet LE PDUs (default off), LE PHY "1m"/"coded-s2"/"coded-s8"
     # (app default 2M).
     "coc_sequenced_phy": ("test_coc_sequenced_phy", bool),
+    # Default-on (2026-10-27): the setup PHY waits for the in-window priority update (PhyAfterPriority); false = control arm.
+    "phy_after_priority": ("test_phy_after_priority", bool),
     # Experimental (app default off): the CoC central requests the PHY only after the socket connected
     # and hop authentication finished, then waits for onPhyUpdate (readPhy fallback after 1 s).
     "coc_phy_after_connect": ("test_coc_phy_after_connect", bool),
@@ -417,6 +419,9 @@ TUNABLES = {
     "peer_address_book": ("test_peer_address_book", bool),
     # Experimental (app default off): Android <= 11 CoC SDUs coalesced up to 8,000 bytes (replaces single-PDU there).
     "coc_coalesce_sdus": ("test_coc_coalesce_sdus", bool),
+    # Experimental (app default off): forwarding CoC writers (relays, stream forwarders) on Android <= 12 use coalesced
+    # SDUs up to 8,000 bytes (registry proposal pre-android-13-coc-congested-write-loss).
+    "relay_coc_coalesce": ("test_relay_coc_coalesce", bool),
     "le_priority_retry": ("test_le_priority_retry", bool),
     # Default-on (2026-10-09) kept switchable: adaptive 2M -> 1M on a backlogged one-PDU-per-event link;
     # CoC SDUs sized to one 251-octet PDU.
@@ -440,6 +445,8 @@ TUNABLES = {
     # Default-on (2026-10-13) progress-aware total limit of a plain Messaging v2 exchange; false = the fixed 120 s.
     "mv2_progress_total": ("test_mv2_progress_total", bool),
     "relay_phy_guard": ("test_relay_phy_guard", bool),
+    # Default-on (2026-10-27): a direct call ignores an idle helper's call-relay bit for bad-2M memory; false = control arm.
+    "direct_call_hop_memory": ("test_direct_call_hop_memory", bool),
     "ql_consent_ui": ("test_ql_consent_ui", bool),
     "relay_one_pdu_move": ("test_relay_one_pdu_move", bool),
     "relay_reanchor": ("test_relay_reanchor", bool),
@@ -464,6 +471,8 @@ TUNABLES = {
     # Default-on fan-out growth in planned-link units; false is the control arm.
     "fanout_proven_links": ("test_fanout_proven_links", bool),
     "relay_parent_trickle": ("test_relay_parent_trickle", bool),
+    # Default-on (2026-10-28) viewer link silence watch on links without the relay parent watch; false = control arm.
+    "viewer_link_silence": ("test_viewer_link_silence", bool),
     # Default-on relay child pacing exempts only an audio record from the pacer (false: the earlier
     # any-audio-queued test, which left a backlog unpaced); the lead cap is an experiment (app default off).
     "relay_pace_head": ("test_relay_pace_head", bool),
@@ -599,6 +608,8 @@ TUNABLES = {
     "vp9_q_floor": ("test_vp9_q_floor", int),
     # Encoder ranking by measured burst size / encode headroom (default choice only).
     "encoder_ranking": ("test_encoder_ranking", bool),
+    # Automatic prefers a hardware AV1 encoder (design decision 2026-10-27, default on); false = control arm.
+    "prefer_hw_av1": ("test_prefer_hw_av1", bool),
     # Child lateness after a large frame on a link that keeps up is one burst, not congestion.
     "burst_drain": ("test_burst_drain", bool),
     # Receiver playout grows once by this multiple of a frame's lateness (lane-b P2), 1.0-4.0.

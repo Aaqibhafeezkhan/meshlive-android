@@ -114,4 +114,41 @@ class PermissionFlowTest {
         listOf(android11, android13).forEach { sdk -> assertEquals(RuntimePermissionPlan.onboarding(sdk).size, RuntimePermissionPlan.onboarding(sdk).toSet().size) }
         assertEquals(setOf(microphone, notifications, Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_ADVERTISE), RuntimePermissionPlan.onboarding(android13).toSet())
     }
+
+    /** The main screen's request on a plain first launch: what onboarding leaves open, on the screen the user lands on. */
+    private fun landing(sdk: Int, onCallList: Boolean, sending: Boolean, callReadiness: Boolean = true) = RuntimePermissionPlan.required(
+        sdk,
+        RuntimePermissionPlan.screenCapturesMedia(sending, onCallScreen = false, onCallList = onCallList, callReadiness = callReadiness, transportExperiment = false),
+        needsCamera = true,
+        needsBleAccess = true,
+    )
+
+    @Test
+    fun aFirstLaunchAsksNothingBehindOnboardingAndAutomationNeverWaits() {
+        assertTrue("the Live tab under the Welcome page must not ask for Location", RuntimePermissionPlan.mainScreenWaits(onboardingOpen = true, automationLaunch = false))
+        assertFalse("after Start (or Back on Welcome) the screens ask as usual", RuntimePermissionPlan.mainScreenWaits(onboardingOpen = false, automationLaunch = false))
+        assertFalse("benchmark launches never show onboarding, so never wait for it", RuntimePermissionPlan.mainScreenWaits(onboardingOpen = true, automationLaunch = true))
+    }
+
+    @Test
+    fun theCallsListAfterOnboardingAsksOnlyForBluetoothAccessNeverTheCamera() {
+        assertEquals(listOf(location), landing(android11, onCallList = true, sending = true))
+        assertEquals(nearbyBluetooth, landing(android14, onCallList = true, sending = true))
+        // Going live still asks for the camera and microphone on its own screen, and a call asks when it starts.
+        assertTrue(landing(android11, onCallList = false, sending = true).containsAll(listOf(camera, microphone, location)))
+        assertTrue(call(android14).containsAll(listOf(camera, microphone)))
+        // The older flow (callReadiness off) still asks on the list, as before.
+        assertTrue(camera in landing(android14, onCallList = true, sending = true, callReadiness = false))
+    }
+
+    @Test
+    fun aPermissionRefusedOnOnboardingIsNotAskedAgainRightAfterStart() {
+        OnboardingState.recordAnswers(mapOf(location to false, microphone to true))
+        val refused = OnboardingState.takeRefused()
+        assertEquals(emptyList<String>(), RuntimePermissionPlan.afterOnboarding(listOf(location), refused))
+        // Only the first screen after onboarding skips it; later requests ask again.
+        assertEquals(emptySet<String>(), OnboardingState.takeRefused())
+        // "Not now" on the permission page refused nothing: the Calls list asks for what it needs.
+        assertEquals(nearbyBluetooth, RuntimePermissionPlan.afterOnboarding(nearbyBluetooth, emptySet()))
+    }
 }

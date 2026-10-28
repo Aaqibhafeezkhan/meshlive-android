@@ -1363,8 +1363,13 @@ object BleL2capPsmReader {
         establishBudget: Boolean = false,
         /** The caller's setup deadline (a call's or message's dial), null when unbounded. */
         deadline: SetupDeadline? = null,
+        /** Experimental psm_read_link_quiet: the link only reads the PSM and is closed for a fresh ACL ([PsmReadLinkQuiet]). */
+        quietLink: Boolean = false,
     ): BleL2capControlConnection =
-        openWithRetries(context, device, onLinkStatus, phyPreference, connectionPriority, primeGattMtuForCoc, null, establishBudget, deadline)
+        openWithRetries(
+            context, device, onLinkStatus, phyPreference, connectionPriority, primeGattMtuForCoc, null, establishBudget, deadline,
+            quietLink = quietLink,
+        )
 
     /**
      * Attaches a GATT client to an LE link whose CoC channel is already open (BleCocClient fresh ACL):
@@ -1397,6 +1402,7 @@ object BleL2capPsmReader {
         establishBudget: Boolean = false,
         deadline: SetupDeadline? = null,
         config: ConnectRetryConfig = ConnectRetryConfig.current(),
+        quietLink: Boolean = false,
     ): BleL2capControlConnection {
         var linkReached = false
         val startedMs = SystemClock.elapsedRealtime()
@@ -1416,6 +1422,7 @@ object BleL2capPsmReader {
                     knownPsm,
                     timeoutMs = attempts.attemptTimeoutMs(attemptStartedMs),
                     connectPhaseMs = attempts.connectPhaseMs(),
+                    quietLink = quietLink,
                 )
                 attempts.successLines(attemptStartedMs, SystemClock.elapsedRealtime()).forEach { android.util.Log.i("BluetoothVideo", it) }
                 GattPoolBackoff.recordSuccess(PoolSource.CLIENT)
@@ -1459,7 +1466,10 @@ object BleL2capPsmReader {
         timeoutMs: Long = ConnectAttempts.Link.BLE_CONTROL.attemptTimeoutMs,
         /** Experimental unified policy only: the attempt ends if the control link is not connected after this long. */
         connectPhaseMs: Long? = null,
+        /** Experimental psm_read_link_quiet: a PSM-read link closed for a fresh ACL requests no priority, PHY or MTU. */
+        quietLink: Boolean = false,
     ): BleL2capControlConnection {
+        val requests = PsmReadLinkQuiet.requests(quietLink, knownPsm != null, primeGattMtuForCoc)
         val result = AtomicReference<Int?>()
         val error = AtomicReference<String?>()
         val complete = AtomicBoolean(false)
@@ -1485,6 +1495,13 @@ object BleL2capPsmReader {
             return adaptivePhyRef.get()!!
         }
         val linkDiag = LeLinkDiagnostics.create("ble-control", device.address).also { it.requestedPhy = phyPreference.label }
+        // Experimental phy_after_priority (off): the setup PHY waits while the link sits outside the requested priority window.
+        val phyHold = PhyAfterPriority(
+            link = "ble-control",
+            schedule = { delayMs, action -> Handler(Looper.getMainLooper()).postDelayed({ action() }, delayMs) },
+            nowMs = SystemClock::elapsedRealtime,
+            log = { line -> android.util.Log.i("BluetoothVideo", line) },
+        )
         val priorityKeeper = LeConnectionPriorityKeeper(
             link = "ble-control",
             sendRequest = { priority -> activeGattRef.get()?.requestConnectionPriority(priority.requestValue) == true },
@@ -1493,6 +1510,7 @@ object BleL2capPsmReader {
             active = { attempt.active && !attempt.teardown.disconnected },
             log = { line -> android.util.Log.i("BluetoothVideo", line) },
             gate = gate,
+            phyHold = phyHold,
         )
 
         fun finish(psm: Int? = null, message: String? = null) {
@@ -1506,19 +1524,23 @@ object BleL2capPsmReader {
          * Requests the preferred PHY once the control setup is done, after the connection-priority
          * update and the MTU exchange, as the GATT video client does (2cbdafb1). Requesting it at
          * connection beside the priority update, while the server requested its own, collided
-         * (status 42 on the server in every M31/ASUS/A15s CoC setup).
+         * (status 42 on the server in every M31/ASUS/A15s CoC setup). With the Experimental
+         * phy_after_priority it also waits while the link is still outside the requested priority window
+         * ([PhyAfterPriority]). A quiet PSM-read link ([PsmReadLinkQuiet]) never requests it.
          */
         fun requestSequencedPhy(gatt: BluetoothGatt) {
-            if (!phyDeferred && DebugTunables.cocSequencedPhy && attempt.active && phyRequested.compareAndSet(false, true)) {
-                gate.submit(
-                    LlProcedure.PHY,
-                    "ble_control_phy",
-                    expectedTx = LePhy.valueForMask(phyPreference.mask),
-                    fallback = { gatt.setPreferredPhy(LePhy.MASK_1M, LePhy.MASK_1M, phyPreference.option); gatt.readPhy(); true },
-                ) {
-                    gatt.setPreferredPhy(phyPreference.mask, phyPreference.mask, phyPreference.option)
-                    gatt.readPhy()
-                    true
+            if (requests.phy && !phyDeferred && DebugTunables.cocSequencedPhy && attempt.active && phyRequested.compareAndSet(false, true)) {
+                phyHold.submit("ble_control_phy", isActive = { attempt.active }) {
+                    gate.submit(
+                        LlProcedure.PHY,
+                        "ble_control_phy",
+                        expectedTx = LePhy.valueForMask(phyPreference.mask),
+                        fallback = { gatt.setPreferredPhy(LePhy.MASK_1M, LePhy.MASK_1M, phyPreference.option); gatt.readPhy(); true },
+                    ) {
+                        gatt.setPreferredPhy(phyPreference.mask, phyPreference.mask, phyPreference.option)
+                        gatt.readPhy()
+                        true
+                    }
                 }
             }
         }
@@ -1538,7 +1560,7 @@ object BleL2capPsmReader {
             }
             runCatching { BleL2capControlProtocol.decodePsm(value) }
                 .onSuccess { psm ->
-                    if (!primeGattMtuForCoc) {
+                    if (!requests.mtu) {
                         finishWithPsm(gatt, psm)
                         return@onSuccess
                     }
@@ -1585,6 +1607,13 @@ object BleL2capPsmReader {
                     newState == BluetoothProfile.STATE_CONNECTED -> {
                         linkConnected.set(true)
                         activeGattRef.set(gatt)
+                        if (!requests.priority) {
+                            // psm_read_link_quiet: this link is closed after the PSM read; it keeps the stack's own intervals.
+                            android.util.Log.i("BluetoothVideo", PsmReadLinkQuiet.line(gatt.device?.address?.takeLast(5)))
+                            onLinkStatus("BLE PSM-read link: no priority, PHY or MTU request (closed for a fresh ACL)")
+                            discoverServices(gatt)
+                            return
+                        }
                         val highPriority = priorityKeeper.request(connectionPriority)
                         linkDiag.onPriority(connectionPriority, highPriority)
                         onLinkStatus(

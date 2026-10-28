@@ -664,9 +664,32 @@ internal object AdaptivePhyMemory {
      * [PrivateCallRelayChain.CALL_RELAY_CAPABILITY] (a callee knows this before the invitation arrives).
      * A relay ends both of its hops when either fails, so the endpoint's loss can come from a far hop
      * (relaycall-b9726176-loop4-1 0004: the A15s and ASUS endpoints both recorded the S24 relay).
+     *
+     * The capability bit only says the hop CAN relay: every phone with relayed calls on and its helper running
+     * signs it ([RelayedCalls.linkCapabilities]). When this call is known to be direct ([hopIsCallPeer]:
+     * the hop is the call's own peer), the bit is not evidence of relaying and is ignored, so a direct call to an
+     * idle helper records its early losses again (`test_direct_call_hop_memory=false` is the control arm).
+     * relay-showcase-20261026 trace-s4-*-a15s-asus-direct-*: the A15s caller logged `bad2m=not_recorded |
+     * hop_relays=true` for the ASUS (helper RUNNING) on every direct call, so every call started on 2M again
+     * and failed. A relayed offer or invitation still counts whatever [hopIsCallPeer] says.
      */
-    internal fun callHopRelays(offerVia: Boolean, relayHops: Int, hopTransportMask: Int): Boolean =
-        offerVia || relayHops > 0 || hopTransportMask and PrivateCallRelayChain.CALL_RELAY_CAPABILITY != 0
+    internal fun callHopRelays(
+        offerVia: Boolean,
+        relayHops: Int,
+        hopTransportMask: Int,
+        hopIsCallPeer: Boolean = false,
+    ): Boolean =
+        offerVia || relayHops > 0 ||
+            (!hopIsCallPeer && hopTransportMask and PrivateCallRelayChain.CALL_RELAY_CAPABILITY != 0)
+
+    /**
+     * This endpoint knows its hop peer is the call's own peer: the hop authenticated as the end-to-end peer
+     * ([linkPeerIsEndpointPeer]), or this caller dialed a direct offer ([callerDialedDirect]: no relayed
+     * offer, no relayed route, no relay count; a route-cost-0 hop is bound to the selected advert). False
+     * when [enabled] is off (`test_direct_call_hop_memory=false`), which restores the capability-bit rule.
+     */
+    internal fun callHopIsCallPeer(enabled: Boolean, linkPeerIsEndpointPeer: Boolean, callerDialedDirect: Boolean): Boolean =
+        enabled && (linkPeerIsEndpointPeer || callerDialedDirect)
 
     /**
      * PHY to request for a new link to the direct peer advertising [nodePrefix] on [transport]:

@@ -12,7 +12,7 @@ import java.io.OutputStream
  * 8,088-byte writes verified clean, as did every other phone/direction. In the app this surfaced as
  * "Secure link decrypt failed" on 30-53 KB keyframe records. RFCOMM/GATT are unchanged.
  */
-internal fun BluetoothSocket.mediaOutputStream(): OutputStream {
+internal fun BluetoothSocket.mediaOutputStream(forwarding: Boolean = false): OutputStream {
     if (connectionType != BluetoothSocket.TYPE_L2CAP) return outputStream
     // Central links whose control connection is open are measured for the adaptive PHY (AdaptivePhy).
     val socketOutput = AdaptivePhyRegistry.forAddress(runCatching { remoteDevice?.address }.getOrNull())
@@ -21,14 +21,16 @@ internal fun BluetoothSocket.mediaOutputStream(): OutputStream {
     val maxTransmit = runCatching { maxTransmitPacketSize }.getOrDefault(0)
     val maxReceive = runCatching { maxReceivePacketSize }.getOrDefault(0)
     val coalesce = CocSduCoalescing.effective()
-    val chunk = cocWriteChunkBytes(maxTransmit, maxReceive, DebugTunables.cocSinglePduSdus, coalesce)
+    val forwardingCoalesce = forwarding && ForwardingCocCoalescing.effective()
+    val chunk = cocWriteChunkBytes(maxTransmit, maxReceive, DebugTunables.cocSinglePduSdus, coalesce || forwardingCoalesce)
     // Requested vs effective SDU policy of this socket (the A/B scorer reads it).
     android.util.Log.i(
         "BluetoothVideo",
-        CocSduCoalescing.line(DebugTunables.cocCoalesceSdus, coalesce, DebugTunables.cocSinglePduSdus, chunk, maxTransmit, maxReceive),
+        CocSduCoalescing.line(DebugTunables.cocCoalesceSdus, coalesce, DebugTunables.cocSinglePduSdus, chunk, maxTransmit, maxReceive) +
+            if (forwarding) ForwardingCocCoalescing.suffix(DebugTunables.relayCocCoalesce, forwardingCoalesce) else "",
     )
     chunk ?: return socketOutput
-    return ChunkedOutputStream(socketOutput, chunk)
+    return CocSduOutputStream(socketOutput, chunk, maxTransmit, maxReceive)
 }
 
 /**
@@ -91,22 +93,99 @@ internal object CocSduCoalescing {
             if (requested && !effective) " | reason=stack_not_matched" else ""
 }
 
+/**
+ * Experimental `test_relay_coc_coalesce` (default off), scoped by the registry proposal
+ * `pre-android-13-coc-congested-write-loss` (API <= 32). Before Android 13, btif_sock_thread could read stale poll
+ * entries when several sockets were busy at once and then drop data it read from an app socket whose L2CAP channel was
+ * congested (AOSP 46bd51ed, b/223974328). Every LE CoC hop-integrity failure in the benchmark runs had a pre-13
+ * forwarding phone (call relay or stream forwarder, two busy CoC sockets) as the transmitter, and the error mix (a tag
+ * failure with an intact header, a skipped sequence, a damaged header) is what a lost SDU produces. Fewer, larger SDUs
+ * keep the SDU-counted queue below the congestion quota for the same bytes. Only forwarding writers change: the
+ * relay's own sockets ([BluetoothPrivateCallRelay], [BluetoothVideoRelay], [ReceiverStreamForwarder]) and a helper's
+ * parent link from the moment it becomes a relay hop ([applyToHandedOffLink]). Each SDU stays within the peer's
+ * receive limit and [COC_COALESCED_SDU_BYTES] (below the ~11.6 KB at which the ASUS corrupted a single SDU). The byte
+ * stream the peer reads is unchanged; nothing is paced or dropped.
+ */
+internal object ForwardingCocCoalescing {
+    const val ENTRY_ID = "pre-android-13-coc-congested-write-loss"
+
+    /** True when the switch is on and the proposal's matcher holds for this phone. */
+    fun effective(
+        requested: Boolean = DebugTunables.relayCocCoalesce,
+        traits: DeviceTraits? = runCatching { DeviceTraits.current() }.getOrNull(),
+        disabled: Set<String> = runCatching { DeviceFamilyPolicy.switchedOff }.getOrDefault(emptySet()),
+    ): Boolean {
+        if (!requested || traits == null || "all" in disabled || ENTRY_ID in disabled) return false
+        val entry = DeviceFamilyPolicy.entries.firstOrNull { it.id == ENTRY_ID } ?: return false
+        return entry.matcher.matches(traits)
+    }
+
+    fun suffix(requested: Boolean, effective: Boolean): String =
+        " | scope=forwarding | relayCoalesce=${if (requested) "requested" else "off"} | relayEffective=$effective" +
+            if (requested && !effective) " | relayReason=stack_not_matched" else ""
+
+    /**
+     * A helper's parent link was opened as an ordinary call link (the SETUP that makes it a relay hop arrives on it), so
+     * its SDU size switches here, before the relay's copy loops start. Safe at any point of the stream: the peer reads
+     * a byte stream and never sees SDU boundaries. Returns the log line, or null when nothing was requested.
+     */
+    fun applyToHandedOffLink(
+        output: OutputStream,
+        link: String,
+        requested: Boolean = DebugTunables.relayCocCoalesce,
+        effective: Boolean = effective(requested),
+        singlePdu: Boolean = DebugTunables.cocSinglePduSdus,
+    ): String? {
+        if (!requested) return null
+        val sdus = output as? CocSduOutputStream
+        val before = sdus?.chunkBytes
+        if (effective && sdus != null) {
+            sdus.chunkBytes = cocWriteChunkBytes(sdus.maxTransmitBytes, sdus.maxReceiveBytes, singlePdu, coalesceSdus = true)
+                ?: sdus.chunkBytes
+        }
+        return (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+            "coc_sdu: scope=forwarding_handoff | link=$link | relayCoalesce=requested | relayEffective=${effective && sdus != null} | " +
+            "sduBytesBefore=${before ?: "unchunked"} | sduBytes=${sdus?.chunkBytes ?: "unchunked"}" +
+            when {
+                !effective -> " | relayReason=stack_not_matched"
+                sdus == null -> " | relayReason=not_a_coc_media_stream"
+                else -> ""
+            }
+    }
+}
+
 /** 251-octet LE data PDU - 4-byte L2CAP basic header - 2-byte SDU length field (Core Vol 3 Part A 3.4). */
 internal const val COC_SINGLE_PDU_SDU_BYTES = 245
 
-internal class ChunkedOutputStream(output: OutputStream, private val chunkBytes: Int) : FilterOutputStream(output) {
+internal open class ChunkedOutputStream(output: OutputStream, chunkBytes: Int) : FilterOutputStream(output) {
     init {
         require(chunkBytes > 0)
     }
 
+    /** SDU size; changed only by [ForwardingCocCoalescing.applyToHandedOffLink] (the peer reads a byte stream). */
+    @Volatile var chunkBytes: Int = chunkBytes
+        set(value) {
+            require(value > 0)
+            field = value
+        }
+
     override fun write(b: ByteArray, off: Int, len: Int) {
+        val chunk = chunkBytes
         var offset = off
         var remaining = len
         while (remaining > 0) {
-            val count = minOf(remaining, chunkBytes)
+            val count = minOf(remaining, chunk)
             out.write(b, offset, count)
             offset += count
             remaining -= count
         }
     }
 }
+
+/** A CoC media stream that remembers the socket's packet limits, so its SDU size can be recomputed at a relay hand-off. */
+internal class CocSduOutputStream(
+    output: OutputStream,
+    chunkBytes: Int,
+    val maxTransmitBytes: Int,
+    val maxReceiveBytes: Int,
+) : ChunkedOutputStream(output, chunkBytes)

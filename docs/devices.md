@@ -49,7 +49,7 @@ So "partial" means "works, with measurable shortfalls" for most rows; it does no
 | Samsung SM-A556E (Galaxy A55) | 16 | not tested | not tested | partial | partial | Relay chain with S24 and S22 formed, but timing and overload checks failed |
 | Xiaomi Redmi 23053RN02I | 15 | not tested | not tested | partial | fail | Relay runs failed after the parent phone had been identified |
 | Samsung SM-M315F (Galaxy M31) | 12 | partial | partial | partial | partial | Video call with the ASUS at 500 kbps worked both ways but missed picture and timing checks; its hardware VP9 encoder sends large bursts that can freeze GATT video |
-| ASUS ROG Phone 2 (ASUS_I01WD) | 11 | partial | partial | partial | partial | Some calls started from this phone did not finish setting up |
+| ASUS ZenFone 6 (ASUS_I01WD) | 11 | partial | partial | partial | partial | Some calls started from this phone did not finish setting up |
 | OPPO CPH2179 (A15s) | 10 | partial | partial | partial | partial | Slow when sending video (0.4 to 6 frames per second in call tests); LE L2CAP CoC stops working after roughly 15 uses in one Bluetooth session (an Android stack limit) |
 
 "Relay through one phone" means a livestream passed on by a viewer phone to a second viewer. In our multi-phone relay

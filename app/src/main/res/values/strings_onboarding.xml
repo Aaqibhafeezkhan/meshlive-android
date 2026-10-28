@@ -37,6 +37,11 @@
     <string name="ob_perm_allowed">Allowed</string>
     <string name="ob_perm_missing">Not allowed yet</string>
 
+    <string name="ob_name_title">Hide your phone\'s name</string>
+    <string name="ob_name_text">Nearby devices will see your phone as \"Phone\" instead of its real name. This also lets Macs and PCs call you without a pairing prompt. Other Bluetooth devices (like headphones) will see \"Phone\" too. You can change this any time in Settings &gt; Privacy.</string>
+    <string name="ob_name_hide">Hide name</string>
+    <string name="ob_name_keep">Keep my name</string>
+
     <string name="ob_bg_title">Work with the screen off</string>
     <string name="ob_bg_text">Lets calls ring and video keep going while the screen is off.</string>
     <string name="ob_bg_allowed">Done. MeshLive can keep working with the screen off.</string>

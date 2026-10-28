@@ -1665,12 +1665,20 @@ class AndroidPrivateVideoCall(
     /**
      * This call's hop peer relays it ([AdaptivePhyMemory.callHopRelays]), so a loss on this link is not
      * evidence about the pair's 2M ([RelayUpstream]; `test_relay_phy_guard=false` records it again).
+     * A hop known to be the call's own peer ([AdaptivePhyMemory.callHopIsCallPeer]) is not a relay of this
+     * call even when it signs the call-relay capability as an idle helper.
      */
     private fun hopRelaysSkipsMemory(): Boolean = AdaptivePhyMemory.skipsRelayingHop(
         AdaptivePhyMemory.callHopRelays(
             offerVia = offerViaPrefix != null,
             relayHops = relayHops,
             hopTransportMask = secureSession?.peerCapabilities?.transportMask ?: 0,
+            hopIsCallPeer = AdaptivePhyMemory.callHopIsCallPeer(
+                enabled = DebugTunables.directCallHopMemory,
+                linkPeerIsEndpointPeer = secureSession?.peerNodeId?.let { it == contentSession?.peerNodeId } == true,
+                callerDialedDirect = state?.role == PrivateCallRole.CALLER && offerViaPrefix == null &&
+                    pendingRelayRoute == null && relayDuty == null && relayHops == 0,
+            ),
         ),
         DebugTunables.relayPhyGuard,
     )
@@ -2588,6 +2596,22 @@ class AndroidPrivateVideoCall(
             Log.i(
                 "BluetoothVideo",
                 "Private-call negotiation selected ${activeCodec.displayName} for the peer decoder",
+            )
+        }
+        if (BuildConfig.DEBUG) {
+            val peerMask = endpoint.peerCapabilities.decodeCodecMask
+            val choiceReason = AutomaticEncoderChoice.reason(
+                sent = activeCodec,
+                requested = codec,
+                available = availableCodecs,
+                userChoice = AutomaticEncoderChoice.userChoice,
+                preferHwAv1 = DebugTunables.preferHardwareAv1,
+                peerDecodeMask = peerMask,
+                excluded = AutomaticEncoderChoice::policyExcluded,
+            )
+            Log.i(
+                "BluetoothVideo",
+                AutomaticEncoderChoice.logLine("call", activeCodec, choiceReason, DebugTunables.preferHardwareAv1, peerMask),
             )
         }
         activeSettings = privateCallVideoSettingsForPeer(
@@ -5833,6 +5857,8 @@ class AndroidPrivateVideoCall(
                         "relayed_setup: role=helper | result=accepted | budget=${setup.budget} | next_budget=${admission.nextBudget} | " +
                         "next=${RelayHopPolicy.helperNextHop(admission.nextBudget, admission.nextHop.announcement.nodeIdPrefix, admission.hopPrefix)}",
                 )
+                // Experimental test_relay_coc_coalesce: this call link is now a relay hop (default off: no change).
+                ForwardingCocCoalescing.applyToHandedOffLink(activeConnection.output, "call-relay-parent")?.let { Log.i("BluetoothVideo", it) }
                 relay.startOnDemand(
                     appContext,
                     adapter,
@@ -5915,6 +5941,8 @@ class AndroidPrivateVideoCall(
                     prefix + RelaySeekLog.line("helper", "accepted", budget = budget) +
                         " | allowance_ms=${admission.allowanceMs} | plain=${plainId != null}",
                 )
+                // Experimental test_relay_coc_coalesce: this call link is now a relay hop (default off: no change).
+                ForwardingCocCoalescing.applyToHandedOffLink(activeConnection.output, "call-relay-parent")?.let { Log.i("BluetoothVideo", it) }
                 relay.startSeek(
                     appContext,
                     adapter,

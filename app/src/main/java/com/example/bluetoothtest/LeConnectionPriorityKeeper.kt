@@ -68,6 +68,8 @@ internal class LeConnectionPriorityKeeper(
     },
     /** Experimental (`test_skip_redundant_priority`, default off): see [isRedundant]. */
     private val skipRedundant: () -> Boolean = { DebugTunables.skipRedundantPriority },
+    /** The link's setup PHY hold ([PhyAfterPriority]): told about every request and every reported update. */
+    private val phyHold: PhyAfterPriority? = null,
 ) {
     /** The interval of the last successful connection update (1.25 ms units; -1 before one). */
     private var lastIntervalUnits = -1
@@ -102,9 +104,11 @@ internal class LeConnectionPriorityKeeper(
                 ),
             )
             requested(priority)
+            phyHold?.onPriorityRequested(window)
             return true
         }
         requested(priority)
+        phyHold?.onPriorityRequested(lePriorityParameters(priority, sdkInt))
         if (requestLogEnabled()) log(lePriorityParameters(priority, sdkInt).line(link, priority, sdkInt))
         return dispatch(priority)
     }
@@ -124,6 +128,7 @@ internal class LeConnectionPriorityKeeper(
     fun onConnectionUpdated(status: Int, intervalUnits: Int = -1) {
         gate?.onConnectionUpdated(status, intervalUnits)
         handleUpdate(status, intervalUnits)
+        phyHold?.onConnectionUpdated(status, intervalUnits)
     }
 
     @Synchronized

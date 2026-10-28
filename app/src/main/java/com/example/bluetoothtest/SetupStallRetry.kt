@@ -10,7 +10,7 @@ import android.util.Log
  * The A15s (MediaTek, Android 10) calling the ASUS stalls right after the 2M PHY update; the stall guard closes the link at
  * 3.0 s, but the ACL to the ASUS lingers 1.1-3.7 s. The ASUS re-advertises about 1.6 s after its cancel, so the retry finds a
  * fresh address in 0.13 s and dials into the lingering ACL: HCI 0x3E, then 0x0B (connection already exists), GATT 133 twice,
- * and the call failed with about 10 s of the early-loss window unused (longcall-035b5235 lc-U8UOWKQKPZIJFM8D-...-080235). The
+ * and the call failed with about 10 s of the early-loss window unused (longcall-035b5235, the A15s log of run 080235). The
  * retry targets a new address, so [GattLinkLifetime]'s per-address redial wait never applies; this waits on the OLD device's
  * ACL, armed before the stall guard closes the link so the broadcast cannot be missed. The stack's GATT connected list is
  * not consulted: the A15s reports the peer disconnected while its ACL is still up.

@@ -216,17 +216,17 @@ class GattPoolBackoffTest {
         assertEquals("peer_not_seen", DebugDialWait.expiryReason(null))
         assertEquals("scanner_unavailable", DebugDialWait.expiryReason(2))
         assertEquals(
-            "BENCHMARK call_invite: failed | node=0096b299a99f | reason=scanner_unavailable | waitedMs=10000 | " +
+            "BENCHMARK call_invite: failed | node=d1a10000a001 | reason=scanner_unavailable | waitedMs=10000 | " +
                 "lastScanFailureCode=2 | scanFailureName=application_registration_failed",
             DebugDialWait.line(
-                "failed", "0096b299a99f", "reason" to DebugDialWait.expiryReason(2),
+                "failed", "d1a10000a001", "reason" to DebugDialWait.expiryReason(2),
                 *DebugDialWait.expiryDetails(2, 10_000L),
             ),
         )
         assertEquals(
-            "BENCHMARK call_invite: failed | node=0096b299a99f | reason=peer_not_seen | waitedMs=10000",
+            "BENCHMARK call_invite: failed | node=d1a10000a001 | reason=peer_not_seen | waitedMs=10000",
             DebugDialWait.line(
-                "failed", "0096b299a99f", "reason" to DebugDialWait.expiryReason(null),
+                "failed", "d1a10000a001", "reason" to DebugDialWait.expiryReason(null),
                 *DebugDialWait.expiryDetails(null, 10_000L),
             ),
         )
