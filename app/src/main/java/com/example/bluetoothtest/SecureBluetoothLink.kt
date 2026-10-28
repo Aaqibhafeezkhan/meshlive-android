@@ -575,10 +575,7 @@ val BluetoothTransportOption.capabilityMask: Int
 val VideoCodec.capabilityMask: Int
     get() = codecCapabilityMask(protocolId)
 
-fun codecCapabilityMask(protocolId: Int): Int = when (protocolId) {
-    StreamProtocol.CODEC_VP9 -> NodeCapabilities.CODEC_VP9
-    StreamProtocol.CODEC_AV1 -> NodeCapabilities.CODEC_AV1
-    else -> 0
-}
+/** The hello (link and end-to-end) mask bit of a `BTV3` codec ID; summaries use [VideoCodecMap.summaryBit] instead. */
+fun codecCapabilityMask(protocolId: Int): Int = VideoCodecMap.helloBit(protocolId)
 
 fun NodeId.shortLabel(): String = toString().take(12)

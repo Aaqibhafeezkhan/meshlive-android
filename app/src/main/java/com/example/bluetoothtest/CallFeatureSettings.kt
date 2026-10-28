@@ -21,7 +21,7 @@ import com.google.android.material.materialswitch.MaterialSwitch
  * decides for every user. Messages and automatic sync stay OFF.
  *
  * Shipping a feature ON is a one-line change here, made only after the phone test named beside it
- * has passed (docs/dev/switches.md register).
+ * has passed (SWITCHES register).
  *
  * DEBUG benchmark launches (any `test_` extra) are unchanged: they read only their own extras,
  * default off, so case IDs and measured behaviour stay valid. The old `test_*` extras are the

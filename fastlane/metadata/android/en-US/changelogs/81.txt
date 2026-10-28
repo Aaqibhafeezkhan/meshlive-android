@@ -1,0 +1,2 @@
+Video now uses the most efficient format each phone supports: HEVC or H.264 hardware video where available, and a faster built-in VP9 encoder on phones without hardware VP9.
+With battery saver on, or when the phone is already warm, calls and streams start with the phone's hardware video encoder to save battery.

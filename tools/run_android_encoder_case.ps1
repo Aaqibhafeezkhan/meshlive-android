@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9_.-]{1,80}$')][string]$CaseName,
-    [ValidateSet('av1', 'vp9', 'native_av1')][string]$Codec = 'av1',
+    [ValidateSet('av1', 'vp9', 'native_av1', 'libvpx', 'avc', 'hevc')][string]$Codec = 'av1',
     [string]$CodecName = '',
     [Parameter(Mandatory = $true)][string]$DeviceSerial,
     [string]$InputName = 'reference-720p30-90.yuv',
@@ -14,7 +14,7 @@ param(
     [int]$Frames = 90,
     [int]$BitrateKbps = 400,
     [ValidateRange(0, 10)][int]$Complexity = 0,
-    [ValidateSet('cbr', 'vbr')][string]$RateMode = 'cbr',
+    [ValidateSet('cbr', 'vbr', 'default')][string]$RateMode = 'cbr',
     [ValidateRange(1, 30)][int]$KeyFrameSeconds = 4,
     [double]$MotionStartSeconds = -1,
     [double]$MotionDurationSeconds = -1,
@@ -37,7 +37,8 @@ $remoteInputDirectory = "/data/user/0/$package/files/benchmark-input"
 $remoteInput = "$remoteInputDirectory/$InputName"
 $remoteTempInput = "/data/local/tmp/bluetooth-video-$InputName"
 $remoteResult = "$remoteDirectory/$CaseName-result.json"
-$remoteVideo = "$remoteDirectory/$CaseName.ivf"
+$videoExtension = switch ($Codec) { 'avc' { 'h264' } 'hevc' { 'hevc' } default { 'ivf' } }
+$remoteVideo = "$remoteDirectory/$CaseName.$videoExtension"
 $remoteFrameTrace = "$remoteDirectory/$CaseName-frames.csv"
 function Invoke-AdbChecked([string[]]$Arguments) {
     & adb @Arguments | Out-Host
@@ -63,10 +64,13 @@ $resolvedInput = if ($InputPath) {
     $resolvedReference
 }
 
+if ($Codec -eq 'libvpx' -and ($Complexity -lt 5 -or $Complexity -gt 9)) {
+    throw 'libvpx complexity is VP9 real-time cpu-used and must be 5..9 (Design VX)'
+}
 if ($Codec -eq 'native_av1' -and $Complexity -lt 4) {
     throw 'Native AV1 complexity is libaom cpu-used and must be 4..10'
 }
-if ($Codec -ne 'native_av1' -and $Complexity -gt 5) {
+if ($Codec -notin @('native_av1', 'libvpx') -and $Complexity -gt 5) {
     throw 'Android MediaCodec complexity must be 0..5'
 }
 if (-not $SkipScoring -and (($MotionStartSeconds -ge 0) -xor ($MotionDurationSeconds -gt 0))) {
@@ -110,7 +114,7 @@ $arguments = @(
 if ($CodecName) {
     $arguments += @('--es', 'benchmark_codec_name', $CodecName)
 }
-if ($Codec -eq 'native_av1') {
+if ($Codec -in @('native_av1', 'libvpx')) {
     if ($NativeThreads -gt 0) {
         $arguments += @('--ei', 'benchmark_native_threads', $NativeThreads)
     }
@@ -139,12 +143,12 @@ $deviceResult = Get-Content -LiteralPath $localDeviceResult -Raw | ConvertFrom-J
 if ($deviceResult.status -ne 'ok') {
     throw "Benchmark failed: $($deviceResult.error)"
 }
-Invoke-AdbChecked @('-s', $DeviceSerial, 'pull', $remoteVideo, (Join-Path $resolvedOutput "$CaseName.ivf"))
+Invoke-AdbChecked @('-s', $DeviceSerial, 'pull', $remoteVideo, (Join-Path $resolvedOutput "$CaseName.$videoExtension"))
 Invoke-AdbChecked @('-s', $DeviceSerial, 'pull', $remoteFrameTrace, (Join-Path $resolvedOutput "$CaseName-frames.csv"))
 if (-not $SkipScoring) {
     $scoreArguments = @(
         (Join-Path $PSScriptRoot 'score_encoded_file.py'),
-        (Join-Path $resolvedOutput "$CaseName.ivf"),
+        (Join-Path $resolvedOutput "$CaseName.$videoExtension"),
         $resolvedReference,
         '--width', $Width,
         '--height', $Height,

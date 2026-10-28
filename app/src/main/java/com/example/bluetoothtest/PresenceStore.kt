@@ -312,7 +312,7 @@ class PresenceVault(
     private var reconcilingBlocked = false
 
     /**
-     * reviewer review 2026-10-27 (finding 5): a contact blocked while rotating IDs were off still holds a current lease. The
+     * Review 2026-10-27 (finding 5): a contact blocked while rotating IDs were off still holds a current lease. The
      * revocation stays pending until both the vault and the block list can be read, and it is completed before a restored
      * key is handed out ([dayKey]), not skipped for the rest of the run after one temporary failure.
      */

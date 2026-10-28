@@ -171,7 +171,7 @@ internal object BluetoothTransportPolicy {
         fallback = "Only status 133 (and the MTU/read stall) is retried.",
     )
 
-    // --- Proposals: sourced, inert until a phone A/B and maintainer review ---------------------
+    // --- Proposals: sourced, inert until a phone A/B and maintainer review -------------------
 
     val ANDROID16_BOND_LOSS_DIALOG = DevicePolicyEntry(
         id = "android16-bond-loss-dialog",

@@ -19,7 +19,7 @@ import android.content.pm.PackageManager
  * BOOT_COMPLETED; connectedDevice is allowed, and BOOT_COMPLETED / MY_PACKAGE_REPLACED are exemptions from the Android 12
  * background-start rule). Known gap, stated plainly: the relay controllers still live in the main activity, so a service
  * started at boot holds the process and the notification but does not itself relay. Closing that needs a headless host
- * (a root decision); [afterStart] is the single hook for it.
+ * (a design decision); [afterStart] is the single hook for it.
  */
 internal object BootResume {
     val ACTIONS: Set<String> = setOf(

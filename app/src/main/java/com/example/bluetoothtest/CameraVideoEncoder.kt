@@ -87,16 +87,21 @@ class CameraVideoEncoder(
     private val workerThread = HandlerThread("CameraEncoder").apply { start() }
     private val worker = Handler(workerThread.looper)
     private val closed = AtomicBoolean(false)
-    private val usesNativeAom = videoCodec.backend == VideoEncoderBackend.NATIVE_LIBAOM
-    private val nativeEncoderThread = if (usesNativeAom) {
-        HandlerThread("NativeAomEncoder").apply { start() }
+    /** A bundled software encoder (libaom AV1 or, Design VX, libvpx VP9) fed I420 by this class. */
+    private val usesNativeEncoder = videoCodec.backend.isNative
+    /** Design VX: the native encoder is libvpx VP9 (no temporal layering or tool-profile escalation on this path). */
+    private val usesNativeVpx = videoCodec.backend == VideoEncoderBackend.NATIVE_LIBVPX
+    /** Log label of the native encoder. */
+    private val nativeLabel = if (usesNativeVpx) "libvpx" else "libaom"
+    private val nativeEncoderThread = if (usesNativeEncoder) {
+        HandlerThread(if (usesNativeVpx) "NativeVpxEncoder" else "NativeAomEncoder").apply { start() }
     } else {
         null
     }
     private val nativeWorker = nativeEncoderThread?.let { thread -> Handler(thread.looper) }
 
     private var codec: MediaCodec? = null
-    private var nativeEncoder: NativeAomEncoder? = null
+    private var nativeEncoder: NativeVideoEncoder? = null
     private var nativeInputBuffers: ArrayBlockingQueue<ByteBuffer>? = null
     private var nativeInputDrops = 0
     private val nativeCopyLatency = RollingLatencyStats()
@@ -105,7 +110,9 @@ class CameraVideoEncoder(
     private var nativeSpeedLearner: NativeEncoderSpeedLearner? = null
     private var nativeSpeedStore: NativeEncoderSpeedStore? = null
     private var nativeOverloadReported = false
-    private val nativeSpeedKey = nativeEncoderSpeedKey(settings.resolution.width, settings.resolution.height, settings.fps)
+    /** libvpx presets use their own scale, so they are remembered under their own key. */
+    private val nativeSpeedKey = (if (usesNativeVpx) "libvpx:" else "") +
+        nativeEncoderSpeedKey(settings.resolution.width, settings.resolution.height, settings.fps)
     /** Tool profile of the live native encoder: the mode table's, or learned on this phone. */
     private var nativeFastTools = nativeUsesFastToolProfile(settings)
     /**
@@ -113,6 +120,18 @@ class CameraVideoEncoder(
      * every other frame refreshes nothing and is discardable. Fixed for this encoder's lifetime.
      */
     private val experimentalTemporalLayers = DebugTunables.experimentalTemporalLayers || DebugTunables.relayChildThinning
+    /** Design HC: codec 4 or 5 (Annex B, in-band parameter sets); null for VP9 and AV1, whose path is unchanged. */
+    private val hcCodec: AnnexBCodec? = AnnexBCodec.of(videoCodec.protocolId)
+    /** Design HC: one packetiser per MediaCodec instance (a re-created encoder emits its own sets). Worker thread. */
+    private var hcPacketiser: AnnexBPacketiser? = hcCodec?.let(::AnnexBPacketiser)
+    /** Design HC: the sender's own copy of the receivers' structural gate; nothing it rejects is sent. Worker thread. */
+    private val hcSelfCheck: AccessUnitGate? = hcCodec?.let { codec ->
+        AccessUnitGate(codec, settings.resolution.width, settings.resolution.height) { System.nanoTime() / 1_000_000L }
+    }
+    /** Design HC: a keyframe request must be answered by an IDR within 1 s, three misses end video (`no_idr`). */
+    private val hcIdrDeadline: IdrRequestDeadline? = hcCodec?.let { IdrRequestDeadline() }
+    private var hcFailed = false
+    private var hcVectors: HcTestVectorCapture? = null
     private var nativeTemporalLayers = false
     private var nativeLayerFrameIndex = 0L
     /** LayeringPolicy: produce droppable frames only while a link needs them. */
@@ -316,7 +335,7 @@ class CameraVideoEncoder(
      * cut decisions. Worker thread only.
      */
     private val sceneCutShaper = SceneCutShaper(
-        if (usesNativeAom) SceneCutShapingMode.OFF else DebugTunables.sceneCutShaping,
+        if (usesNativeEncoder) SceneCutShapingMode.OFF else DebugTunables.sceneCutShaping,
     )
     private val sceneCutDetection = sceneCutShaper.mode != SceneCutShapingMode.OFF ||
         BuildConfig.DEBUG && !debugTraceSessionName.isNullOrBlank()
@@ -324,7 +343,7 @@ class CameraVideoEncoder(
     private var sceneCutsDetected = 0
     /** Experimental VP9 quantizer headroom (DebugTunables.vp9QuantizerFloor, off by default). */
     private val quantizerHeadroom = DebugTunables.vp9QuantizerFloor
-        ?.takeIf { isVp9 && !usesNativeAom && rateControl == EncoderRateControl.AUTOMATIC }
+        ?.takeIf { isVp9 && !usesNativeEncoder && rateControl == EncoderRateControl.AUTOMATIC }
         ?.let(::QuantizerHeadroomGovernor)
     /**
      * Default-on measured output correction for MediaCodec encoders under Automatic rate control
@@ -336,7 +355,7 @@ class CameraVideoEncoder(
      * Experimental A/B arm (off): WebRTC FramerateBitrateAdjuster within its exact scope (OMX.Exynos.
      * VP9/H.264, CodecPolicy.framerateAdjusterScope). It replaces [bitrateAdjuster] for the session.
      */
-    private val framerateAdjusterArm = DebugTunables.encoderFramerateAdjuster && !usesNativeAom &&
+    private val framerateAdjusterArm = DebugTunables.encoderFramerateAdjuster && !usesNativeEncoder &&
         rateControl == EncoderRateControl.AUTOMATIC &&
         CodecPolicy.framerateAdjusterScope(videoCodec.encoderName, videoCodec.mimeType)
     /**
@@ -349,7 +368,7 @@ class CameraVideoEncoder(
     /** yuv-image-crop-rect (YuvPolicy): copies start from Image.getCropRect(). */
     private val honourCropRect = YuvPolicy.cropRectHonoured(DeviceTraits.current())
     private val bitrateAdjuster = EncoderBitrateAdjuster().takeIf {
-        DebugTunables.encoderBitrateAdjuster && !usesNativeAom && rateControl == EncoderRateControl.AUTOMATIC &&
+        DebugTunables.encoderBitrateAdjuster && !usesNativeEncoder && rateControl == EncoderRateControl.AUTOMATIC &&
             !framerateAdjusterArm
     }
     private var bitrateAdjusterLogStartedNs = 0L
@@ -357,7 +376,7 @@ class CameraVideoEncoder(
     /** Measured burst behaviour of this encoder (recorded every session; ranking is experimental). */
     private val burstAccumulator = EncoderBurstAccumulator()
     private val activeBitrateMode = DebugTunables.bitrateModeOverride
-        .takeIf { videoCodec.backend != VideoEncoderBackend.NATIVE_LIBAOM }
+        .takeIf { !videoCodec.backend.isNative }
         ?: videoCodec.resolveBitrateMode(rateControl)
     private val activeComplexity = videoCodec.realtimeComplexity(settings)
     private val keyFrameRequestBackoff = KeyFrameRequestBackoff()
@@ -459,14 +478,21 @@ class CameraVideoEncoder(
             viewfinderSurface = owner
         }
 
-        if (usesNativeAom) {
+        if (usesNativeEncoder) {
             val defaultCpuUsed = checkNotNull(videoCodec.nativeCpuUsed(settings))
             val store = NativeEncoderSpeedPreferences(context)
             nativeSpeedStore = store
             val remembered = runCatching { store.load(nativeSpeedKey) }.getOrNull()
-            val learner = NativeEncoderSpeedLearner(defaultCpuUsed, nativeUsesFastToolProfile(settings), remembered)
+            // libvpx has no tool profile to escalate to: it counts as already "fast" and only the preset adapts.
+            val learner = NativeEncoderSpeedLearner(
+                defaultCpuUsed,
+                usesNativeVpx || nativeUsesFastToolProfile(settings),
+                remembered,
+                maxCpuUsed = nativeMaxCpuUsed,
+            )
             nativeSpeedLearner = learner
             nativeFastTools = learner.fastTools
+            // The bench refuses a libvpx pin outside 5..9 before the encoder starts; a libaom pin is used as given.
             val cpuUsed = bench?.libaomCpuUsed ?: learner.startCpuUsed
             val frameBytes = YuvPlaneCopy.i420Bytes(settings.resolution.width, settings.resolution.height)
             // A slow frame waits in a buffer (adds latency) instead of losing the next camera frame.
@@ -474,11 +500,18 @@ class CameraVideoEncoder(
                 repeat(NATIVE_INPUT_BUFFERS) { add(ByteBuffer.allocateDirect(frameBytes)) }
             }
             val threadCount = nativeThreadCount(settings.resolution)
-            nativeSpeedGovernor = NativeEncoderSpeedGovernor(cpuUsed, settings.fps)
+            nativeSpeedGovernor = NativeEncoderSpeedGovernor(cpuUsed, settings.fps, nativeMinCpuUsed, nativeMaxCpuUsed)
             nativeEncoder = createNativeEncoder(cpuUsed, activeBitrate)
-            nativeTemporalLayers = experimentalTemporalLayers
+            // The experimental temporal layering is AV1-only (explicit libaom references, AV1 header check).
+            nativeTemporalLayers = experimentalTemporalLayers && !usesNativeVpx
             nativeLayerFrameIndex = 0L
-            Log.i(
+            if (usesNativeVpx) Log.i(
+                "BluetoothVideo",
+                "Native libvpx ${NativeVpxBridge.nativeVersion()}: cpu-used=$cpuUsed " +
+                    "(table $defaultCpuUsed, remembered ${remembered?.cpuUsed ?: "none"} for $nativeSpeedKey), " +
+                    "inputBuffers=$NATIVE_INPUT_BUFFERS, threads=$threadCount, lag=0, AQ=cyclic-refresh, " +
+                    "error-resilient, row-mt, VP9 real-time",
+            ) else Log.i(
                 "BluetoothVideo",
                 "Native libaom ${NativeAomBridge.nativeVersion()}: cpu-used=$cpuUsed " +
                     "(table $defaultCpuUsed, remembered ${remembered?.cpuUsed ?: "none"} for $nativeSpeedKey), " +
@@ -525,7 +558,7 @@ class CameraVideoEncoder(
                         availableReader.acquireLatestImage()?.close()
                         return@setOnImageAvailableListener
                     }
-                    if (usesNativeAom) {
+                    if (usesNativeEncoder) {
                         availableReader.acquireLatestImage()?.use { image ->
                             injectBlankIfRequested(image)
                             if (!dropLeadingBlank(image)) queueNativeFrame(image)
@@ -547,7 +580,7 @@ class CameraVideoEncoder(
                 Log.i(
                     "BluetoothVideo",
                     "BENCHMARK camera_leading_blank: enabled=${DebugTunables.dropLeadingBlankFrames} | " +
-                        "inject=${DebugTunables.injectBlankFrames} | path=${if (usesNativeAom) "native" else "image"} | " +
+                        "inject=${DebugTunables.injectBlankFrames} | path=${if (usesNativeEncoder) "native" else "image"} | " +
                         "encoder=$activeEncoderName",
                 )
             }
@@ -601,7 +634,8 @@ class CameraVideoEncoder(
                 other.protocolId == videoCodec.protocolId &&
                     other.usesSurfaceInput == videoCodec.usesSurfaceInput &&
                     other.encoderName != videoCodec.encoderName &&
-                    (activeBitrateMode == null || activeBitrateMode in other.supportedBitrateModes)
+                    (activeBitrateMode == null || activeBitrateMode in other.supportedBitrateModes) &&
+                    (!other.isHcCodec || other.automaticBlock == null && other.hardwareAccelerated == videoCodec.hardwareAccelerated)
             }.map { it.encoderName }.take(MAX_ALTERNATE_ENCODERS)
         }.getOrDefault(emptyList())
     }
@@ -615,10 +649,31 @@ class CameraVideoEncoder(
         // Experimental bounded media age also verifies AV1 frames an encoder makes droppable on
         // its own (no layering is requested), so call queues can skip proven non-reference frames.
         // VP9 is excluded (see BoundedMediaAge.nonReferenceSkipAllowed).
-        if (experimentalTemporalLayers ||
-            DebugTunables.experimentalBoundedMediaAge && videoCodec.mimeType == MediaFormat.MIMETYPE_VIDEO_AV1
+        if (hcCodec == null && (experimentalTemporalLayers ||
+                DebugTunables.experimentalBoundedMediaAge && videoCodec.mimeType == MediaFormat.MIMETYPE_VIDEO_AV1)
         ) {
             bitstreamDroppability = BitstreamDroppability(videoCodec.mimeType)
+        }
+        if (hcCodec != null) {
+            hcVectors = HcTestVectorCapture.startIfRequested(context, videoCodec, settings, activeBitrateMode, debugRawInputFile != null)
+            if (experimentalTemporalLayers && DebugTunables.hardwareTemporalLayers) {
+                // Design HC: codecs 4 and 5 never get the DEBUG temporal-layer request (android.generic.2).
+                Log.i(
+                    "BluetoothVideo",
+                    "BENCHMARK temporal_layering: encoder=$activeEncoderName | mime=${videoCodec.mimeType} | " +
+                        "requested=$TEMPORAL_LAYERING_SCHEMA | effective=none | reason=hc_codec_excluded",
+                )
+            }
+            Log.i(
+                "BluetoothVideo",
+                (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                    "hc_encoder: codec=${hcCodec.label} | encoder=$activeEncoderName | profile=${videoCodec.profile ?: "none"} | " +
+                    "level=${hcRequestedLevel() ?: "none"} | level_idc=${hcRequestedLevel()?.let { HcEncoderEligibility.levelIdc(videoCodec.protocolId, it) } ?: "none"} | " +
+                    "level_listed=${videoCodec.level ?: "none"} | rate_mode_requested=CBR | " +
+                    "rate_mode_effective=${HcBitrateModes.label(activeBitrateMode)} | " +
+                    "declared=${videoCodec.supportedBitrateModes.joinToString("+") { HcBitrateModes.label(it) }.ifEmpty { "none" }} | " +
+                    "prepend_header_key=unused | b_frames=0",
+            )
         }
         if (CameraPolicy.encoderInitFallbackEnabled(deviceTraits, bench = bench != null)) {
             startWithInitFallback()
@@ -660,6 +715,12 @@ class CameraVideoEncoder(
             setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, settings.fps.toFloat())
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, keyFrameIntervalSeconds)
             setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            // Design HC: HEVC Main / H.264 High, Main or Constrained Baseline as the encoder lists them. Never
+            // KEY_PREPEND_HEADER_TO_SYNC_FRAMES: the packetiser prepends the cached parameter sets itself.
+            videoCodec.profile?.let { profile ->
+                setInteger(MediaFormat.KEY_PROFILE, profile)
+                hcRequestedLevel()?.let { setInteger(MediaFormat.KEY_LEVEL, it) }
+            }
             // KEY_OPERATING_RATE stays unset on purpose: a huge value crashes configure on several Qualcomm
             // and UniSoc parts (Media3 #810 / b/311206113), and a finite one has no measured benefit here.
             setInteger(MediaFormat.KEY_PRIORITY, if (lowPriority) 1 else 0)
@@ -706,7 +767,7 @@ class CameraVideoEncoder(
             // Relay child thinning asks hardware AV1 for layers by itself; hardware VP9 (error-resilient
             // layered VP9 cost ~11 VMAF on the M31) only with the extra DEBUG switch.
             temporalLayeringRequested = EncoderOptionalKey.TEMPORAL_LAYERING !in dropped &&
-                experimentalTemporalLayers && (
+                hcCodec == null && experimentalTemporalLayers && (
                 DebugTunables.hardwareTemporalLayers ||
                     DebugTunables.relayChildThinning && videoCodec.mimeType == MediaFormat.MIMETYPE_VIDEO_AV1
                 )
@@ -788,6 +849,7 @@ class CameraVideoEncoder(
 
     private fun createConfigureStartSingle(format: MediaFormat) {
         codec = MediaCodec.createByCodecName(activeEncoderName)
+        hcPacketiser = hcCodec?.let(::AnnexBPacketiser)
         var configured = false
         val layeringAskedFor = temporalLayeringRequested
         if (temporalLayeringRequested) {
@@ -881,6 +943,7 @@ class CameraVideoEncoder(
         try {
             // Published before start(), as the former path did: input-buffer callbacks use [codec] at once.
             val encoder = MediaCodec.createByCodecName(attempt.encoder).also { created = it; codec = it }
+            hcPacketiser = hcCodec?.let(::AnnexBPacketiser)
             encoder.setCallback(codecCallback, worker)
             BoundedCall.run("encoder-configure", ENCODER_INIT_STAGE_TIMEOUT_MS) { timedConfigure(encoder, format) }
             if (videoCodec.usesSurfaceInput && debugRawInputFile == null) {
@@ -968,7 +1031,7 @@ class CameraVideoEncoder(
         override fun run() {
             if (closed.get()) return
             if (rawStartedUs == 0L) {
-                if (!usesNativeAom && pendingInputBuffers.isEmpty()) {
+                if (!usesNativeEncoder && pendingInputBuffers.isEmpty()) {
                     worker.postDelayed(this, 1L)
                     return
                 }
@@ -1000,7 +1063,7 @@ class CameraVideoEncoder(
                 val input = checkNotNull(rawInput)
                 val frame = checkNotNull(rawFrame)
                 val fixtureFrame = sourceFrame % (input.length() / frame.size)
-                if (usesNativeAom) {
+                if (usesNativeEncoder) {
                     val buffers = checkNotNull(nativeInputBuffers)
                     val target = buffers.poll()
                     if (target == null) {
@@ -1405,7 +1468,7 @@ class CameraVideoEncoder(
         "${settings.bitRate / 1_000} kbps, ${settings.latencyMs} ms budget, " +
         "${rateControl.label} mode $activeBitrateMode" +
         (activeComplexity?.let { ", complexity $it" } ?: "") +
-        (nativeSpeedGovernor?.cpuUsed?.let { ", libaom cpu-used $it" } ?: "") +
+        (nativeSpeedGovernor?.cpuUsed?.let { ", $nativeLabel cpu-used $it" } ?: "") +
         " ($cameraFps)"
 
     /**
@@ -1477,14 +1540,25 @@ class CameraVideoEncoder(
             if (buffer != null && info.size > 0) {
                 buffer.position(info.offset)
                 buffer.limit(info.offset + info.size)
-                val bytes = ByteArray(info.size)
-                buffer.get(bytes)
+                val encoded = ByteArray(info.size)
+                buffer.get(encoded)
+                // Design HC: Annex B packetising (no config packet, sets prepended to IDRs, keyframe from the NAL
+                // type); null means nothing is sent for this buffer.
+                val hc = if (hcCodec != null) {
+                    hcOutput(encoded, info) ?: run {
+                        codec.releaseOutputBuffer(index, false)
+                        return
+                    }
+                } else {
+                    null
+                }
+                val bytes = hc?.payload ?: encoded
                 // The droppability verifier (experiments only, null otherwise) also sees configuration
                 // and keyframes so it knows the AV1 sequence header before judging inter frames.
                 val flags = encodedBufferFlags(
                     bitstreamDroppability,
-                    codecConfig = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0,
-                    keyFrame = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0,
+                    codecConfig = hc == null && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0,
+                    keyFrame = hc?.keyFrame ?: (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0),
                     bytes = bytes,
                 )
                 if (flags and StreamProtocol.FLAG_KEY_FRAME != 0) {
@@ -1603,6 +1677,17 @@ class CameraVideoEncoder(
                     )
                 }
             }
+            if (hcCodec != null) {
+                // Design HC: no codec-config packet; the format's csd only fills the packetiser cache.
+                listOf("csd-0", "csd-1", "csd-2").forEach { key ->
+                    format.getByteBuffer(key)?.let { data ->
+                        val bytes = ByteArray(data.remaining())
+                        data.get(bytes)
+                        runCatching { hcPacketiser?.onCodecConfig(bytes) }
+                    }
+                }
+                return
+            }
             format.getByteBuffer("csd-0")?.let { data ->
                 val bytes = ByteArray(data.remaining())
                 data.get(bytes)
@@ -1672,7 +1757,7 @@ class CameraVideoEncoder(
                 cameraPipelineDepth ?: "unavailable",
             )
         } else ""
-        val nativeTiming = if (usesNativeAom) {
+        val nativeTiming = if (usesNativeEncoder) {
             val copy = nativeCopyLatency.snapshot()
             val encode = nativeEncodeLatency.snapshot()
             ", native copy p95 %.1f ms, encode p95 %.1f ms, capture drops %d".format(
@@ -1749,8 +1834,8 @@ class CameraVideoEncoder(
             outputBitrateBps = intOf(MediaFormat.KEY_BIT_RATE),
             outputFrameRate = intOf(MediaFormat.KEY_FRAME_RATE),
             outputIFrameInterval = intOf(MediaFormat.KEY_I_FRAME_INTERVAL),
-            libaomCpuUsed = if (usesNativeAom) nativeSpeedGovernor?.cpuUsed else null,
-            libaomThreads = if (usesNativeAom) nativeThreadCount(settings.resolution) else null,
+            libaomCpuUsed = if (usesNativeEncoder) nativeSpeedGovernor?.cpuUsed else null,
+            libaomThreads = if (usesNativeEncoder) nativeThreadCount(settings.resolution) else null,
             rawInputDrops = rawInputDrops,
         )
     }
@@ -1827,7 +1912,7 @@ class CameraVideoEncoder(
     }
 
     private fun supportsEncodingStatistics(): Boolean {
-        if (usesNativeAom) return false
+        if (usesNativeEncoder) return false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
         return runCatching {
             MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos
@@ -1898,11 +1983,16 @@ class CameraVideoEncoder(
             } ?: buffers.offer(input)
         } catch (error: Exception) {
             buffers.offer(input)
-            onStatus("Native libaom input error: ${error.message ?: error.javaClass.simpleName}")
+            onStatus("Native $nativeLabel input error: ${error.message ?: error.javaClass.simpleName}")
         }
     }
 
-    private fun createNativeEncoder(cpuUsed: Int, bitrate: Int): NativeAomEncoder {
+    private val nativeMinCpuUsed: Int
+        get() = if (usesNativeVpx) NativeVpxBridge.MIN_REALTIME_CPU_USED else NativeEncoderSpeedGovernor.MIN_REALTIME_CPU_USED
+    private val nativeMaxCpuUsed: Int
+        get() = if (usesNativeVpx) NativeVpxBridge.MAX_REALTIME_CPU_USED else NativeEncoderSpeedGovernor.MAX_REALTIME_CPU_USED
+
+    private fun createNativeEncoder(cpuUsed: Int, bitrate: Int): NativeVideoEncoder {
         markNativeInit()
         return buildNativeEncoder(cpuUsed, bitrate)
     }
@@ -1919,7 +2009,19 @@ class CameraVideoEncoder(
         Handler(Looper.getMainLooper()).postDelayed({ NativeSimdSafeMode.markStable(store) }, NativeSimdSafeMode.CRASH_WINDOW_MS)
     }
 
-    private fun buildNativeEncoder(cpuUsed: Int, bitrate: Int): NativeAomEncoder = NativeAomEncoder(
+    private fun buildNativeEncoder(cpuUsed: Int, bitrate: Int): NativeVideoEncoder = if (usesNativeVpx) {
+        NativeVpxEncoder(
+            width = settings.resolution.width,
+            height = settings.resolution.height,
+            fps = settings.fps,
+            bitrate = bitrate,
+            cpuUsed = cpuUsed,
+            threads = nativeThreadCount(settings.resolution),
+            variableBitrate = activeBitrateMode == MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR,
+            // Same rule as libaom: Automatic keeps every frame; only an explicit CBR-FD allows encoder drops.
+            dropFrames = rateControl == EncoderRateControl.CBR_FD,
+        )
+    } else NativeAomEncoder(
         width = settings.resolution.width,
         height = settings.resolution.height,
         fps = settings.fps,
@@ -1939,7 +2041,7 @@ class CameraVideoEncoder(
      * re-create the encoder with the real-time fast tool profile (sequence-level tools cannot
      * change on a live libaom encoder), costing one keyframe.
      */
-    private fun recreateNativeEncoderWithFastTools(): NativeAomEncoder? {
+    private fun recreateNativeEncoderWithFastTools(): NativeVideoEncoder? {
         val previous = nativeEncoder ?: return null
         val cpuUsed = nativeSpeedGovernor?.cpuUsed ?: checkNotNull(videoCodec.nativeCpuUsed(settings))
         val target = if (rateControl == EncoderRateControl.AUTOMATIC) {
@@ -1968,7 +2070,7 @@ class CameraVideoEncoder(
      * one keyframe, floored near the current quantizer, at a time when every link has had room for
      * 20 s.
      */
-    private fun recreateNativeEncoderForFullReferences(): NativeAomEncoder? {
+    private fun recreateNativeEncoderForFullReferences(): NativeVideoEncoder? {
         val previous = nativeEncoder ?: return null
         val cpuUsed = nativeSpeedGovernor?.cpuUsed ?: checkNotNull(videoCodec.nativeCpuUsed(settings))
         val target = if (rateControl == EncoderRateControl.AUTOMATIC) {
@@ -2028,13 +2130,13 @@ class CameraVideoEncoder(
                 val previous = governor.cpuUsed
                 governor.applyThermalFloor(thermalSpeedFloor)?.let { raised ->
                     encoder.updateCpuUsed(raised)
-                    Log.i("BluetoothVideo", "Native libaom speed: cpu-used $previous -> $raised (thermal floor $thermalSpeedFloor)")
+                    Log.i("BluetoothVideo", "Native $nativeLabel speed: cpu-used $previous -> $raised (thermal floor $thermalSpeedFloor)")
                 }
                 governor.record(encodeLatencyMs, System.nanoTime())?.let { next ->
                     encoder.updateCpuUsed(next)
                     Log.i(
                         "BluetoothVideo",
-                        "Native libaom speed: cpu-used $previous -> $next " +
+                        "Native $nativeLabel speed: cpu-used $previous -> $next " +
                             "(frame budget %.1f ms)".format(1_000.0 / settings.fps),
                     )
                 }
@@ -2052,7 +2154,7 @@ class CameraVideoEncoder(
                         runCatching { nativeSpeedStore?.save(nativeSpeedKey, record) }
                         Log.i(
                             "BluetoothVideo",
-                            "Native libaom settled: cpu-used ${record.cpuUsed}, fastTools=${record.fastTools} " +
+                            "Native $nativeLabel settled: cpu-used ${record.cpuUsed}, fastTools=${record.fastTools} " +
                                 "remembered for $nativeSpeedKey",
                         )
                     }
@@ -2125,7 +2227,7 @@ class CameraVideoEncoder(
                 )
             }
         } catch (error: Exception) {
-            onStatus("Native libaom input error: ${error.message ?: error.javaClass.simpleName}")
+            onStatus("Native $nativeLabel input error: ${error.message ?: error.javaClass.simpleName}")
         }
     }
 
@@ -2158,7 +2260,7 @@ class CameraVideoEncoder(
         val result = runCatching { detector.analyze(plane()) }.getOrNull() ?: return
         if (!result.cut) return
         sceneCutsDetected++
-        val targetBps = if (usesNativeAom) activeBitrate else codecTargetBps()
+        val targetBps = if (usesNativeEncoder) activeBitrate else codecTargetBps()
         val shapingPlan = sceneCutShaper.plan(
             presentationTimeUs,
             nowNs,
@@ -2478,7 +2580,7 @@ class CameraVideoEncoder(
      */
     fun updateLinkFrameBudget(linkKbps: Int) {
         if (linkKbps > 0) frameBudgetLinkKbps = linkKbps
-        if (!usesNativeAom || rateControl != EncoderRateControl.AUTOMATIC || linkKbps <= 0) return
+        if (!usesNativeEncoder || rateControl != EncoderRateControl.AUTOMATIC || linkKbps <= 0) return
         val percent = maxInterFramePercent(linkKbps, activeBitrate, settings.fps)
         nativeWorker?.post {
             nativeInterBitratePct = percent
@@ -2502,7 +2604,7 @@ class CameraVideoEncoder(
 
     /** Sets the bitrate the encoder itself targets; [activeBitrate] stays the app's request. */
     private fun applyEncoderTarget(bitRate: Int) {
-        if (usesNativeAom) {
+        if (usesNativeEncoder) {
             nativeWorker?.post {
                 runCatching { nativeEncoder?.updateBitrate(bitRate) }
                     .onSuccess {
@@ -2510,7 +2612,7 @@ class CameraVideoEncoder(
                     }
                     .onFailure { error ->
                         onStatus(
-                            "Native libaom rejected bitrate update: " +
+                            "Native $nativeLabel rejected bitrate update: " +
                                 (error.message ?: error.javaClass.simpleName),
                         )
                     }
@@ -2563,7 +2665,7 @@ class CameraVideoEncoder(
      * or null (hardware encoder, or fewer than 30 frames measured since this encoder started).
      */
     fun liveEncodeLoad(effectiveFps: Int): Double? {
-        if (!usesNativeAom || effectiveFps <= 0) return null
+        if (!usesNativeEncoder || effectiveFps <= 0) return null
         val encode = nativeEncodeLatency.snapshot()
         return if (encode.samples >= LIVE_LOAD_MIN_SAMPLES) encode.p95Ms * effectiveFps / 1_000.0 else null
     }
@@ -2600,7 +2702,7 @@ class CameraVideoEncoder(
     }
 
     private fun keyFrameShapingFraction(): Double? =
-        DebugTunables.keyFrameShaping?.takeIf { !usesNativeAom && rateControl == EncoderRateControl.AUTOMATIC }
+        DebugTunables.keyFrameShaping?.takeIf { !usesNativeEncoder && rateControl == EncoderRateControl.AUTOMATIC }
 
     /**
      * Experimental temporal layering: LayeringPolicy turns droppable frames on while a link of this
@@ -2625,7 +2727,7 @@ class CameraVideoEncoder(
 
     private fun layeringSummary(): String = when {
         !experimentalTemporalLayers -> ""
-        usesNativeAom -> ", experimental temporal layers ${if (nativeTemporalLayers) 2 else 1}, droppable " +
+        usesNativeEncoder -> ", experimental temporal layers ${if (nativeTemporalLayers) 2 else 1}, droppable " +
             "${nativeDroppability.droppableFrames}/${nativeDroppability.examinedFrames} verified"
         else -> bitstreamDroppability?.let {
             ", experimental droppable ${it.droppableFrames}/${it.examinedFrames} verified" +
@@ -2650,11 +2752,116 @@ class CameraVideoEncoder(
         return honored
     }
 
+    /** Design HC: the IDR deadline of a pending keyframe request (worker thread). */
+    private val hcIdrCheck: Runnable = Runnable {
+        val deadline = hcIdrDeadline ?: return@Runnable
+        if (closed.get() || hcFailed) return@Runnable
+        when (deadline.poll(System.nanoTime() / 1_000_000L)) {
+            IdrRequestDeadline.Action.NONE -> if (deadline.pending) worker.postDelayed(hcIdrCheck, IdrRequestDeadline.TIMEOUT_MS)
+            IdrRequestDeadline.Action.REPEAT -> {
+                Log.w("BluetoothVideo", "BENCHMARK hc_idr_request: encoder=$activeEncoderName | action=repeat | misses=${deadline.misses}")
+                requestKeyFrame(force = true)
+            }
+            IdrRequestDeadline.Action.GIVE_UP -> hcEndVideo("no_idr")
+        }
+    }
+
+    /**
+     * Design HC: the packetised form of one encoder output buffer, or null when nothing is sent for it (a codec-config
+     * buffer, which only fills the cache; a buffer the packetiser or the sender's own gate refuses; video already ended).
+     */
+    private fun hcOutput(encoded: ByteArray, info: MediaCodec.BufferInfo): PacketiserResult.Packet? {
+        if (hcFailed) return null
+        val packetiser = hcPacketiser ?: return null
+        val configBuffer = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+        hcVectors?.onEncoderBuffer(encoded, configBuffer, info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0, info.presentationTimeUs)
+        if (configBuffer) {
+            runCatching { packetiser.onCodecConfig(encoded) }.onFailure { error ->
+                Log.w("BluetoothVideo", "BENCHMARK hc_packetiser: encoder=$activeEncoderName | error=config_${error.javaClass.simpleName}")
+            }
+            return null
+        }
+        val result = runCatching { packetiser.onAccessUnit(encoded, info.presentationTimeUs) }
+            .getOrElse { PacketiserResult.Error("malformed") }
+        val packet = when (result) {
+            is PacketiserResult.Packet -> result
+            is PacketiserResult.Error -> {
+                Log.w(
+                    "BluetoothVideo",
+                    "BENCHMARK hc_packetiser: encoder=$activeEncoderName | error=${result.reason} | bytes=${encoded.size} | " +
+                        "pts=${info.presentationTimeUs}",
+                )
+                if (result.reason == "reorder") {
+                    hcEndVideo("reorder")
+                } else {
+                    requestKeyFrame(force = true)
+                }
+                return null
+            }
+        }
+        // Never send what the receivers' gate would reject: the same rules run here first.
+        when (val verdict = hcSelfCheck?.check(packet.payload, if (packet.keyFrame) StreamProtocol.FLAG_KEY_FRAME else 0)) {
+            is AuVerdict.Reject -> {
+                Log.w(
+                    "BluetoothVideo",
+                    "BENCHMARK au_reject: side=sender | codec=${hcCodec?.label} | rule=${verdict.rule} | type=${verdict.nalType} | " +
+                        "bytes=${verdict.bytes} | keyframe=${verdict.keyFrame} | reason=${verdict.reason} | encoder=$activeEncoderName",
+                )
+                requestKeyFrame(force = true)
+                return null
+            }
+            is AuVerdict.Close -> {
+                hcEndVideo("unsupported_bitstream:${verdict.reason}")
+                return null
+            }
+            else -> Unit
+        }
+        hcIdrDeadline?.onAccessUnit(packet.keyFrame)
+        if (packet.keyFrame && packet.codedSize != null && BuildConfig.DEBUG) {
+            Log.i(
+                "BluetoothVideo",
+                "BENCHMARK hc_keyframe: encoder=$activeEncoderName | coded=${packet.codedSize.first}x${packet.codedSize.second} | " +
+                    "bytes=${packet.payload.size} | encoderKeyFlag=${info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0}",
+            )
+        }
+        hcVectors?.let { capture ->
+            if (capture.onAccessUnit(packet.payload, packet.keyFrame, info.presentationTimeUs, packet.codedSize)) {
+                requestKeyFrame(force = true)
+            }
+        }
+        return packet
+    }
+
+    /**
+     * Design HC: the `KEY_LEVEL` this session requests: the lowest standard level covering its size, FPS and bitrate,
+     * capped at the encoder's highest listed level ([VideoCodecSwitches.hcSessionLevel]; off: the listed maximum).
+     */
+    private fun hcRequestedLevel(): Int? = videoCodec.level?.let { listed ->
+        if (!VideoCodecSwitches.hcSessionLevel) {
+            listed
+        } else {
+            HcEncoderEligibility.levelFor(
+                videoCodec.protocolId, listed, settings.resolution.width, settings.resolution.height, settings.fps,
+                maxOf(settings.bitRate, activeBitrate),
+            )
+        }
+    }
+
+    /** Design HC: ends this encoder's video (`no_idr`, `reorder`, unsupported bitstream); the component is ineligible for this process. */
+    private fun hcEndVideo(reason: String) {
+        if (hcFailed) return
+        hcFailed = true
+        HcComponentHealth.markIneligible(activeEncoderName, reason)
+        hcVectors?.finish("ended_$reason")
+        Log.w("BluetoothVideo", "BENCHMARK hc_video_end: encoder=$activeEncoderName | reason=$reason")
+        notifyFailure("Video ended: ${hcCodec?.label} encoder $reason")
+    }
+
     fun requestKeyFrame(force: Boolean = false) {
-        if (usesNativeAom) {
+        if (usesNativeEncoder) {
             if (!honorKeyFrameRequest(force, "native")) return
             nativeKeyFrameRequested.set(true)
-            onStatus("Requested a native libaom recovery keyframe")
+            onStatus("Requested a native $nativeLabel recovery keyframe")
             return
         }
         worker.post {
@@ -2673,6 +2880,11 @@ class CameraVideoEncoder(
                     shapedKeyFramePending = true
                     worker.removeCallbacks(restoreShapedTarget)
                     worker.postDelayed(restoreShapedTarget, SHAPED_KEY_FRAME_TIMEOUT_MS)
+                }
+                hcIdrDeadline?.let { deadline ->
+                    deadline.onRequest(System.nanoTime() / 1_000_000L)
+                    worker.removeCallbacks(hcIdrCheck)
+                    worker.postDelayed(hcIdrCheck, IdrRequestDeadline.TIMEOUT_MS)
                 }
                 onStatus("Requested a recovery keyframe")
             }.onFailure { error ->
@@ -2830,6 +3042,7 @@ class CameraVideoEncoder(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        hcVectors?.finish("closed")
         if (debugRawInputFile != null && rawStartedUs > 0L) {
             val frameBytes = settings.resolution.width.toLong() * settings.resolution.height * 3 / 2
             debugMediaTrace?.setRawTimeline(debugRawInputFile.name, debugRawInputFile.length() / frameBytes,
@@ -2864,7 +3077,7 @@ class CameraVideoEncoder(
         nativeInputBuffers = null
         referenceRecorder?.close()
         if (BuildConfig.DEBUG && (debugRawInputFile != null && rawStartedUs > 0L ||
-                debugRawInputFile == null && usesNativeAom && firstVideoFrameSeen)) Log.i(
+                debugRawInputFile == null && usesNativeEncoder && firstVideoFrameSeen)) Log.i(
             "BluetoothVideo",
             "Encoder input FINAL: capture drops $nativeInputDrops" +
                 if (debugRawInputFile != null) ", raw input drops $rawInputDrops" else "",
@@ -2890,7 +3103,7 @@ class CameraVideoEncoder(
     private fun recordBurstProfile() {
         val sessionBurst = burstAccumulator.sessionBurstSeconds(settings.fps * EncoderBurstRanking.MIN_SESSION_SECONDS)
             ?: return
-        val encodeLoad = if (usesNativeAom) {
+        val encodeLoad = if (usesNativeEncoder) {
             nativeEncodeLatency.snapshot().takeIf { it.samples > 0 }?.let { it.p95Ms * settings.fps / 1_000.0 }
         } else {
             null
@@ -2898,7 +3111,7 @@ class CameraVideoEncoder(
         runCatching {
             val store = EncoderBurstProfileStore(context)
             // Encode time per megapixel (ms), for the Auto ladder's per-size load prediction.
-            nativeEncodeLatency.snapshot().takeIf { usesNativeAom && it.samples >= LIVE_LOAD_MIN_SAMPLES }?.let { encode ->
+            nativeEncodeLatency.snapshot().takeIf { usesNativeEncoder && it.samples >= LIVE_LOAD_MIN_SAMPLES }?.let { encode ->
                 val megapixels = settings.resolution.width.toLong() * settings.resolution.height / 1_000_000.0
                 if (megapixels > 0.0 && encode.p95Ms > 0.0) {
                     store.saveMsPerMegapixel(

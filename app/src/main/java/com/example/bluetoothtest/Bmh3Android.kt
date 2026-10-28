@@ -45,7 +45,7 @@ internal object Bmh3Android {
     }
 
     /**
-     * Bumped by the emergency wipe (reviewer review 2026-10-27, finding 4): pin work queued before a wipe never touches the
+     * Bumped by the emergency wipe (review 2026-10-27, finding 4): pin work queued before a wipe never touches the
      * storage after it, even when an interrupted wipe is completed at the next start and the process goes on.
      */
     @Volatile private var wipeGeneration = 0
@@ -60,7 +60,7 @@ internal object Bmh3Android {
     /**
      * At every start, whatever the switches (security review 2026-10-27, item 12): the plain `hidden-identity-pins.txt` of
      * an earlier build is moved into the sealed file and deleted, also on a phone that turned BMH3 off since. Called by the
-     * main screen after a pending emergency wipe was completed (reviewer review finding 4), never before.
+     * main screen after a pending emergency wipe was completed (review finding 4), never before.
      */
     fun migrateLegacyPins(context: Context) {
         val store = pins(context)
@@ -111,7 +111,7 @@ internal object Bmh3Wiring {
             enabled = true,
             only = Bmh3Feature.only,
             selected = selected,
-            // Unknown (the pin store cannot be read now) counts as pinned: BMH3, never a BMH2 hello (reviewer review finding 8).
+            // Unknown (the pin store cannot be read now) counts as pinned: BMH3, never a BMH2 hello (review finding 8).
             pinned = selected != null &&
                 runCatching { pins.pinState(selected.nodeIdPrefix) != Bmh3Pins.PinState.UNPINNED }.getOrDefault(true),
             pseudonymMode = pseudonymMode,

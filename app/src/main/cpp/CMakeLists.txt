@@ -93,7 +93,47 @@ set(BUILD_SHARED_LIBS 0 CACHE BOOL "" FORCE)
 btv_map_source_prefix("${AOM_SOURCE_DIR}" libaom)
 add_subdirectory("${AOM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/libaom" EXCLUDE_FROM_ALL)
 
-add_library(bluetooth_video_native SHARED native_aom_encoder.cpp native_opus_codec.cpp)
+# Bundled libvpx VP9 encoder (DECISIONS "Design VX"): libvpx v1.17.0, the commit of tag v1.17.0
+# (6df3ec34557879fff673706f4a1d9fbd0f3a6f0e, tree manifest SHA-256 in tools/fetch_native_sources.py) at
+# reference-repos/libvpx; Gradle -PvpxSourceDir=<dir> overrides. libvpx builds with configure + make, so (as
+# Android's external/libvpx and Chromium do) its configure output for each ABI is generated once by
+# tools/generate_libvpx_config.py and checked in under libvpx_config/<abi>/: VP9 encoder only, real-time only,
+# no VP8/decoder/high bit depth, NEON (arm64: dotprod/i8mm kernels picked at run time).
+if(NOT VPX_SOURCE_DIR)
+    set(VPX_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../reference-repos/libvpx")
+endif()
+if(NOT EXISTS "${VPX_SOURCE_DIR}/vpx/vp8cx.h" OR NOT EXISTS "${VPX_SOURCE_DIR}/CHANGELOG")
+    message(FATAL_ERROR "Pinned libvpx v1.17.0 source is missing at ${VPX_SOURCE_DIR} (python tools/fetch_native_sources.py)")
+endif()
+file(STRINGS "${VPX_SOURCE_DIR}/CHANGELOG" BTV_VPX_CHANGELOG_HEAD LIMIT_COUNT 1)
+if(NOT BTV_VPX_CHANGELOG_HEAD MATCHES " v1[.]17[.]0 ")
+    message(FATAL_ERROR "${VPX_SOURCE_DIR} is not the pinned libvpx v1.17.0: ${BTV_VPX_CHANGELOG_HEAD}")
+endif()
+set(VPX_CONFIG_DIR "${CMAKE_CURRENT_LIST_DIR}/libvpx_config/${ANDROID_ABI}")
+if(NOT EXISTS "${VPX_CONFIG_DIR}/sources.cmake")
+    message(FATAL_ERROR "No libvpx configuration for ABI ${ANDROID_ABI} (tools/generate_libvpx_config.py)")
+endif()
+include("${VPX_CONFIG_DIR}/sources.cmake")
+list(TRANSFORM VPX_SOURCES PREPEND "${VPX_SOURCE_DIR}/")
+btv_map_source_prefix("${VPX_SOURCE_DIR}" libvpx)
+add_library(btv_vpx_vp9_encoder STATIC ${VPX_SOURCES} "${VPX_CONFIG_DIR}/vpx_config.c")
+target_include_directories(btv_vpx_vp9_encoder PUBLIC "${VPX_CONFIG_DIR}" "${VPX_SOURCE_DIR}")
+# libvpx's configure adds -DNDEBUG outside --enable-debug; debug APKs carry benchmarks, so keep it release-like.
+target_compile_definitions(btv_vpx_vp9_encoder PRIVATE NDEBUG)
+target_compile_options(btv_vpx_vp9_encoder PRIVATE -w)
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    # libvpx build/make/Makefile: these kernels are built for the extension and called only when
+    # vpx_ports/aarch64_cpudetect.c finds it (AT_HWCAP on Android).
+    foreach(source IN LISTS VPX_SOURCES)
+        if(source MATCHES "_neon_dotprod[.]c$")
+            set_source_files_properties("${source}" PROPERTIES COMPILE_OPTIONS "-march=armv8.2-a+dotprod")
+        elseif(source MATCHES "_neon_i8mm[.]c$")
+            set_source_files_properties("${source}" PROPERTIES COMPILE_OPTIONS "-march=armv8.2-a+dotprod+i8mm")
+        endif()
+    endforeach()
+endif()
+
+add_library(bluetooth_video_native SHARED native_aom_encoder.cpp native_vpx_encoder.cpp native_opus_codec.cpp)
 target_compile_features(bluetooth_video_native PRIVATE cxx_std_17)
 target_compile_options(bluetooth_video_native PRIVATE -Wall -Wextra -Werror)
 target_include_directories(
@@ -102,7 +142,7 @@ target_include_directories(
     "${AOM_SOURCE_DIR}"
     "${CMAKE_BINARY_DIR}/libaom"
 )
-target_link_libraries(bluetooth_video_native PRIVATE aom opus log)
+target_link_libraries(bluetooth_video_native PRIVATE aom btv_vpx_vp9_encoder opus log)
 
 # 16 KB page-size compatibility (developer.android.com/guide/practices/page-sizes). NDK r28 defaults
 # max-page-size to 16 KB but leaves common-page-size at 4 KB, so the GNU_RELRO segment can end on a

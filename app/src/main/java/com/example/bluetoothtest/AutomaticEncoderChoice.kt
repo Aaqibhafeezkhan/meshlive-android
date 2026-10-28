@@ -9,8 +9,10 @@ internal enum class EncoderChoiceReason(val label: String) {
     HW_AV1_PREFERRED("hw_av1_preferred"),
     /** This phone has no eligible hardware AV1 encoder; today's order (hardware VP9, then the rest) applies. */
     NO_HW_AV1("no_hw_av1"),
-    /** Hardware AV1 is available, but the call peer cannot decode AV1 (or asks for VP9). */
+    /** Hardware AV1 is available, but the call peer cannot decode AV1. */
     PEER_NO_AV1_DECODE("peer_no_av1_decode"),
+    /** The call peer decodes AV1 but asks for VP9 (end-to-end decode-mask bit 7, legacy Qualcomm). */
+    PEER_PREFERS_VP9("peer_prefers_vp9"),
     /** Hardware AV1 is available, but a DeviceFamilyPolicy call profile (legacy Qualcomm) asks for VP9. */
     FAMILY_VP9_COMPATIBILITY("family_vp9_compatibility"),
     /** The user (or a DEBUG `test_codec` launch) picked the encoder; Automatic did not choose. */
@@ -88,11 +90,9 @@ internal object AutomaticEncoderChoice {
         if (isEligibleHardwareAv1(sent, excluded)) return EncoderChoiceReason.HW_AV1_PREFERRED
         if (available.none { isEligibleHardwareAv1(it, excluded) }) return EncoderChoiceReason.NO_HW_AV1
         if (!preferHwAv1) return EncoderChoiceReason.HW_AV1_NOT_PREFERRED
-        if (peerDecodeMask != null && requested.protocolId == StreamProtocol.CODEC_AV1 &&
-            (peerDecodeMask and NodeCapabilities.CODEC_AV1 == 0 ||
-                peerDecodeMask and NodeCapabilities.DECODE_PREFERS_VP9 != 0)
-        ) {
-            return EncoderChoiceReason.PEER_NO_AV1_DECODE
+        if (peerDecodeMask != null && requested.protocolId == StreamProtocol.CODEC_AV1) {
+            if (peerDecodeMask and NodeCapabilities.CODEC_AV1 == 0) return EncoderChoiceReason.PEER_NO_AV1_DECODE
+            if (peerDecodeMask and NodeCapabilities.DECODE_PREFERS_VP9 != 0) return EncoderChoiceReason.PEER_PREFERS_VP9
         }
         return EncoderChoiceReason.FAMILY_VP9_COMPATIBILITY
     }

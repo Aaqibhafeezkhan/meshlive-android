@@ -461,7 +461,7 @@ internal data class CallVp9Compatibility(val transports: Set<BluetoothTransportO
 
 internal data class CallPreferredDecoder(val codecId: Int, val decoderName: String) : DevicePolicyEffect {
     override fun describe(): String =
-        "call ${if (codecId == StreamProtocol.CODEC_AV1) "AV1" else "VP9"} decoder $decoderName"
+        "call ${VideoCodecMap.label(codecId)} decoder $decoderName"
 }
 
 internal data object CallRelayAcknowledgedGattWrites : DevicePolicyEffect {
@@ -504,6 +504,20 @@ internal data object PreferredEncoderTieBreak : DevicePolicyEffect {
  */
 internal data object NoAutomaticHardwareAv1 : DevicePolicyEffect {
     override fun describe(): String = "Automatic encoder: skip this hardware AV1 component"
+}
+
+/**
+ * Design HC: a matching hardware HEVC encoder component is never chosen by Automatic (it stays selectable by hand); see
+ * [VideoCodecChoice]. Component-scoped like [NoAutomaticHardwareAv1]; an entry needs official sources and evidence, and
+ * none exists yet.
+ */
+internal data object NoAutomaticHardwareHevc : DevicePolicyEffect {
+    override fun describe(): String = "Automatic encoder: skip this hardware HEVC component"
+}
+
+/** Design HC: as [NoAutomaticHardwareHevc], for a hardware H.264 encoder component. No entry exists yet. */
+internal data object NoAutomaticHardwareAvc : DevicePolicyEffect {
+    override fun describe(): String = "Automatic encoder: skip this hardware H.264 component"
 }
 
 /** Matching Opus decoders are tried before the framework's choice. */

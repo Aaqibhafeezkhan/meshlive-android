@@ -91,6 +91,15 @@ class EncodedFrameQueue(
 
     fun peek(): StreamProtocol.Packet? = synchronized(lock) { entries.peekFirst()?.packet }
 
+    /**
+     * Design HC: a received frame failed the access-unit gate and was dropped. Frames already queued are older and still
+     * decodable; every later non-keyframe is dropped until the next keyframe ([EncodedFrameQueueStats.needsKeyFrame]).
+     */
+    fun markLoss() = synchronized(lock) {
+        droppedFrames++
+        waitingForKeyFrame = true
+    }
+
     /** A sender-marked discontinuity: decoding restarts at the next keyframe. */
     fun resetForDiscontinuity() = synchronized(lock) {
         droppedFrames += entries.count { queued ->

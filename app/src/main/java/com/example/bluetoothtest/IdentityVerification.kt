@@ -708,7 +708,7 @@ object PeerIdentityGate {
                 logSecurity(securityLine(SecurityEvent.MISMATCH, role, prefixHex, policy, BuildConfig.DEBUG))
                 listeners.forEach { listener -> runCatching { listener(nodeId, fingerprint, contact) } }
                 if (policy == MismatchPolicy.REFUSE) {
-                    // reviewer review 2026-10-27 (finding 7): the message reaches release logs through the callers' error
+                    // Review 2026-10-27 (finding 7): the message reaches release logs through the callers' error
                     // lines, so a release build names no peer here either.
                     throw IdentityMismatchException(mismatchMessage(role, prefixHex, BuildConfig.DEBUG))
                 }
@@ -886,7 +886,7 @@ class IdentityVerification internal constructor(
         internal fun atRestCipher(): AtRestCipher = AesGcmAtRestCipher { verificationAtRestKey() }
 
         /**
-         * reviewer review 2026-10-27 (finding 3): several sealed stores share this alias, and two of them sealing for the
+         * Review 2026-10-27 (finding 3): several sealed stores share this alias, and two of them sealing for the
          * first time at once could each generate a key; the second generation replaces the alias (AOSP
          * AndroidKeyStoreKeyGeneratorSpi), so what the first had sealed could no longer be opened. Lookup and creation are
          * one step under one process-wide lock ([AddOnlyKey]): a key is created only when it is still absent.

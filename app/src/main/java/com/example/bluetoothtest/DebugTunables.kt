@@ -1957,7 +1957,7 @@ object DebugTunables {
         }
 
     /**
-     * Native libopus call audio (docs/dev/switches.md register "Native libopus call audio"; promoted to Settings >
+     * Native libopus call audio (SWITCHES register "Native libopus call audio"; promoted to Settings >
      * Features on 2026-10-11, default [ConnectivityFeatureDefaults.NATIVE_OPUS] until phone test T10):
      * calls encode with OPUS_APPLICATION_VOIP and in-band FEC, and decode with libopus PLC on a gap
      * plus FEC recovery from the next packet, instead of MediaCodec (c2.android.opus has neither).

@@ -3,7 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-        The Google Play flavour (docs/dev/architecture.md "Distribution and releases"). Google Play updates this build: no updater, no install permission
+        The Google Play flavour (ARCHITECTURE "Distribution and releases"). Google Play updates this build: no updater, no install permission
         (Device and Network Abuse policy: a Play app updates only through Play). Outbound "Share app nearby" remains
         available with the shared screen, file provider and nearby Wi-Fi permission; it does not install or update this
         phone. Split installs still refuse sharing (docs/PLAY_RELEASE.md). The session service keeps camera, microphone,

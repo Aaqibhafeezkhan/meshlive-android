@@ -32,6 +32,15 @@ class FdroidRecipeTests(unittest.TestCase):
         self.assertIn("Repo: " + fns.NATIVE_SOURCES["libaom"]["url"], srclib)
         self.assertEqual(set(re.findall(r"libaom@([0-9a-f]{40})", self.text)), {commit})
 
+    def test_libvpx_pin_matches_fetch_script_everywhere(self):
+        commit = fns.NATIVE_SOURCES["libvpx"]["commit"]
+        srclib = (RECIPE.parent / "srclibs/libvpx.yml").read_text(encoding="utf-8")
+        self.assertIn("Repo: " + fns.NATIVE_SOURCES["libvpx"]["url"], srclib)
+        self.assertEqual(set(re.findall(r"libvpx@([0-9a-f]{40})", self.text)), {commit})
+        for entry in self.entries():
+            self.assertIn(f"libvpx@{commit}", entry)
+            self.assertIn("ln -sfn $$libvpx$$ ../reference-repos/libvpx", entry)
+
     def test_libopus_sha_matches_fetch_script(self):
         self.assertIn(fns.NATIVE_SOURCES["libopus"]["sha256"], self.text)
         self.assertIn("fetch_native_sources.py --only libopus", self.text)
@@ -46,7 +55,8 @@ class FdroidRecipeTests(unittest.TestCase):
             abi = re.search(r"app-fdroid-(armeabi-v7a|arm64-v8a)-release-unsigned\.apk", entry).group(1)
             codes[abi] = code
             self.assertIn("splitAbis=true", entry)
-            self.assertIn("universalApk=false", entry)
+            # Same output set as tools/make_release.py: BuildConfig.VERSION_CODE in classes.dex follows the main output.
+            self.assertIn("universalApk=true", entry)
             self.assertIn("ndk: r28c", entry)
         self.assertEqual(codes, {abi: base * 10 + int(d) for abi, d in digits.items()})
 
@@ -80,9 +90,24 @@ class FdroidRecipeTests(unittest.TestCase):
 
     def test_binaries_never_name_the_github_flavour_assets(self):
         for line in self.text.splitlines():
-            if "Binaries:" in line:
-                self.assertNotRegex(line, r"MeshLive-%v-[a-z0-9-]+\.apk", line)
+            if line.lstrip().startswith(("Binaries:", "binary:")):
+                self.assertNotRegex(line, r"MeshLive-%v-(armeabi-v7a|arm64-v8a|universal)\.apk", line)
                 self.assertNotIn("MeshLive.apk", line)
+
+    def test_each_entry_verifies_against_the_fdroid_asset_of_its_own_abi(self):
+        for entry in self.entries():
+            abi = re.search(r"app-fdroid-(armeabi-v7a|arm64-v8a)-release-unsigned\.apk", entry).group(1)
+            binary = re.search(r"binary: (\S+)", entry).group(1)
+            self.assertEqual(
+                binary,
+                f"https://github.com/MeshLive/meshlive-android/releases/download/v%v/MeshLive-%v-fdroid-{abi}.apk",
+            )
+
+    def test_allowed_signing_key_is_the_published_release_certificate(self):
+        guide = (ROOT / "docs/user-guide.md").read_text(encoding="utf-8")
+        published = re.search(r"((?:[0-9A-F]{2}:){31}[0-9A-F]{2})", guide).group(1)
+        allowed = re.findall(r"^AllowedAPKSigningKeys: ([0-9a-f]{64})$", self.text, re.M)
+        self.assertEqual(allowed, [published.replace(":", "").lower()])
 
     def test_no_updater_class_lives_in_the_fdroid_source_set(self):
         fdroid_sources = sorted(p.name for p in (ROOT / "app/src/fdroid").rglob("*.kt"))

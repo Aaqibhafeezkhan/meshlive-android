@@ -12,7 +12,7 @@ For developers: how to build MeshLive and run its tests. Flavours, toolchain pin
 ## Build and test
 
 ```bash
-python tools/fetch_native_sources.py                      # downloads and verifies the pinned libaom and libopus (not stored in Git)
+python tools/fetch_native_sources.py                      # downloads and verifies the pinned libaom, libvpx and libopus (not stored in Git)
 ./gradlew :app:testDebugUnitTest :app:assembleGithubDebug # gradlew.bat on Windows
 python -B -m pytest -q tools                              # host tool tests
 ```

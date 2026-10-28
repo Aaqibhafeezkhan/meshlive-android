@@ -35,7 +35,25 @@ class DebugTestAlertReceiver : BroadcastReceiver() {
                         val input = ByteBuffer.allocateDirect(320 * 180 * 3 / 2)
                         repeat(320 * 180) { input.put(it, 96.toByte()) }
                         repeat(320 * 180 / 2) { input.put(320 * 180 + it, 128.toByte()) }
-                        encoder.encode(input, 0, true)
+                        encoder.encode(input, 0, true, -1)
+                    }
+                }
+                // Design VX: the same probe through the bundled libvpx VP9 encoder.
+                val vpxResult = runCatching {
+                    NativeVpxEncoder(
+                        width = 320,
+                        height = 180,
+                        fps = 15,
+                        bitrate = 300_000,
+                        cpuUsed = 8,
+                        threads = 2,
+                        variableBitrate = false,
+                        dropFrames = false,
+                    ).use { encoder ->
+                        val input = ByteBuffer.allocateDirect(320 * 180 * 3 / 2)
+                        repeat(320 * 180) { input.put(it, 96.toByte()) }
+                        repeat(320 * 180 / 2) { input.put(320 * 180 + it, 128.toByte()) }
+                        encoder.encode(input, 0, true, -1)
                     }
                 }
                 val message = result.fold(
@@ -45,6 +63,14 @@ class DebugTestAlertReceiver : BroadcastReceiver() {
                     },
                     onFailure = { error ->
                         "Native libaom FAILED: ${error.message ?: error.javaClass.simpleName}"
+                    },
+                ) + "; " + vpxResult.fold(
+                    onSuccess = { packets ->
+                        "Native libvpx ${NativeVpxBridge.nativeVersion()} OK: " +
+                            "${packets.size} packet(s), ${packets.sumOf { it.bytes.size }} bytes"
+                    },
+                    onFailure = { error ->
+                        "Native libvpx FAILED: ${error.message ?: error.javaClass.simpleName}"
                     },
                 )
                 Log.i("BluetoothVideo", message)

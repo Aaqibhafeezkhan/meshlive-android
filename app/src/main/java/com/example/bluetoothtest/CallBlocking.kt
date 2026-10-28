@@ -315,7 +315,7 @@ internal object CallBlocking {
      * A broadcast heard only through relays, with no cost-0 route in range, cannot be attributed and stays listed.
      * Review 2026-10-27 (finding 4): a stream whose source authenticated as a blocked person when someone watched or
      * listened ([hiddenRoute], [PersonPolicy.hideStream]) keeps that route hidden, also under a rotating ID nobody
-     * recognises; another broadcaster that advertises the same token is not affected (reviewer review finding 1).
+     * recognises; another broadcaster that advertises the same token is not affected (review finding 1).
      */
     fun <T> hideBlockedStreams(
         peers: List<T>,

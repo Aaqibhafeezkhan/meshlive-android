@@ -36,6 +36,27 @@ class DecoderPolicyEntriesTest {
     }
 
     @Test
+    fun qualcommDecodersGetQualcommsLowLatencyKeyAndOtherComponentsDoNot() {
+        // The ASUS (msmnile, Android 11): OMX decoders, no getSupportedVendorParameters (API 31).
+        val asus = DeviceTraits(
+            "qcom", "msmnile", 30, "asus",
+            codecComponents = listOf("OMX.qcom.video.decoder.avc", "OMX.qcom.video.decoder.hevc", "c2.android.vp9.decoder"),
+        )
+        val qti = DecoderLowLatencyLadder.VENDOR_QTI
+        for (name in listOf("OMX.qcom.video.decoder.avc", "OMX.qcom.video.decoder.hevc", "OMX.qcom.video.decoder.vp9", "c2.qti.hevc.decoder")) {
+            assertEquals(name, qti, CodecPolicy.vendorLowLatencyKey(name, asus))
+        }
+        for (name in listOf("OMX.qcom.video.encoder.avc", "c2.qti.avc.encoder", "c2.android.vp9.decoder", "OMX.Exynos.hevc.dec",
+            "OMX.MTK.VIDEO.DECODER.AVC")) {
+            assertNull(name, CodecPolicy.vendorLowLatencyKey(name, asus))
+        }
+        // Vendor extensions reach OMX components from API 26 (ACodec setVendorParameters).
+        assertNull(CodecPolicy.vendorLowLatencyKey("OMX.qcom.video.decoder.avc", DeviceTraits("qcom", "msm8996", 25, "x")))
+        DebugTunables.devicePolicyOff = setOf(DecoderPolicyEntries.QCOM_DECODER_VENDOR_LOW_LATENCY.id)
+        assertNull(CodecPolicy.vendorLowLatencyKey("OMX.qcom.video.decoder.avc", asus))
+    }
+
+    @Test
     fun theReleaseRuleHasAnOffSwitchAndAnAllSwitch() {
         val entry = DecoderPolicyEntries.C2_MTK_RELEASE_INSTEAD_OF_FLUSH
         assertEquals("test_device_policy_off=c2-mtk-release-instead-of-flush", entry.offSwitch)

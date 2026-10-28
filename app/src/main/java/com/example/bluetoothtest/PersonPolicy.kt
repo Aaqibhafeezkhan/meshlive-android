@@ -28,7 +28,7 @@ internal object PersonPolicy {
 
     /**
      * The routes (logical stream token and the advertised ID of that route) whose source authenticated as a blocked person:
-     * hidden for this process only. reviewer review 2026-10-27 (finding 1): the token alone is public and chosen by the
+     * hidden for this process only. Review 2026-10-27 (finding 1): the token alone is public and chosen by the
      * advertiser, so hiding every route with it let a blocked broadcaster copy a genuine broadcast's token and hide that
      * broadcast too; only the route actually tried is hidden.
      */

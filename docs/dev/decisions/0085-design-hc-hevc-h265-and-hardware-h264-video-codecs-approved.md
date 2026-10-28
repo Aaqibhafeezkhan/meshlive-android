@@ -41,17 +41,29 @@ HEVC compresses about as well as VP9, or slightly better. H.264 needs noticeably
 
 | Mode | Automatic order (first eligible encoder the session can use) |
 | --- | --- |
-| Calls (each sender, its own direction) | Hardware AV1, hardware HEVC, hardware VP9, hardware H.264, then today's software order. Only codecs in the peer's end-to-end decode mask count, so both ends must decode. Two receiver preferences apply, in this order: bit 7 (prefer VP9, legacy Qualcomm) wins as today; then the new bit 4 ("my AV1 decoding is software") moves AV1 below a hardware HEVC or hardware VP9 encoder the sender has. A sender whose family policy asks for VP9 in calls (`CallVp9Compatibility`, now covering codecs 3, 4 and 5) sends VP9 |
+| Calls (each sender, its own direction) | Hardware AV1, hardware HEVC, hardware VP9, hardware H.264, then today's software order. Only codecs in the peer's end-to-end decode mask count, so both ends must decode. Two receiver preferences apply, in this order: bit 7 (prefer VP9, legacy Qualcomm) puts VP9 first, below only a hardware HEVC encoder the peer decodes (see "Bit 7 and hardware HEVC"); then the new bit 4 ("my AV1 decoding is software") moves AV1 below a hardware HEVC or hardware VP9 encoder the sender has. A sender whose family policy asks for VP9 in calls (`CallVp9Compatibility`, now covering codecs 3, 4 and 5) sends VP9 |
 | Streams | Q-HC1 (recommended A): hardware AV1 first (design decision 2026-10-27), then the hardware encoders whose codec is decodable everywhere without an add-on, in efficiency order (VP9), then hardware HEVC, then hardware H.264, then software. When HEVC becomes decodable everywhere without an add-on, the stream order becomes the call order |
 | Open broadcast (Design OB) | Unchanged: VP9 or AV1 only |
 
-A stream source still checks no viewer. A viewer that lacks the codec sees the offer dimmed with "cannot decode this stream's codec" and is refused at join, exactly like AV1 today. Exception: on the PC announcement's kind 2 (Design QV), old strict readers hide a `0x80` offer rather than dim it. Old builds read the new bits as "no common codec" (PROTOCOL), so they never try.
+A stream source still checks no viewer. A viewer that lacks the codec sees the offer dimmed with "cannot decode this stream's codec" and is refused at join, exactly like AV1 today. Exception: on the PC announcement's kind 2 (Design QV), strict readers without HEVC (before Android 0.4.2, or with the master off) hide a `0x80` offer rather than dim it; with the master on, Android 0.4.2 lists it. Old builds read the new bits as "no common codec" (PROTOCOL), so they never try.
 
 **Bit 4, "my AV1 decoding is software"** (end-to-end call hellos only, like bit 7):
 - A receiver sets it when every AV1 decoder it would use is software and it also decodes HEVC or VP9. Examples: Android phones without a hardware AV1 decoder, and Apple or Windows devices using dav1d.
 - A sender honours it only by choosing its hardware HEVC or hardware VP9 encoder (that the peer decodes) instead of AV1.
 - When the sender's alternatives are only software encoders or hardware H.264, it still sends AV1, because software decoding at these sizes is cheap and software encoding is not.
-- Bit 7 is tested first, so a legacy Qualcomm peer is unchanged. Bit 7 counts only when the peer also sets VP9 bit 0; a preference without the capability is ignored and logged.
+- Bit 7 is tested first. Bit 7 counts only when the peer also sets VP9 bit 0; a preference without the capability is ignored and logged.
+
+**Bit 7 and hardware HEVC (2026-10-28, after the Block 1 smoke).** In the first draft, bit 7 put VP9 first for every sender. In the smoke, no HEVC ever reached the ASUS: the S24 and M31 both sent VP9 to it (`forced` by bit 7), although the ASUS decodes HEVC in hardware and advertised it (decode mask `0x9b`: VP9, AV1, HEVC, bits 4 and 7).
+- Why bit 7 exists: the legacy Qualcomm call profile first advertised VP9-only call decoding, and bit 7 replaced that so AV1-only senders could still call. Its evidence is call failures on the legacy Bluetooth stack before pacing, plus the CDD rule that every phone decodes VP9. It names no decoder fault that HEVC would share, and the ASUS decoded AV1 640x480 with 0 freezes in 12 stream cases.
+- Rule now: bit 7 still puts VP9 above AV1 (hardware too), H.264 and every software encoder, but a hardware HEVC encoder the peer decodes stays first. A peer without HEVC decode, or a sender without hardware HEVC, gets VP9 as before. The ASUS's own sending profile (`CallVp9Compatibility`: the ASUS sends VP9) is unchanged.
+- The log reason for a bit-7 VP9 choice is now `peer_prefers_vp9` (it was `peer_no_av1_decode`). The DEBUG control arm `test_bit7_hw_hevc=false` restores the first draft's order.
+- To measure: HEVC into the ASUS (S24 -> ASUS, M31 -> ASUS calls), its decoder hold time and freezes against the VP9 calls of the same smoke.
+
+**Encoder level (2026-10-28).** The Exynos HEVC encoders signalled `general_level_idc` 180 (level 6.0) in the smoke, which the receiver logs as `au_unusual` and accepts (log only, as designed).
+- The encoders did not ignore `KEY_LEVEL`: the first rule requested the highest level each encoder lists, and the Exynos and Qualcomm HEVC encoders list Main profile up to High tier 6.
+- Level 6 is harmless to decoders that list it (Exynos, Qualcomm), but it overstates the stream to those that stop at 5.x (Android's software HEVC decoder lists 5.2).
+- Rule now: the lowest standard level whose limits cover the session's size, frame rate and bitrate, never above the listed maximum. For HEVC that is Main tier level 3 for 640x480 and 854x480, the level the CDD requires every HEVC decoder to support (5.3.5), and 3.1 for 720p. H.264 at 640x480 and 15 FPS gets level 2.2.
+- `hc_encoder` logs `level`, `level_idc` and `level_listed`. The DEBUG control arm `test_hc_session_level=false` keeps the listed maximum.
 - Bit 4 never moves AV1 below hardware H.264. Decision 2026-10-27: H.264 costs much more airtime on Bluetooth, and software AV1 decoding at 640x480 is cheap.
 - Old senders ignore the bit (codec tests are masks), and old receivers never set it.
 
@@ -59,7 +71,7 @@ A stream source still checks no viewer. A viewer that lacks the codec sees the o
 
 | Phone | Calls | Streams |
 | --- | --- | --- |
-| ASUS | Stays software VP9: the `qcom-msmnile-call` protection now also covers HEVC and H.264 | Software AV1 is replaced by HEVC |
+| ASUS | Sends software VP9: the `qcom-msmnile-call` protection now also covers HEVC and H.264. Receives hardware HEVC from senders that have it (bit 7 rule of 2026-10-28) | Software AV1 is replaced by HEVC |
 | A15s | Software AV1 is replaced by H.264 | Software AV1 is replaced by H.264 |
 | M31 | Hardware VP9 changes to HEVC | Stays VP9 |
 | S24, A55 (hardware VP9) | HEVC if they have a hardware HEVC encoder | Stay VP9 |
@@ -97,6 +109,8 @@ The way to lift the ASUS protection for HEVC is a later A/B, "msmnile HEVC calls
   - HEVC: `sps_max_num_reorder_pics` 0.
   - H.264: no B slices, and POC type 2 or a VUI `max_num_reorder_frames` of 0, so no decoder holds frames for reordering.
 - Decoders run in low-latency mode where offered (Android `KEY_LOW_LATENCY`, Media Foundation `CODECAPI_AVLowLatencyMode`). The smoke test measures how long each decoder holds a frame.
+  - Qualcomm decoders that do not offer `KEY_LOW_LATENCY` get Qualcomm's own extension, `vendor.qti-ext-dec-low-latency.enable=1` (registry entry `qcom-decoder-vendor-low-latency`, added 2026-10-28). The sources are Qualcomm's AOSP decoder source and ACodec, which passes vendor keys at configure from Android 8.
+  - Reason: in the smoke, the ASUS H.264 decoder ran without low latency and held every frame 68-69 ms (one frame at 15 FPS).
 - A keyframe request gets an IDR.
 
 **Patents, distribution and the decoder surface.**
@@ -277,3 +291,14 @@ The way to lift the ASUS protection for HEVC is a later A/B, "msmnile HEVC calls
 | 3. Apple | All Apple items, with the validators in NearbyCore | Code only, unbuilt and untested until the Mac is back |
 | 4. Apple dav1d | Design AD | Same as lane 3 |
 | 5. Windows dav1d | Q-AD1 answered A (design decision 2026-10-27): pinned dav1d, used only when no MF AV1 decoder starts | Any time; it ships after its smoke test |
+
+**HEVC coded-size padding (2026-10-28, before HEVC shipped anywhere).** The Windows lane measured NVIDIA's hardware
+HEVC encoder padding each coded side to a multiple of 32 and cropping back: 426x240 coded 448x256, 640x360 coded
+640x384, 854x480 coded 864x480. The first rule 6 allowed padding only up to a multiple of 16 (H.264 macroblocks), so
+every receiver would have rejected those keyframes. HEVC's rule 6 is widened, H.264's is unchanged:
+- each coded side must be a multiple of 8 (the smallest legal MinCbSizeY) and exceed its cropped side by less than 64
+  (the largest coding tree block);
+- the cropped size must fit within the `BTV3` header size per axis (either orientation; a smaller Auto-ladder rung under
+  a header that names the maximum size is accepted); crop arithmetic and the 2-sample
+  crop unit are still checked, and the cropped sides stay at least 16;
+- memory stays bounded: a coded side is below the header side plus 64, and the DPB limit of 16 pictures is unchanged.

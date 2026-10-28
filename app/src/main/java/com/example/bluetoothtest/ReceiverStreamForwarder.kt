@@ -214,7 +214,7 @@ class ReceiverStreamForwarder(
                     flags = DiscoveryAnnouncement.FLAG_STREAM_AVAILABLE or
                         DiscoveryAnnouncement.FLAG_RELAY_CAPABLE or transport.discoveryFlag,
                     // The marker follows the authenticated header, never the parent's advertisement.
-                    capabilitySummary = AudioLive.offerSummary(header, codecCapabilityMask(header.codecId)),
+                    capabilitySummary = AudioLive.offerSummary(header, VideoCodecMap.summaryBit(header.codecId)),
                     streamToken = downstreamStreamToken,
                     routeCost = (routeCost + 1).coerceAtMost(0xff),
                     sequence = 0,

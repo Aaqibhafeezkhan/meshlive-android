@@ -127,7 +127,7 @@ internal object MeetScreenGate {
 }
 
 /**
- * reviewer review 2026-10-27 (finding 2, high): the one place that decides when the callee's own camera, microphone and stream
+ * Review 2026-10-27 (finding 2, high): the one place that decides when the callee's own camera, microphone and stream
  * header start. Accept (the UI thread) and the caller's reveal (the reader thread) used to decide separately, so a blocked
  * caller's reveal could slip between them and still get media, or an honest call could stay held for ever. Every input goes
  * through this lock; media starts at most once: after Accept, and (when the caller's reveal is required) only after that

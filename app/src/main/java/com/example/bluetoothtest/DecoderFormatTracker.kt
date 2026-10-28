@@ -83,6 +83,9 @@ internal class DecoderFormatTracker(
         this.height = height
     }
 
+    private fun sameBuffers(a: List<ByteArray>, b: List<ByteArray>): Boolean =
+        a.size == b.size && a.indices.all { a[it].contentEquals(b[it]) }
+
     /** The size [accessUnit] (a keyframe) carries, using the newest configuration when it has no in-band header. */
     @Synchronized
     fun sizeOf(accessUnit: ByteArray): Pair<Int, Int>? =
@@ -97,12 +100,23 @@ internal class DecoderFormatTracker(
     fun recoveryRebuild(reason: String): Rebuild =
         Rebuild(width, height, current.map(ByteArray::copyOf), sizeChanged = false, configChanged = false, recoveryReason = reason)
 
+    /** Design HC (codecs 4 and 5): the configuration is the keyframe's own in-band parameter sets, never config packets. */
+    private val inBandSets = VideoCodecMap.isInBandParameterSetCodec(codecId)
+
     /** A keyframe arrived: null when the configured decoder can take it, else the decoder it needs. */
     @Synchronized
     fun onKeyFrame(accessUnit: ByteArray): Rebuild? {
-        val held = sinceKeyFrame.toList()
+        val held = if (inBandSets) {
+            CodedVideoSize.inBandCodecSpecificData(codecId, accessUnit)
+        } else {
+            sinceKeyFrame.toList()
+        }
         sinceKeyFrame.clear()
-        val configChanged = held.any { packet -> current.none { it.contentEquals(packet) } }
+        val configChanged = if (inBandSets) {
+            held.isNotEmpty() && !sameBuffers(held, current)
+        } else {
+            held.any { packet -> current.none { it.contentEquals(packet) } }
+        }
         val parsed = CodedVideoSize.ofKeyFrame(codecId, accessUnit, held.ifEmpty { current })
         val sizeChanged = parsed != null && parsed != (width to height)
         if (!configChanged && !sizeChanged) return null

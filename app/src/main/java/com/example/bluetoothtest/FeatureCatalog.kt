@@ -275,6 +275,8 @@ internal object AppFeatures {
             CallResolutionLadderFeature.spec,
             AutoQualityFeature.spec,
             GpuScaleFeature.spec,
+            VideoCodecFeatures.hevcSpec,
+            VideoCodecFeatures.h264Spec,
         ).forEach(FeatureCatalog::register)
     }
 }

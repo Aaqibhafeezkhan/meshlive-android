@@ -331,7 +331,7 @@ If `adb shell getprop ro.product.cpu.abilist` lists `arm64-v8a`, use the arm64-v
 
    A different fingerprint means a different publisher: do not install it.
 3. Source: `SOURCE-MANIFEST.txt` lists the commit, the SHA-256 of every tracked file and the pinned native
-   sources (libaom commit and tree SHA-256, libopus tarball SHA-256; `python tools/fetch_native_sources.py`
+   sources (libaom and libvpx commits and tree SHA-256s, libopus tarball SHA-256; `python tools/fetch_native_sources.py`
    fetches and verifies them). `python tools/make_release.py --manifest-only` reproduces it from a checkout.
 
 ## Measured on
@@ -348,7 +348,7 @@ TODO: list the known issues users will notice (open GitHub issues labelled for t
 # --- orchestration -----------------------------------------------------------
 
 def verify_native_sources(root):
-    """Refuse a release unless reference-repos/ holds exactly the pinned libaom and libopus sources."""
+    """Refuse a release unless reference-repos/ holds exactly the pinned libaom, libvpx and libopus sources."""
     problems = [reason for name in sorted(fetch_native_sources.NATIVE_SOURCES)
                 if (reason := fetch_native_sources.verify(name, Path(root))) is not None]
     if problems:

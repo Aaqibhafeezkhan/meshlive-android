@@ -1,7 +1,7 @@
 package com.example.bluetoothtest
 
 /**
- * The shipped defaults of the connectivity features promoted on 2026-10-11 (docs/dev/switches.md register,
+ * The shipped defaults of the connectivity features promoted on 2026-10-11 (SWITCHES register,
  * "Experimental, alternative and optional behaviour"). Each feature has exactly one constant here.
  * A feature stays OFF until the phone test named beside it passes; turning it on for users who never
  * touched its switch is then a one-line change. ON today: BMH3 and BMH3_PSEUDONYMS (0.2.0-beta, user
@@ -41,6 +41,33 @@ internal object ConnectivityFeatureDefaults {
 
     /** Pseudonymous stranger identities on top of BMH3 and rotating IDs (T15). On since 0.2.0-beta. */
     const val BMH3_PSEUDONYMS = true
+
+    /**
+     * HEVC video, Design HC master `hevc_codec` ([VideoCodecFeatures]). On since 0.4.2-beta (design decision 2026-10-28,
+     * after the codec smoke and heat runs); a benchmark launch still needs `test_hevc_codec=true`.
+     */
+    const val HEVC_CODEC = true
+
+    /**
+     * Hardware H.264 video, Design HC master `h264_codec` ([VideoCodecFeatures]). On since 0.4.2-beta (design decision
+     * 2026-10-28); a benchmark launch still needs `test_h264_codec=true`.
+     */
+    const val H264_CODEC = true
+
+    /**
+     * DECISIONS "Design VX": Automatic may pick the bundled libvpx VP9 encoder, after every hardware AV1, HEVC and VP9
+     * encoder and before hardware H.264 and libaom (calls and streams).
+     * On since 0.4.2-beta (design decision 2026-10-28, DECISIONS "Automatic codec order after the 2026-10-28 phone
+     * measurements"). DEBUG `test_prefer_libvpx` decides per launch; a benchmark launch without it keeps libvpx manual.
+     */
+    const val LIBVPX_AUTOMATIC = true
+
+    /**
+     * Switch `codec_power_aware` ([CodecPowerAware]): with battery saver on or a warm phone at session start, Automatic
+     * prefers a hardware encoder over a software one. On since 0.4.2-beta (design decision 2026-10-28); DEBUG control arm
+     * `test_codec_power_aware=false`; a benchmark launch without the extra keeps it off.
+     */
+    const val CODEC_POWER_AWARE = true
 }
 
 /**

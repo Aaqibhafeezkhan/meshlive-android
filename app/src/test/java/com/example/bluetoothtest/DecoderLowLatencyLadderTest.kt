@@ -26,6 +26,26 @@ class DecoderLowLatencyLadderTest {
     ) = DecoderLowLatencyLadder.plan(name, feature, preferLowLatency = true, ladder = ladder, priority = priority, vendorParameters = vendor)
 
     @Test
+    fun aPolicyVendorKeyReplacesTheMissingStandardKeyAndFallsBackToPlain() {
+        val qti = DecoderLowLatencyLadder.VENDOR_QTI
+        fun qcom(feature: Boolean, prefer: Boolean = true, ladder: Boolean = false) = DecoderLowLatencyLadder.plan(
+            "OMX.qcom.video.decoder.avc", feature, preferLowLatency = prefer, ladder = ladder, priority = false,
+            vendorParameters = null, defaultVendorKey = qti,
+        )
+        val rungs = qcom(feature = false)
+        assertEquals(listOf(mapOf(qti to 1), emptyMap()), rungs.map { it.keys })
+        assertEquals(listOf("vendor($qti)", "plain"), rungs.map { it.label })
+        assertTrue(DecoderLowLatencyLadder.requestsLowLatency(rungs[0].keys))
+        assertFalse(DecoderLowLatencyLadder.requestsLowLatency(rungs[1].keys))
+        // A component that declares FEATURE_LowLatency keeps the standard key alone.
+        assertEquals(listOf(mapOf(ll to 1)), qcom(feature = true).map { it.keys })
+        // The receiver's low-latency preference off: nothing is requested.
+        assertEquals(listOf(emptyMap<String, Int>()), qcom(feature = false, prefer = false).map { it.keys })
+        // With the Experimental ladder the policy key leads too, ending at the plain format.
+        assertEquals(listOf(mapOf(qti to 1), emptyMap()), qcom(feature = false, ladder = true).map { it.keys })
+    }
+
+    @Test
     fun withEveryArmOffTheFormatIsTheFormerSingleAttempt() {
         assertEquals(listOf(mapOf(ll to 1)), plan("c2.exynos.vp9.decoder").map { it.keys })
         assertEquals(listOf(emptyMap<String, Int>()), plan("c2.qti.vp9.decoder", feature = false).map { it.keys })

@@ -200,8 +200,18 @@ internal class CallResolutionLadder(
             960L * 540 to 384_000, 1280L * 720 to 576_000, 1920L * 1080 to 1_000_000,
         )
 
+        /**
+         * Design HC: H.264 takes the VP9 table times 1.3 bits per pixel (HEVC uses the VP9 table), stated assumptions
+         * until the quality-per-bit measurement (design decision 2026-10-27).
+         */
+        private val H264_LIMITS = VP9_LIMITS.map { (pixels, bps) -> pixels to (bps * AutoQualityLadder.H264_BITS_FACTOR).toInt() }
+
         private fun limits(codecId: Int, override: List<Pair<Long, Int>>? = null) =
-            override ?: if (codecId == StreamProtocol.CODEC_AV1) AV1_LIMITS else VP9_LIMITS
+            override ?: when (codecId) {
+                StreamProtocol.CODEC_AV1 -> AV1_LIMITS
+                StreamProtocol.CODEC_H264 -> H264_LIMITS
+                else -> VP9_LIMITS
+            }
 
         /** The table entry index for [pixels]: the smallest entry at least as large (last when larger). */
         private fun bucket(codecId: Int, pixels: Long, override: List<Pair<Long, Int>>? = null): Int =

@@ -255,7 +255,7 @@ plaintext   : item count (1, 2..64) | count x [ inner hop type (1) | length (uns
 Status: wire draft only. Nothing sends it.
 - Reasons, platform coverage, switches and open questions: DECISIONS "Design HC".
 - Numbers: "Draft number registry". The H.264 numbers are the ones pencilled in DECISIONS "iPhone interoperability".
-- With the masters `hevc_codec` and `h264_codec` off (the default), no HEVC or H.264 bit is set anywhere and every byte is today's.
+- With the masters `hevc_codec` and `h264_codec` off (the default before 0.4.2; on since), no HEVC or H.264 bit is set anywhere and every byte is the two-codec format.
 
 ### Numbers
 
@@ -272,7 +272,7 @@ Status: wire draft only. Nothing sends it.
 
 **Old readers.** Every shipped reader tests codec bits with a mask: Android uses bits 0-1 (`codecCapabilityMask`), iOS `& 0x3`, Windows `& 7` against a decode mask that has no bit 2. For them, summary bits 2 and 7 and hello bits 2 to 4 mean "no common codec" or nothing. Results:
 - A 22-byte stream offer in only these codecs is listed dimmed as not decodable and cannot be joined.
-- A PC announcement kind-2 offer (Design QV) with `0x80` is hidden by its strict readers.
+- A PC announcement kind-2 offer (Design QV) with `0x80` is hidden by strict readers without HEVC (Android before 0.4.2, or with the HEVC master off); with the master on it is listed, and dimmed like any offer this phone cannot decode.
 - A `BTV3` header with codec 4 or 5 fails closed as an unsupported codec.
 - No reader rejects an unknown mask bit.
 
@@ -280,11 +280,11 @@ Status: wire draft only. Nothing sends it.
 
 - **Calls.** Each sender chooses for its own direction from the peer's end-to-end decode mask, which relays copy unchanged.
   1. A family `CallVp9Compatibility` policy on the sender gives VP9 when the selected codec is 3, 4 or 5.
-  2. Peer bit 7 (prefer VP9), counted only when the peer also sets VP9 bit 0: a sender that can encode VP9 sends VP9.
+  2. Peer bit 7 (prefer VP9), counted only when the peer also sets VP9 bit 0: a sender that can encode VP9 sends VP9, unless it has a hardware HEVC encoder and the peer decodes HEVC; then hardware HEVC comes first and VP9 second. Bit 7 still puts VP9 above AV1, H.264 and software encoders.
   3. Otherwise the first eligible encoder whose codec the peer decodes, in the order hardware AV1, hardware HEVC, hardware VP9, hardware H.264, then today's software order. If peer bit 4 is set, AV1 moves below the sender's hardware HEVC and hardware VP9 encoders that the peer decodes, and only below those.
 
   These steps build one ordered, filtered list per direction, and fallback walks only that list. A codec whose prefer switch is off is not in the Automatic list at all. A manual choice the peer decodes is sent as chosen; steps 2 and 3 do not override it. A receiver checks the header's codec against its own advertised decode mask, as today.
-- **Streams.** The source's order follows open question Q-HC1 (recommended: hardware AV1, hardware VP9, hardware HEVC, hardware H.264, then software, tied to the coverage table in DECISIONS). The source checks no viewer. Admission refuses a viewer or forwarder whose decode mask lacks the codec's bit, as for any codec. A forwarder derives its offer summary from the authenticated header through the table.
+- **Streams.** The source's order follows open question Q-HC1 (answered A on 2026-10-28: hardware AV1, hardware VP9, hardware HEVC, hardware H.264, then software, except that the Android app's bundled libvpx VP9 encoder sits between hardware HEVC and hardware H.264, tied to the coverage table in DECISIONS). The source checks no viewer. Admission refuses a viewer or forwarder whose decode mask lacks the codec's bit, as for any codec. A forwarder derives its offer summary from the authenticated header through the table.
 - **Eligible encoders.**
   - Hardware only: MediaCodec `isHardwareAccelerated`, VideoToolbox with `RequireHardwareAcceleratedVideoEncoder`, Media Foundation hardware MFTs.
   - The size range and the measured or achievable frame rate cover the session.
@@ -296,7 +296,7 @@ Status: wire draft only. Nothing sends it.
   - shipped decoders map it to summary bit 2 and find no common codec;
   - no compact sender announces an H.264 stream.
 - **PC call offer (PC announcement kind 0).** Its packed three-bit codec field (byte 8, bits 0-2, below the route cost in bits 3-6) carries VP9, AV1 and H.264 hints only. HEVC is never encoded there and is negotiated only in the hello. A PC always has a representable fallback (VP9).
-- **Unchanged.** An open-broadcast source (`BOB1` `CARD`) uses VP9 or AV1 only. `BTL1` and the call fragment format are unchanged. The PC announcement's kind-2 summary rule (Design QV) gains `0x80` when built.
+- **Unchanged.** An open-broadcast source (`BOB1` `CARD`) uses VP9 or AV1 only. `BTL1` and the call fragment format are unchanged. The PC announcement's kind-2 summary rule (Design QV) accepts `0x80` while the HEVC master is on (Android 0.4.2).
 
 ### Sender rules (both codecs)
 
@@ -352,7 +352,9 @@ A bounded structural parser checks every packet before a decoder sees it. It rea
    - Only after the whole AU passes does this set become the active configuration, atomically. If it differs from the previous one, the decoder is flushed and rebuilt before the AU is queued.
    - A non-IDR AU carries no parameter set, and its slice must name the active PPS.
    - A rejected IDR leaves the previous active configuration. Non-IDR AUs are then dropped until the next valid IDR.
-6. **Session envelope** (rules 8 and 9). Both coded dimensions, not just the visible ones, are bounded per axis against the `BTV3` header's maximum width and height, rounded up to a multiple of 16. Either orientation is accepted: the larger coded side is compared with the larger header side. Crops use checked arithmetic. Crop offsets are in the codec's crop units (2 luma samples for 4:2:0 frames), and the visible width and height must stay at least 16.
+6. **Session envelope** (rules 8 and 9). Both coded dimensions, not just the visible ones, are bounded per axis. Either orientation is accepted: the larger side is compared with the larger header side. Crops use checked arithmetic. Crop offsets are in the codec's crop units (2 luma samples for 4:2:0 frames), and the visible width and height must stay at least 16.
+   - H.264: each coded side is at most the `BTV3` header's maximum width or height rounded up to a multiple of 16 (macroblocks).
+   - HEVC: each coded side is a multiple of 8 (the smallest MinCbSizeY) and exceeds its cropped (conformance-window) side by less than 64 (the largest coding tree block), and the cropped size fits the header's maximum width and height. An encoder that pads to its coding-tree size and crops back (NVIDIA: 426x240 coded 448x256) is accepted; the coded size stays below the header plus 64 per axis, and the DPB limit is unchanged.
 7. **HEVC VPS.** `vps_max_layers_minus1` 0 and `vps_max_sub_layers_minus1` 0.
 8. **HEVC SPS.**
    - `sps_max_sub_layers_minus1` 0, so `profile_tier_level` is the fixed 12-byte general part.

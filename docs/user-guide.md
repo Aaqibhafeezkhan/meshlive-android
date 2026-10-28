@@ -95,9 +95,10 @@ Signing certificate SHA-256 (also in each release's notes and `signing-cert.sha2
 
 ## Features
 
-- **Live video broadcast.** Stream your camera (VP9 or AV1 video, mono Opus audio) to nearby phones. Pause, resume
-  and stop with authenticated state. Choose the encoder, rate, resolution, FPS and buffer in Settings; the app shows
-  requested and effective values and never changes them silently.
+- **Live video broadcast.** Stream your camera (AV1, VP9, HEVC or H.264 video, mono Opus audio) to nearby phones.
+  The app picks the most efficient video format each phone supports. Pause, resume and stop with authenticated
+  state. Choose the encoder, rate, resolution, FPS and buffer in Settings; the app shows requested and effective
+  values and never changes them silently.
 - **Relay chains.** A viewer can pass the stream to one more phone ("Relay video for others",
   on by default, pauses itself on low battery or in Battery Saver). Each phone talks only to its parent and its direct
   children, and the receiver checks that the stream really comes from the original source.
@@ -260,7 +261,9 @@ Android 10 or newer.
 
 **What about battery?** Bluetooth LE is frugal, but live video keeps the camera, encoder and radio busy, so expect
 substantial drain while broadcasting. Forwarding pauses itself below 20% battery (when not charging) or in Battery
-Saver. We have not yet run matched unplugged endurance tests, so there is no battery-life figure to quote.
+Saver. With Battery Saver on, or when the phone is already warm, calls and streams start on the phone's video hardware
+instead of the app's own software encoder. We have not yet run matched unplugged endurance tests, so there is no
+battery-life figure to quote.
 
 **Why does the app ask to run in the background, and why is Location needed on Android 10 and 11?** Passing a call or
 video along with the screen off only works while Android lets the app keep running; the allowance is optional and can be

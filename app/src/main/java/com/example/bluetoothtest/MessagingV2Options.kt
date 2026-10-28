@@ -1,7 +1,7 @@
 package com.example.bluetoothtest
 
 /*
- * Messaging v2 phase 1b: the attachment switches (docs/dev/switches.md "Messaging v2") and the pure size arithmetic of the
+ * Messaging v2 phase 1b: the attachment switches (SWITCHES "Messaging v2") and the pure size arithmetic of the
  * photo path. Everything is inert unless the master switch `test_messaging_v2` is on. A DEBUG benchmark launch reads only
  * its own extras, so a stored choice never leaks into a measured case; the Settings rows are phase 1c.
  */

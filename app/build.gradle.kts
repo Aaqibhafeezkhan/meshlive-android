@@ -11,7 +11,7 @@ val enableArmeabiV7a = (project.findProperty("enableArmeabiV7a") as String?)?.to
 
 // Per-ABI release APKs (tools/make_release.py passes -PsplitAbis=true -PenableArmeabiV7a=true; default OFF, so
 // debug and benchmark builds stay one APK). Splits produce arm64-v8a, armeabi-v7a and a universal APK, each with
-// its own versionCode = versionCode * 10 + ABI digit (the F-Droid/Signal convention; docs/dev/architecture.md "Distribution and releases").
+// its own versionCode = versionCode * 10 + ABI digit (the F-Droid/Signal convention; ARCHITECTURE "Distribution and releases").
 val splitAbis = (project.findProperty("splitAbis") as String?)?.toBoolean() == true
 val universalApk = (project.findProperty("universalApk") as String?)?.toBoolean() != false
 val abiVersionDigits = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2)
@@ -38,10 +38,10 @@ android {
     namespace = "com.example.bluetoothtest"
     compileSdk = 36
 
-    // Distribution flavours (docs/dev/switches.md "Check for updates"): `github` is what make_release.py builds and ships on the
+    // Distribution flavours (SWITCHES "Check for updates"): `github` is what make_release.py builds and ships on the
     // release page; it holds the opt-in updater (online check, download, PackageInstaller) and declares
     // REQUEST_INSTALL_PACKAGES. `fdroid` is what the F-Droid recipe builds: no updater code runs, no
-    // install permission, no network request of its own. `play` is the Google Play build (docs/dev/architecture.md "Distribution and releases"): Play
+    // install permission, no network request of its own. `play` is the Google Play build (ARCHITECTURE "Distribution and releases"): Play
     // updates it, so no updater and no install permission. All three offer "Share app nearby" with the same split-install
     // refusal: outbound sharing is not self-updating (docs/PLAY_RELEASE.md). Play omits the `location` foreground-service
     // type pending a supported justification for the Android 10-11 background-scan use. All three carry the
@@ -76,8 +76,8 @@ android {
         applicationId = appId
         minSdk = 29
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.4.1-beta"
+        versionCode = 8
+        versionName = "0.4.2-beta"
         // versionCode/versionName are literals: no date, git hash or counter, so a rebuild of a commit gets
         // the same version (the make_release.py and fastlane changelog readers parse these two lines).
 
@@ -119,7 +119,8 @@ android {
     }
 
     // F-Droid and reproducible builds: no Google-encrypted dependency block in the APK signing block
-    // (AGP writes no META-INF/version-control-info.textproto unless vcsInfo.include is set; it is not).
+    // (vcsInfo is switched off in the release build type below: AGP 9 otherwise writes
+    // META-INF/version-control-info.textproto, whose content depends on how the source was checked out).
     dependenciesInfo {
         includeInApk = false
         includeInBundle = false
@@ -132,7 +133,7 @@ android {
             ?: file("${System.getProperty("user.home")}/.bluetoothtest-release/keystore.properties")
         if (file.isFile) file.inputStream().use { stream -> load(stream) }
     }
-    // Google Play upload key (docs/dev/architecture.md "Distribution and releases"), separate from the release key above so a Play bundle is never signed
+    // Google Play upload key (ARCHITECTURE "Distribution and releases"), separate from the release key above so a Play bundle is never signed
     // with the GitHub/F-Droid key by accident. Path override: -PplayUploadKeystoreProperties=<file>; default
     // ~/.meshlive-play-upload/keystore.properties. Without it bundlePlayRelease is unsigned (sign it before uploading).
     val playUploadKeystoreProperties = Properties().apply {
@@ -168,6 +169,12 @@ android {
                 // Release only: strips Log.v/d/i. Debug is not minified and keeps every log line.
                 "proguard-release-logs.pro",
             )
+            // Reproducible builds: AGP 9 puts META-INF/version-control-info.textproto into release APKs by default.
+            // A normal git clone (F-Droid's buildserver) writes the commit hash, a git worktree or source export
+            // writes NO_VALID_GIT_FOUND, so the 0.4.1-beta APKs could not match an F-Droid build byte for byte.
+            vcsInfo {
+                include = false
+            }
         }
     }
     compileOptions {
@@ -212,7 +219,7 @@ tasks.register("testDebugUnitTest") {
     dependsOn("testGithubDebugUnitTest", "compileFdroidDebugUnitTestKotlin", "compilePlayDebugUnitTestKotlin")
 }
 
-// Every resolved configuration is locked in app/gradle.lockfile (docs/dev/architecture.md "Build notes", toolchain pins).
+// Every resolved configuration is locked in app/gradle.lockfile (ARCHITECTURE "Build notes", toolchain pins).
 dependencyLocking {
     lockAllConfigurations()
 }

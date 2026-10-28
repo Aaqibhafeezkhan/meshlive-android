@@ -2,7 +2,7 @@ package com.example.bluetoothtest
 
 /**
  * The coded picture size a keyframe carries, read from the compressed bitstream itself so no wire change
- * is needed (docs/dev/protocol/README.md "Mid-stream size changes"):
+ * is needed (PROTOCOL "Mid-stream size changes"):
  *
  * - VP9: every keyframe's uncompressed header has frame_width/height_minus_1.
  * - AV1: the sequence header OBU (max_frame_width/height_minus_1), in the keyframe's temporal unit or,
@@ -20,8 +20,23 @@ internal object CodedVideoSize {
         when (codecId) {
             StreamProtocol.CODEC_VP9 -> vp9(accessUnit)
             StreamProtocol.CODEC_AV1 -> av1(accessUnit) ?: codecConfig.asReversed().firstNotNullOfOrNull(::av1Config)
+            // Design HC: the in-band SPS of an IDR that passes the structural gate (cropped coded size).
+            StreamProtocol.CODEC_H264, StreamProtocol.CODEC_HEVC -> AnnexBCodec.of(codecId)?.let { codec ->
+                AccessUnitGate.keyFrameSets(codec, accessUnit, MAX_HEADER_SIDE, MAX_HEADER_SIDE)
+            }?.let { it.codedWidth to it.codedHeight }
             else -> null
         }
+
+    /** The largest `BTV3` header side: the envelope used when only the size of an HC keyframe is wanted. */
+    private const val MAX_HEADER_SIDE = 4096
+
+    /**
+     * Design HC: the decoder csd of an HC keyframe, from its own in-band parameter sets once the whole AU passes the
+     * structural gate (empty when it does not).
+     */
+    fun inBandCodecSpecificData(codecId: Int, accessUnit: ByteArray): List<ByteArray> =
+        AnnexBCodec.of(codecId)?.let { codec -> AccessUnitGate.keyFrameSets(codec, accessUnit, MAX_HEADER_SIDE, MAX_HEADER_SIDE) }
+            ?.csd().orEmpty()
 
     /** Size named by AV1 codec-config bytes (null for VP9, whose configuration carries none). */
     fun ofCodecConfig(codecId: Int, codecConfig: List<ByteArray>): Pair<Int, Int>? =

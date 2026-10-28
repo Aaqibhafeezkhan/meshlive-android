@@ -203,6 +203,8 @@ private class TraceIvfWriter(
             when (codecId) {
                 StreamProtocol.CODEC_AV1 -> "AV01"
                 StreamProtocol.CODEC_VP9 -> "VP90"
+                StreamProtocol.CODEC_H264 -> "H264"
+                StreamProtocol.CODEC_HEVC -> "H265"
                 else -> error("Unsupported trace codec $codecId")
             }.toByteArray(Charsets.US_ASCII),
         )

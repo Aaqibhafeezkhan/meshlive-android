@@ -14,7 +14,7 @@ import kotlin.math.pow
  * to a start rung; the existing adaptation (LinkRateController, [CallResolutionLadder],
  * [FrameRateLadder]) then moves along the same rungs. Everything here is a pure function.
  *
- * Evidence (docs/dev/decisions/README.md "Measured Auto ladder"; offline analysis of 1,077 scored phone runs and
+ * Evidence (DECISIONS "Measured Auto ladder"; offline analysis of 1,077 scored phone runs and
  * 139 offline encodes): equal-quality bitrate scales with pixels^0.3-0.5 and fps^0.5-0.6 (not 0.85);
  * dropping 30 -> 15 FPS gains more than dropping 480p -> 360p; 360p beats 240p from ~150 kbps; 480p
  * overtakes 360p near 330 kbps (VP9) / 430-490 kbps (AV1). Confidence is low below 200 kbps (no video
@@ -147,6 +147,13 @@ internal object AutoQualityLadder {
     const val ACCEPTABLE_BPPF_AV1 = 0.050
     const val ACCEPTABLE_BPPF_VP9 = 0.065
 
+    /**
+     * Design HC rows, stated assumptions until the quality-per-bit measurement (DECISIONS "Design HC", design decision
+     * 2026-10-27): HEVC uses the VP9 rows; H.264 the VP9 rows times [H264_BITS_FACTOR] bits per pixel.
+     */
+    const val H264_BITS_FACTOR = 1.3
+    const val ACCEPTABLE_BPPF_H264 = ACCEPTABLE_BPPF_VP9 * H264_BITS_FACTOR
+
     /** A manual combination below this fraction of the floor is [StarvationLevel.STARVED]. */
     const val STARVED_FRACTION = 0.5
 
@@ -167,8 +174,12 @@ internal object AutoQualityLadder {
         AutoRung(854, 480, 30, 1_190),
     )
 
+    /** Design HC: the VP9 rungs at [H264_BITS_FACTOR] times the bits (stated assumption until measured). */
+    private val H264_RUNGS = VP9_RUNGS.map { it.copy(minVideoKbps = (it.minVideoKbps * H264_BITS_FACTOR).toInt()) }
+
     /** Rungs from the lowest quality to the highest for [codecId] on an encoder of class [encoderClass]. */
     fun rungs(codecId: Int, encoderClass: AutoEncoderClass): List<AutoRung> = when {
+        codecId == StreamProtocol.CODEC_H264 -> H264_RUNGS
         codecId != StreamProtocol.CODEC_AV1 -> VP9_RUNGS
         encoderClass == AutoEncoderClass.WEAK -> VP9_RUNGS
         encoderClass == AutoEncoderClass.STRONG -> AV1_STRONG_RUNGS
@@ -496,6 +507,7 @@ internal object AutoQualityLadder {
     /** Sizes above the rungs (720p without margin evidence, 1080p) keep the WebRTC start limits. */
     private fun beyondTableKbps(codecId: Int, bucket: Int): Int = when {
         bucket == 4 && codecId == StreamProtocol.CODEC_AV1 -> 576
+        bucket == 4 && codecId == StreamProtocol.CODEC_H264 -> (480 * H264_BITS_FACTOR).toInt()
         bucket == 4 -> 480
         else -> 0
     }
@@ -574,7 +586,11 @@ internal object AutoQualityLadder {
     }
 
     fun acceptableBppf(codecId: Int): Double =
-        if (codecId == StreamProtocol.CODEC_AV1) ACCEPTABLE_BPPF_AV1 else ACCEPTABLE_BPPF_VP9
+        when (codecId) {
+            StreamProtocol.CODEC_AV1 -> ACCEPTABLE_BPPF_AV1
+            StreamProtocol.CODEC_H264 -> ACCEPTABLE_BPPF_H264
+            else -> ACCEPTABLE_BPPF_VP9
+        }
 
     /**
      * Whether a manual request is starved. This only classifies: the request is never changed, the

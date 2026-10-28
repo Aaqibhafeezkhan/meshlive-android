@@ -58,6 +58,12 @@ class DebugBenchmarkCoordinator(
             ),
             nativeThreads = intent.getIntExtra("benchmark_native_threads", 0)
                 .takeIf { it > 0 },
+            // Design VX libvpx arm (`benchmark_codec=libvpx`): error resilience and the quantizer ceiling are A/B knobs
+            // (`benchmark_vpx_max_q=56` reproduces the former cap and its CBR overshoot).
+            vpxTuning = NativeVpxTuning(
+                errorResilient = intent.getBooleanExtra("benchmark_vpx_error_resilient", true),
+                maxQuantizer = intent.getIntExtra("benchmark_vpx_max_q", NativeVpxTuning.DEFAULT.maxQuantizer),
+            ),
         )
         onStatus("Running offline encoder benchmark $caseName…")
         thread(name = "OfflineEncoderBenchmark") {

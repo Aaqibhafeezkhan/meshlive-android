@@ -69,7 +69,7 @@ internal class ReleaseVersion private constructor(
 }
 
 /**
- * The release number of a build: its base `versionCode` (docs/dev/architecture.md "Distribution and releases": a split release APK has
+ * The release number of a build: its base `versionCode` (ARCHITECTURE "Distribution and releases": a split release APK has
  * `versionCode = base * 10 + ABI digit`, universal 0, armeabi-v7a 1, arm64-v8a 2). It is what the link
  * hello's build tag carries (PROTOCOL "Build tag in the link hello"), without the ABI digit.
  */

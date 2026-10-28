@@ -659,6 +659,7 @@ class BleL2capDiscovery(
                 }
                 is ScanRecordForms.Outcome.Pc -> {
                     stats.pc++
+                    PcCallTargets.record(outcome.announcement.nodeIdPrefix, android.os.SystemClock.elapsedRealtime())
                     logPcDecoded(result, outcome.decoded)
                     outcome.announcement
                 }

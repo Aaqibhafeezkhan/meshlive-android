@@ -1012,6 +1012,21 @@ class MainActivity : AppCompatActivity() {
     private val thermalForecastOn: Boolean
         get() = MemoryThermalPolicy.headroomForecast && thermalReductionOn
     private var thermalForecastHeadroom: Float? = null
+
+    /**
+     * codec_power_aware ([CodecPowerAware]): the session-start power state from this activity's thermal policy inputs
+     * (the reported status with the battery fallback and the Experimental forecast, as the thermal adaptation reads it).
+     */
+    private val codecPowerProvider: () -> CodecPowerState = {
+        CodecPowerAware.state(
+            runCatching { powerManager.isPowerSaveMode }.getOrDefault(false),
+            MemoryThermalPolicy.effectiveStatus(
+                thermalReportedWithFallback(runCatching { powerManager.currentThermalStatus }.getOrDefault(thermalStatus)),
+                thermalForecastHeadroom,
+                thermalForecastOn,
+            ),
+        )
+    }
     private var lastThermalBenchmarkLine = ""
     private val thermalHandler = Handler(Looper.getMainLooper())
 
@@ -1346,7 +1361,7 @@ class MainActivity : AppCompatActivity() {
         MemoryThermalPolicy.headroomForecast = intent.getBooleanExtra("test_thermal_forecast", false)
         MemoryThermalPolicy.speedFloor = intent.getBooleanExtra("test_thermal_speed_floor", false)
         // Device-family batches (integration 2026-10-14): each batch's launch switches. Every non-default arm is
-        // DEBUG-only (the setters ignore it in release) and listed in docs/dev/switches.md; each launch starts from the defaults.
+        // DEBUG-only (the setters ignore it in release) and listed in SWITCHES; each launch starts from the defaults.
         ThermalSwitches.applyLaunchExtras(intent)
         Log.i("BluetoothVideo", ThermalSwitches.benchmarkLine())
         AudioSwitches.applyLaunchExtras(intent)
@@ -1776,6 +1791,24 @@ class MainActivity : AppCompatActivity() {
         DebugTunables.vp9QuantizerFloor = intent.getIntExtra("test_vp9_q_floor", -1).takeIf { it > 0 }
         DebugTunables.experimentalEncoderRanking = intent.getBooleanExtra("test_encoder_ranking", false)
         DebugTunables.preferHardwareAv1 = intent.getBooleanExtra("test_prefer_hw_av1", true)
+        // Design HC control arms (DEBUG; release builds always prefer and send bit 4 while a master is on).
+        VideoCodecSwitches.preferHevc = intent.getBooleanExtra(VideoCodecFeatures.EXTRA_PREFER_HEVC, true)
+        VideoCodecSwitches.preferHwAvc = intent.getBooleanExtra(VideoCodecFeatures.EXTRA_PREFER_HW_AVC, true)
+        VideoCodecSwitches.av1SoftDecodeBit = intent.getBooleanExtra(VideoCodecFeatures.EXTRA_AV1_SOFT_DECODE_BIT, true)
+        VideoCodecSwitches.bit7HwHevc = intent.getBooleanExtra(VideoCodecFeatures.EXTRA_BIT7_HW_HEVC, true)
+        VideoCodecSwitches.hcSessionLevel = intent.getBooleanExtra(VideoCodecFeatures.EXTRA_HC_SESSION_LEVEL, true)
+        // Design VX (DEBUG): absent keeps the shipped LIBVPX_AUTOMATIC; true/false decides this launch.
+        // A benchmark launch without the extra keeps libvpx a manual choice (extras-only, like the HC masters), so cases
+        // measured before 0.4.2 keep their Automatic encoder.
+        VideoCodecSwitches.preferLibvpxOverride = when {
+            intent.hasExtra(VideoCodecFeatures.EXTRA_PREFER_LIBVPX) -> intent.getBooleanExtra(VideoCodecFeatures.EXTRA_PREFER_LIBVPX, false)
+            DebugTunables.benchmarkLaunch -> false
+            else -> null
+        }
+        // codec_power_aware (DEBUG control arm test_codec_power_aware=false; a benchmark launch needs the extra).
+        CodecPowerAware.enabled = intent.getBooleanExtra(CodecPowerAware.EXTRA, !DebugTunables.benchmarkLaunch)
+        CodecPowerAware.provider = codecPowerProvider
+        HcTestVectorCapture.requested = BuildConfig.DEBUG && intent.getBooleanExtra(HcTestVectorCapture.EXTRA, false)
         DebugTunables.experimentalBurstDrain = intent.getBooleanExtra("test_burst_drain", false)
         DebugTunables.playoutBurstGrowth = intent.getFloatExtra("test_playout_burst_growth", -1f)
             .takeIf { it >= 1f }?.toDouble()
@@ -3565,6 +3598,8 @@ class MainActivity : AppCompatActivity() {
                     isAv1 = codec.protocolId == StreamProtocol.CODEC_AV1,
                     isVp9 = codec.protocolId == StreamProtocol.CODEC_VP9,
                     encoderName = codec.encoderName,
+                    isHevc = codec.protocolId == StreamProtocol.CODEC_HEVC,
+                    isH264 = codec.protocolId == StreamProtocol.CODEC_H264,
                 )
             }
             if (codecIndex < 0) {
@@ -6720,7 +6755,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val fingerprint = privateCallStackFingerprint()
-        val callCodec = privateCallCodec(selectedCodec, codecs, fingerprint, outgoingTransport)
+        val callCodec = privateCallCodec(callRequestedCodec(selectedCodec), codecs, fingerprint, outgoingTransport)
         val callSettings = privateCallVideoSettings(
             settings, outgoingTransport, fingerprint,
             preserveSelectedBitrate = callBitrateAdapts(),
@@ -6734,7 +6769,7 @@ class MainActivity : AppCompatActivity() {
             legacyLowDelay = DebugTunables.callLegacyLowDelay,
         )
         privateCallProfileSummary.text =
-            "Selected video: ${if (selectedCodec.protocolId == StreamProtocol.CODEC_AV1) "AV1" else "VP9"} | " +
+            "Selected video: ${VideoCodecMap.label(selectedCodec.protocolId)} | " +
                 "${settings.resolution.width}x${settings.resolution.height} @ ${settings.fps} FPS | " +
                 "${settings.bitRate / 1_000} kbps | ${receiverPlaybackDelay.delayMs} ms buffer\n" +
                 "Call on this phone: ${privateCallProfileLabel(callSettings, audioBitRate, callCodec, playback)} " +
@@ -6748,7 +6783,7 @@ class MainActivity : AppCompatActivity() {
         callCodec: VideoCodec,
         playback: PlaybackDelayProfile,
     ): String {
-        val codecName = if (callCodec.protocolId == StreamProtocol.CODEC_AV1) "AV1" else "VP9"
+        val codecName = VideoCodecMap.label(callCodec.protocolId)
         return "$codecName | ${callSettings.resolution.width}x${callSettings.resolution.height} @ " +
             "${callSettings.fps} FPS | ${callSettings.bitRate / 1_000} kbps video | " +
             "${audioBitRate / 1_000} kbps audio | ${playback.label}"
@@ -6767,6 +6802,7 @@ class MainActivity : AppCompatActivity() {
                 "Camera input: " + when {
                     codec.usesSurfaceInput -> "direct surface"
                     codec.backend == VideoEncoderBackend.NATIVE_LIBAOM -> "YUV to native libaom"
+                    codec.backend == VideoEncoderBackend.NATIVE_LIBVPX -> "YUV to native libvpx"
                     else -> "YUV copy (native size)"
                 },
             )
@@ -6840,31 +6876,64 @@ class MainActivity : AppCompatActivity() {
      * to keep scene cuts small and keep up with the frame rate becomes the default choice. Off: the
      * static hardware-first order. The order and records are logged in both arms (DEBUG).
      */
-    /** One `BENCHMARK encoder_choice` line per stream session (DEBUG); calls log theirs after negotiation. */
-    private fun logStreamEncoderChoice(codec: VideoCodec) {
-        if (!BuildConfig.DEBUG) return
-        val reason = AutomaticEncoderChoice.reason(
-            sent = codec,
+    /**
+     * The encoder a stream session starts with: the picker's entry, except that `codec_power_aware` (battery saver or a
+     * warm phone, read here once at session start) may swap an Automatic software first choice for a hardware encoder.
+     * Logs one `BENCHMARK encoder_choice` line per stream session (DEBUG); calls log theirs after negotiation.
+     */
+    private fun streamSessionCodec(codec: VideoCodec): VideoCodec {
+        val switches = VideoCodecSwitches.current(power = CodecPowerAware.read(this))
+        val choice = VideoCodecChoice.forStream(
             requested = codec,
-            available = codecs,
             userChoice = AutomaticEncoderChoice.userChoice,
-            preferHwAv1 = DebugTunables.preferHardwareAv1,
-            peerDecodeMask = null,
-            excluded = AutomaticEncoderChoice::policyExcluded,
+            available = codecs,
+            switches = switches,
+            session = CodecSession.of(settings),
+            excluded = VideoCodecChoice::policyExcluded,
+            staticIneligibility = VideoCodec.hcStaticIneligibility,
         )
-        Log.i(
-            "BluetoothVideo",
-            AutomaticEncoderChoice.logLine("stream", codec, reason, DebugTunables.preferHardwareAv1, null),
-        )
+        if (BuildConfig.DEBUG) Log.i("BluetoothVideo", VideoCodecChoice.logLine("stream", choice, switches, null))
+        return if (choice.powerApplied) choice.sent ?: codec else codec
+    }
+
+    /** The encoder of the current stream session, chosen once when it starts (direct start or going live). */
+    private var streamSessionEncoder: VideoCodec? = null
+
+    /** Starts a stream session's encoder choice ([streamSessionCodec]); every later step of the session reuses it. */
+    private fun beginStreamSessionCodec(): VideoCodec? {
+        val picked = codecs.getOrNull(codecSpinner.selectedItemPosition) ?: return null
+        return streamSessionCodec(picked).also { streamSessionEncoder = it }
+    }
+
+    /**
+     * The stream's encoder: the session's own while it holds one (a power-aware choice may differ from the picker, and
+     * a viewer joining, a camera flip or a resume must not change the codec mid-stream), else the picker's entry.
+     */
+    private fun activeStreamCodec(): VideoCodec? =
+        streamSessionEncoder?.takeIf { it in codecs } ?: codecs.getOrNull(codecSpinner.selectedItemPosition)
+
+    /**
+     * The codec a call starts from: the picker's entry when chosen by hand, else (Design HC, a master on) the first
+     * entry of the call Automatic order, which differs from the stream order the picker shows. Both masters off: the
+     * picker's entry, as before.
+     */
+    private fun callRequestedCodec(selected: VideoCodec): VideoCodec {
+        val switches = VideoCodecSwitches.current()
+        if (!switches.anyNew || AutomaticEncoderChoice.userChoice) return selected
+        return VideoCodecChoice.automatic(
+            codecs, CodecChoiceMode.CALL, switches, CodecSession.of(settings), VideoCodecChoice::policyExcluded,
+        ).firstOrNull() ?: selected
     }
 
     private fun rankEncoders(detected: List<VideoCodec>): List<VideoCodec> {
         // Design decision 2026-10-27: Automatic prefers an eligible hardware AV1 encoder (control arm
-        // test_prefer_hw_av1=false). A phone without one keeps the static order unchanged.
-        val available = AutomaticEncoderChoice.order(
+        // test_prefer_hw_av1=false). A phone without one keeps the static order unchanged. Design HC (a master on):
+        // the stream Automatic order first, then the encoders only a manual choice may use.
+        val available = VideoCodecChoice.pickerOrder(
             detected,
-            DebugTunables.preferHardwareAv1,
-            AutomaticEncoderChoice::policyExcluded,
+            VideoCodecSwitches.current(),
+            CodecSession.of(settings),
+            VideoCodecChoice::policyExcluded,
         )
         val store = EncoderBurstProfileStore(this)
         val records = available.associate { it.encoderName to runCatching { store.load(it.encoderName) }.getOrNull() }
@@ -7105,7 +7174,7 @@ class MainActivity : AppCompatActivity() {
                         capabilitySummary = if (audioOffer != null) {
                             DiscoveryAnnouncement.SUMMARY_AUDIO_ONLY // AUDIO-LIVE hook: audio-only marker, no geometry
                         } else {
-                            activeCodec.capabilityMask
+                            VideoCodecMap.summaryBit(activeCodec.protocolId)
                         },
                         streamToken = routeToken,
                         routeCost = 0,
@@ -7885,7 +7954,7 @@ class MainActivity : AppCompatActivity() {
             }
             val fingerprint = privateCallStackFingerprint()
             val codec = privateCallCodec(
-                selectedCodec,
+                callRequestedCodec(selectedCodec),
                 codecs,
                 fingerprint,
                 endpointTransport,
@@ -11347,8 +11416,7 @@ class MainActivity : AppCompatActivity() {
         val localDecoderMask = decoders.fold(0) { mask, decoder ->
             mask or codecCapabilityMask(decoder.protocolId)
         }
-        return announcement.capabilitySummary != 0 &&
-            announcement.capabilitySummary and localDecoderMask != 0
+        return VideoCodecMap.summaryDecodable(announcement.capabilitySummary, localDecoderMask)
     }
 
     private fun connectToCachedStreamRoute(target: LogicalStreamTarget): Boolean {
@@ -11680,7 +11748,7 @@ class MainActivity : AppCompatActivity() {
         val activeBroadcaster = broadcaster ?: return
         if (sessionRole != SessionRole.SEND || streamPaused || audioLive.mode || liveCameraBusy || liveMedia.cameraOff) return
         val old = cameraEncoder ?: return
-        val codec = codecs.getOrNull(codecSpinner.selectedItemPosition) ?: return
+        val codec = activeStreamCodec() ?: return
         val activeSettings = activeStreamSettings ?: return
         val nextLens = availableCameraLenses.firstOrNull { it != cameraLens } ?: return
         val current = streamEncoderSettings(activeSettings)
@@ -11737,7 +11805,7 @@ class MainActivity : AppCompatActivity() {
     private fun toggleBroadcastCamera() {
         val activeBroadcaster = broadcaster ?: return
         if (sessionRole != SessionRole.SEND || streamPaused || audioLive.mode || liveCameraBusy) return
-        val codec = codecs.getOrNull(codecSpinner.selectedItemPosition) ?: return
+        val codec = activeStreamCodec() ?: return
         val activeSettings = activeStreamSettings ?: return
         val turningOff = !liveMedia.cameraOff
         liveMedia.toggleCamera()
@@ -12208,8 +12276,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val device = selectedDestination() ?: return
-        val codec = codecs.getOrNull(codecSpinner.selectedItemPosition) ?: return
-        logStreamEncoderChoice(codec)
+        val codec = beginStreamSessionCodec() ?: return
         if (debugReplayPath != null) stopIdleCameraPreview()
         ActiveVideoSessionService.start(this, usesCamera = debugReplayPath == null)
         bleDiscovery?.close()
@@ -12371,6 +12438,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         streamArmed = true
+        if (!audioLive.mode) beginStreamSessionCodec()
         applyAutoLadderToStreamSettings()
         if (audioLive.mode) { // AUDIO-LIVE hook: microphone service type, no camera
             ActiveVideoSessionService.start(
@@ -12395,9 +12463,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val audioConfig = audioLive.source?.sendConfig?.takeIf { audioLive.mode } // AUDIO-LIVE hook
-        val codec = codecs.getOrNull(codecSpinner.selectedItemPosition)
+        // Video: the encoder chosen when the stream went live (armDiscoverableStream), the same for every viewer.
+        val codec = (if (audioConfig == null) activeStreamCodec() else codecs.getOrNull(codecSpinner.selectedItemPosition))
             ?: if (audioConfig != null) AudioLiveSendConfig.PLACEHOLDER_CODEC else return
-        if (audioConfig == null) logStreamEncoderChoice(codec)
         val activeSettings = activeStreamSettings ?: settings
         val rotationDegrees = if (audioConfig != null) 0 else outgoingVideoRotationDegrees()
         broadcaster?.let { activeBroadcaster ->
@@ -12578,7 +12646,7 @@ class MainActivity : AppCompatActivity() {
             refreshStreamPresenceAdvertisement()
             setStatus(getString(R.string.live_status_paused_viewers))
         } else {
-            val codec = codecs.getOrNull(codecSpinner.selectedItemPosition) ?: return
+            val codec = activeStreamCodec() ?: return
             val activeSettings = activeStreamSettings ?: return
             streamPaused = false
             sessionHandler.removeCallbacks(pausedHeartbeatRunnable)
@@ -13215,6 +13283,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopStreaming(message: String) {
+        streamSessionEncoder = null
         val impairment = debugBroadcastImpairment
         impairment?.cancel()
         debugBroadcastImpairment = null
@@ -13835,7 +13904,7 @@ class MainActivity : AppCompatActivity() {
      * this phone ([EncoderBurstProfileStore]); null for a hardware encoder or before any session.
      */
     private fun autoEncodeMsPerMpx(codec: VideoCodec): Double? =
-        if (codec.backend == VideoEncoderBackend.NATIVE_LIBAOM) {
+        if (codec.backend.isNative) {
             runCatching { EncoderBurstProfileStore(this).msPerMegapixel(codec.encoderName) }.getOrNull()
         } else {
             null
@@ -14010,7 +14079,7 @@ class MainActivity : AppCompatActivity() {
         // Q-SKIP1: the backlog skip at a PHY move is on by default only for a fixed-rate stream (not Auto, not audio-only live).
         PhyMoveSkip.fixedRateStream = !autoLadderActive() && !audioLive.mode
         if (!autoLadderActive() || audioLive.mode) return
-        val codec = codecs.getOrNull(codecSpinner.selectedItemPosition) ?: return
+        val codec = activeStreamCodec() ?: return
         val manual = autoLadderSavedSettings ?: settings
         // Arm time has no peer yet, so no delivered evidence: the probe-only rule sets the start and the
         // header (one rung down, 15 FPS at most); refineAutoStreamStart lowers it further when a peer's
@@ -14111,7 +14180,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun autoStreamFrameRateLadder(selected: VideoSettings): FrameRateLadder? {
-        val codec = codecs.getOrNull(codecSpinner.selectedItemPosition) ?: return null
+        val codec = activeStreamCodec() ?: return null
         return if (autoStreamStartKbps > 0 && autoLadderActive()) autoCallFrameRateLadder(selected, codec) else null
     }
 
@@ -14945,6 +15014,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        if (CodecPowerAware.provider === codecPowerProvider) CodecPowerAware.provider = null
         GattPoolBackoff.onScannerChanged = null
         BluetoothEpoch.unregister(streamEpochName)
         verifiedStoreBanner?.close()

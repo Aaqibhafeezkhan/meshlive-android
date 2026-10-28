@@ -386,7 +386,8 @@ internal fun privateCallPlaybackDelayProfile(
  * Decode mask this phone advertises in its END-TO-END call hello (the link hello keeps
  * [privateCallDecodeCodecMask]). A legacy Qualcomm phone restricted to VP9 advertises its real
  * decoders plus [NodeCapabilities.DECODE_PREFERS_VP9]; senders honour the preference whenever they
- * can encode VP9 ([privateCallCodecForPeer]), so VP9-capable peers still send VP9, and AV1-only peers
+ * can encode VP9 ([privateCallCodecForPeer]; with Design HC on, a hardware HEVC encoder this phone
+ * decodes still goes first, [VideoCodecChoice.forCall]), so VP9-capable peers send VP9, and AV1-only peers
  * (A15s, Xiaomi: no VP9 encoder; Android's CDD requires VP9 decoding, not encoding) send AV1 instead
  * of failing with "Peer cannot decode any locally available call codec".
  *
@@ -406,7 +407,21 @@ internal fun privateCallEndpointDecodeMask(
     return if (fallback && extra != 0) restrictedMask or extra or NodeCapabilities.DECODE_PREFERS_VP9 else restrictedMask
 }
 
-private const val CALL_CODEC_MASK = NodeCapabilities.CODEC_VP9 or NodeCapabilities.CODEC_AV1
+/** Every call codec (Design HC adds H.264 and HEVC; their bits exist only while their masters are on). */
+private const val CALL_CODEC_MASK = NodeCapabilities.CODEC_VP9 or NodeCapabilities.CODEC_AV1 or
+    NodeCapabilities.CODEC_H264 or NodeCapabilities.CODEC_HEVC
+
+/**
+ * End-to-end decode-mask bit 4 (Design HC, "my AV1 decoding is software"): set when every AV1 decoder this phone
+ * would use is software ([av1DecoderHardware] false; null when there is no AV1 decoder) and it also decodes HEVC or
+ * VP9. [enabled] is "a Design HC master is on and the `test_av1_soft_decode_bit` arm is not off"; off, the mask is
+ * returned unchanged, so a build with both masters off sends today's bytes.
+ */
+internal fun withAv1SoftwareDecodeBit(decodeMask: Int, av1DecoderHardware: Boolean?, enabled: Boolean): Int {
+    val decodesAlternative = decodeMask and (NodeCapabilities.CODEC_VP9 or NodeCapabilities.CODEC_HEVC) != 0
+    val softwareAv1 = av1DecoderHardware == false && decodeMask and NodeCapabilities.CODEC_AV1 != 0
+    return if (enabled && softwareAv1 && decodesAlternative) decodeMask or NodeCapabilities.DECODE_AV1_SOFTWARE else decodeMask
+}
 
 /**
  * The receiver's playout profile for this call. Experimental [lowDelayVoice]: a voice-only call on an
@@ -502,7 +517,7 @@ internal class PrivateCallMediaReceiver(
         audioPlayoutClock = if (DebugTunables.callAudioOwnClock) playbackDelayProfile.newPlayoutClock() else null
         onVideoFormat(value)
         onStatus(
-            "Remote ${if (value.codecId == StreamProtocol.CODEC_AV1) "AV1" else "VP9"} " +
+            "Remote ${VideoCodecMap.label(value.codecId)} " +
                 "${value.displayWidth}x${value.displayHeight}/${value.fps} with Opus audio",
         )
     }
@@ -526,8 +541,10 @@ internal class PrivateCallMediaReceiver(
                 onVideoFormat(updated)
             }
             // Review 2026-10-19 (P2): bounded until the decoder exists (CodecConfigBudget).
-            packet.flags and StreamProtocol.FLAG_CODEC_CONFIG != 0 && decoder == null ->
+            packet.flags and StreamProtocol.FLAG_CODEC_CONFIG != 0 && decoder == null -> {
+                VideoCodecMap.requireNoCodecConfig(activeHeader.codecId, packet.flags)
                 CodecConfigBudget.add(videoConfig, packet.payload)
+            }
             else -> offerVideo(activeHeader, packet)
         }
         reportIfDue()

@@ -150,7 +150,7 @@ class Bmh3Pins(
     enum class PinState { PINNED, UNPINNED, UNKNOWN }
 
     /**
-     * reviewer review 2026-10-27 (finding 8): a pin store that cannot be read now is UNKNOWN, never "not pinned". The caller
+     * Review 2026-10-27 (finding 8): a pin store that cannot be read now is UNKNOWN, never "not pinned". The caller
      * then treats the prefix as pinned (BMH3 for that attempt), so a stripped hint plus a passing Keystore failure cannot
      * make this phone send its identity in a first BMH2 hello.
      */

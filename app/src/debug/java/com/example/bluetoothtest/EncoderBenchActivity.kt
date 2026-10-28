@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 /**
- * DEBUG encoder bench (`test_encoder_bench`; docs/dev/switches.md, default off, Experimental). Encodes the declared
+ * DEBUG encoder bench (`test_encoder_bench`; SWITCHES, default off, Experimental). Encodes the declared
  * raw fixture through the phone's real selected encoder for a fixed time with no Bluetooth, advertising or
  * scanning, logs one `BENCHMARK encoder_bench:` line per second and a summary, then finishes. [MainActivity]
  * hands the launch over before it creates any view, service or radio object; [EncoderBenchGuard] is active for
@@ -128,15 +128,18 @@ class EncoderBenchActivity : Activity() {
         }
         val requested = EncoderBenchSpec.requestedPairs(request)
         // HEVC/AVC encoders are appended after the product candidates and flagged bench-only: "auto" never picks them.
+        // Design VX: libvpx is listed too but resolves only by name (`libvpx-vp9`), never for auto/vp9.
         val candidates = VideoCodec.allMediaCodecEncoders() +
             VideoCodec.availableEncoders().filter { it.backend == VideoEncoderBackend.NATIVE_LIBAOM } +
-            VideoCodec.benchOnlyMediaCodecEncoders()
+            VideoCodec.benchOnlyMediaCodecEncoders() +
+            listOfNotNull(VideoCodec.nativeLibvpx())
         val (match, codecReason) = EncoderBenchSpec.resolveCodec(
             request.codec,
             candidates.map {
                 BenchCodecCandidate(
                     it.encoderName, it.mimeType, it.backend == VideoEncoderBackend.NATIVE_LIBAOM,
                     benchOnly = it.protocolId == VideoCodec.BENCH_ONLY_PROTOCOL_ID,
+                    nativeLibvpx = it.backend == VideoEncoderBackend.NATIVE_LIBVPX,
                 )
             },
         )
@@ -278,13 +281,14 @@ class EncoderBenchActivity : Activity() {
 
     /** What the platform reports for [codec], as plain data for the pure planner. */
     private fun capsFor(codec: VideoCodec, request: EncoderBenchRequest): EncoderBenchCaps {
-        val native = codec.backend == VideoEncoderBackend.NATIVE_LIBAOM
-        if (native) {
+        if (codec.backend.isNative) {
             return EncoderBenchCaps(
-                codec.encoderName, codec.mimeType, hardware = false, nativeLibaom = true,
+                codec.encoderName, codec.mimeType, hardware = false,
+                nativeLibaom = codec.backend == VideoEncoderBackend.NATIVE_LIBAOM,
                 supportedModes = codec.supportedBitrateModes,
                 defaultMode = codec.resolveBitrateMode(EncoderRateControl.AUTOMATIC),
                 sizeAndRateSupported = null, intraRefreshFeature = null,
+                nativeLibvpx = codec.backend == VideoEncoderBackend.NATIVE_LIBVPX,
             )
         }
         val info = MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.firstOrNull { it.name == codec.encoderName }

@@ -243,7 +243,17 @@ object PcStreamsFeature {
 
 /** Kinds 1/2 wrap the unchanged 22-byte rotating announcement. No handshake changes. */
 internal object PcStreamAnnouncement {
-    fun decode(bytes: ByteArray): DiscoveryAnnouncement {
+    /** Kind-2 summary bits: VP9, AV1 and H.264 (bits 0..2) and the audio-only marker `0x40`. */
+    private const val OFFER_SUMMARY_BASE = 0x47
+
+    /**
+     * The kind-2 summary bits a reader accepts: [OFFER_SUMMARY_BASE] plus the HEVC summary bit (`0x80`,
+     * [VideoCodecMap]) while the HEVC master is on. With it off a `0x80` offer stays `Fields` (hidden), as before.
+     */
+    fun offerSummaryMask(hevc: Boolean): Int =
+        OFFER_SUMMARY_BASE or (if (hevc) VideoCodecMap.summaryBit(StreamProtocol.CODEC_HEVC) else 0)
+
+    fun decode(bytes: ByteArray, hevc: Boolean = VideoCodecSwitches.hevc): DiscoveryAnnouncement {
         fun fail(error: PcAnnouncementError): Nothing = throw PcAnnouncementException(error, "Invalid PC stream announcement")
         if (bytes.isEmpty()) fail(PcAnnouncementError.Length)
         val first = bytes[0].toInt() and 0xff
@@ -260,13 +270,52 @@ internal object PcStreamAnnouncement {
             val recovering = a.flags == 0x89 && a.recoveryFromNodeIdPrefix?.any { it != 0.toByte() } == true
             (plain || recovering) && a.capabilitySummary == 0
         } else {
-            a.flags and 0x20.inv() == 0x0c && a.capabilitySummary and 0x47.inv() == 0 &&
+            a.flags and 0x20.inv() == 0x0c && a.capabilitySummary and offerSummaryMask(hevc).inv() == 0 &&
                 a.routeCost == 0 && a.recoveryFromNodeIdPrefix == null
         }
         if (!valid) fail(PcAnnouncementError.Fields)
         return a
     }
 }
+
+/**
+ * Rotating IDs of PC call offers (kind 0) seen recently, so a call attempt knows its target is a PC. A PC answers
+ * only BMH3 (it refuses a BMH2 hello as `Format`), so a phone with BMH3 ("Hide my ID from strangers") off does not
+ * dial it: the attempt would hand the PC this phone's signed BMH2 hello and fail anyway (PROTOCOL "Experimental PC
+ * announcement", "Calls to a PC"). Phone targets are unaffected: a phone with BMH3 off still accepts BMH2.
+ * Bounded (64 IDs, 30 minutes: two epochs).
+ */
+internal object PcCallTargets {
+    private const val CAPACITY = 64
+    private const val TTL_MS = 30 * 60_000L
+    private val seen = LinkedHashMap<String, Long>()
+
+    const val BMH3_OFF_MESSAGE =
+        "This PC takes calls only with \"Hide my ID from strangers\" on (Settings > Privacy > Advanced privacy)."
+
+    private fun key(prefix: ByteArray) = prefix.joinToString("") { "%02x".format(it) }
+
+    @Synchronized
+    fun record(prefix: ByteArray, nowMs: Long) {
+        val k = key(prefix)
+        seen.remove(k)
+        seen[k] = nowMs
+        while (seen.size > CAPACITY) seen.remove(seen.keys.first())
+    }
+
+    @Synchronized
+    fun isPc(prefix: ByteArray, nowMs: Long): Boolean = seen[key(prefix)]?.let { nowMs - it in 0..TTL_MS } == true
+
+    @Synchronized
+    fun clear() = seen.clear()
+
+    /** True when an attempt toward [offer] must not start: BMH3 off and the offer is a PC's rotating call offer. */
+    fun refusesBmh2Dial(bmh3: Boolean, offer: DiscoveryAnnouncement?, isPc: Boolean): Boolean =
+        !bmh3 && offer != null && offer.rotating && isPc
+}
+
+/** A call attempt toward a PC was not started because BMH3 is off ([PcCallTargets.refusesBmh2Dial]). */
+internal class PcNeedsBmh3Exception : IllegalStateException(PcCallTargets.BMH3_OFF_MESSAGE)
 
 /** Per-address log rate limit (bounded), so a flood of adverts cannot flood the log. */
 internal class PcLogLimiter(private val intervalMs: Long = 10_000L, private val maxAddresses: Int = 64) {

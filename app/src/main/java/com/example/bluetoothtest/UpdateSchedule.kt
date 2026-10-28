@@ -2,7 +2,7 @@ package com.example.bluetoothtest
 
 /**
  * When the online update check may contact GitHub, and the one-time question that turns it on
- * (docs/dev/switches.md "Check for updates"). Pure and JVM-tested; [UpdateCheckStore] persists the state.
+ * (SWITCHES "Check for updates"). Pure and JVM-tested; [UpdateCheckStore] persists the state.
  *
  * The rules: nothing at all until the user said yes; at most one request a day on its own; after a
  * request that reached GitHub (any HTTP answer) the next one waits 24 hours, after a rate limit until

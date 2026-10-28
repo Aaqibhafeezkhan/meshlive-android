@@ -3,7 +3,7 @@ package com.example.bluetoothtest
 import kotlin.math.ceil
 
 /**
- * DEBUG-only radio-free encoder bench (`test_encoder_bench`, default off, Experimental; docs/dev/switches.md).
+ * DEBUG-only radio-free encoder bench (`test_encoder_bench`, default off, Experimental; SWITCHES).
  *
  * The bench feeds the declared native raw-motion fixture (the same `test_raw_yuv` input the benchmark suite
  * uses for streams and calls) through the phone's real selected encoder ([CameraVideoEncoder] in its raw-input
@@ -22,6 +22,12 @@ internal enum class BenchBitrateMode(val token: String, val codecMode: Int?) {
     VBR("vbr", 1),
     CBR("cbr", 2),
     CBR_FD("cbr_fd", 3),
+
+    /**
+     * Design HC: no `KEY_BITRATE_MODE` at all, the product's path for an encoder that declares no mode (the A15s
+     * MediaTek AVC, the M31 Exynos OMX encoders). Refused for an encoder that declares modes.
+     */
+    ENCODER_DEFAULT("encoder_default", null),
     ;
 
     companion object {
@@ -33,7 +39,10 @@ internal enum class BenchBitrateMode(val token: String, val codecMode: Int?) {
 }
 
 internal data class EncoderBenchRequest(
-    /** Null or "auto": the app's own first (best-ranked) encoder. Else av1, vp9, libaom-native, bench-only hevc/avc, a mime, an exact encoder name. */
+    /**
+     * Null or "auto": the app's own first (best-ranked) encoder. Else av1, vp9, libaom-native, libvpx-vp9 (Design VX),
+     * bench-only hevc/avc, a mime, an exact encoder name. "auto", "vp9" and the VP9 mime never mean libvpx: it is named.
+     */
     val codec: String?,
     val width: Int,
     val height: Int,
@@ -78,7 +87,12 @@ internal data class EncoderBenchCaps(
     val sizeAndRateSupported: Boolean?,
     /** FEATURE_IntraRefresh; null when unknown. */
     val intraRefreshFeature: Boolean?,
-)
+    /** Design VX: the bundled libvpx VP9 encoder (native like libaom; `libaom_cpu_used`/`libaom_threads` pin it too). */
+    val nativeLibvpx: Boolean = false,
+) {
+    /** A bundled native encoder (libaom or libvpx): app rate control and governor, no MediaFormat modes. */
+    val native: Boolean get() = nativeLibaom || nativeLibvpx
+}
 
 internal data class EncoderBenchPlan(
     val refusals: List<String>,
@@ -111,6 +125,8 @@ internal data class BenchCodecCandidate(
     val mime: String,
     val nativeLibaom: Boolean,
     val benchOnly: Boolean = false,
+    /** Design VX: the bundled libvpx VP9 encoder, chosen only by name (`libvpx`, `libvpx-vp9`). */
+    val nativeLibvpx: Boolean = false,
 )
 
 internal object EncoderBenchSpec {
@@ -126,6 +142,8 @@ internal object EncoderBenchSpec {
     /** The app's own key-frame interval (VideoSettings.keyFrameIntervalSeconds), reported when none is requested. */
     const val APP_KEY_FRAME_INTERVAL_SECONDS = 60
     const val MAX_DURATION_SECONDS = 600
+    /** Design VX: libvpx's VP9 real-time speeds ([NativeVpxBridge.MIN_REALTIME_CPU_USED]..MAX). */
+    val LIBVPX_CPU_USED = 5..9
 
     /** The bench runs only in a DEBUG build and only for an explicit true. */
     fun requested(debug: Boolean, extras: Map<String, Any?>): Boolean =
@@ -212,7 +230,7 @@ internal object EncoderBenchSpec {
         val token = extras["test_bench_bitrate_mode"]
         if (token != null) {
             return (token as? String)?.let(BenchBitrateMode::fromToken) ?: run {
-                issues += "test_bench_bitrate_mode=$token is not auto|cq|vbr|cbr|cbr_fd"
+                issues += "test_bench_bitrate_mode=$token is not auto|cq|vbr|cbr|cbr_fd|encoder_default"
                 BenchBitrateMode.AUTO
             }
         }
@@ -231,16 +249,17 @@ internal object EncoderBenchSpec {
     fun resolveCodec(token: String?, candidates: List<BenchCodecCandidate>): Pair<BenchCodecCandidate?, String?> {
         val key = token?.trim()?.lowercase().orEmpty()
         val match: BenchCodecCandidate? = when (key) {
-            "", "auto" -> candidates.firstOrNull { !it.benchOnly }
+            "", "auto" -> candidates.firstOrNull { !it.benchOnly && !it.nativeLibvpx }
             "av1" -> candidates.firstOrNull { it.mime == MIME_AV1 }
-            "vp9" -> candidates.firstOrNull { it.mime == MIME_VP9 }
+            "vp9" -> candidates.firstOrNull { it.mime == MIME_VP9 && !it.nativeLibvpx }
             "hevc", "h265", "h.265" -> candidates.firstOrNull { it.mime == MIME_HEVC }
             "avc", "h264", "h.264" -> candidates.firstOrNull { it.mime == MIME_AVC }
             MIME_AV1, "video/av1" -> candidates.firstOrNull { it.mime == MIME_AV1 }
-            MIME_VP9 -> candidates.firstOrNull { it.mime == MIME_VP9 }
+            MIME_VP9 -> candidates.firstOrNull { it.mime == MIME_VP9 && !it.nativeLibvpx }
             MIME_HEVC -> candidates.firstOrNull { it.mime == MIME_HEVC }
             MIME_AVC -> candidates.firstOrNull { it.mime == MIME_AVC }
             "libaom", "libaom-native" -> candidates.firstOrNull { it.nativeLibaom }
+            "libvpx", "libvpx-vp9" -> candidates.firstOrNull { it.nativeLibvpx }
             "svt-av1", "svtav1", "svt_av1" ->
                 return null to "svt_av1_not_built: SVT-AV1 is not in this build; add it before comparing"
             else -> candidates.firstOrNull { it.encoderName.equals(token?.trim(), ignoreCase = true) }
@@ -275,18 +294,27 @@ internal object EncoderBenchSpec {
         val refusals = mutableListOf<String>()
         // HEVC/AVC: the bitrate mode is always set explicitly. Android 12+ raises an unset or VBR mode silently, so
         // Automatic means CBR here, never the encoder's own default. A CBR the encoder does not report is refused.
-        val explicitCbrDefault = !caps.nativeLibaom && isBenchOnlyMime(caps.mime) &&
+        val explicitCbrDefault = !caps.native && isBenchOnlyMime(caps.mime) &&
             request.bitrateMode == BenchBitrateMode.AUTO
         val mode = if (explicitCbrDefault) BenchBitrateMode.CBR else request.bitrateMode
         val modeName = mode.token
-        if (caps.nativeLibaom) {
-            if (mode == BenchBitrateMode.CQ) refusals += "mode_unsupported: libaom-native has no CQ mode here"
+        if (caps.native) {
+            if (mode == BenchBitrateMode.CQ) refusals += "mode_unsupported: ${caps.encoderName} has no CQ mode here"
             if (request.intraRefreshFrames != null) {
-                refusals += "intra_refresh_unsupported: libaom-native has no MediaFormat intra-refresh"
+                refusals += "intra_refresh_unsupported: ${caps.encoderName} has no MediaFormat intra-refresh"
+            }
+            val cpuUsed = request.libaomCpuUsed
+            if (caps.nativeLibvpx && cpuUsed != null && cpuUsed !in LIBVPX_CPU_USED) {
+                refusals += "libaom_cpu_used_out_of_range: ${caps.encoderName} real-time cpu-used is " +
+                    "${LIBVPX_CPU_USED.first}..${LIBVPX_CPU_USED.last}, requested $cpuUsed"
             }
         } else {
             if (request.libaomCpuUsed != null) refusals += "libaom_cpu_used_requires_libaom_native"
             if (request.libaomThreads != null) refusals += "libaom_threads_requires_libaom_native"
+            if (mode == BenchBitrateMode.ENCODER_DEFAULT && caps.supportedModes.isNotEmpty()) {
+                refusals += "mode_unsupported: encoder_default is only for an encoder that declares no bitrate mode; " +
+                    "${caps.encoderName} declares ${caps.supportedModes.sorted().joinToString(",") { modeToken(it) }}"
+            }
             val codecMode = mode.codecMode
             if (codecMode != null && codecMode !in caps.supportedModes) {
                 refusals += "mode_unsupported: ${caps.encoderName} does not report bitrate mode $modeName " +
@@ -307,9 +335,9 @@ internal object EncoderBenchSpec {
             refusals += "geometry_mismatch: fixture is ${rawGeometry.first}x${rawGeometry.second} but " +
                 "${request.width}x${request.height} was requested; the bench never rescales"
         }
-        val override = if (!caps.nativeLibaom) mode.codecMode else null
+        val override = if (!caps.native) mode.codecMode else null
         val rateControl = when (mode) {
-            BenchBitrateMode.AUTO -> EncoderRateControl.AUTOMATIC
+            BenchBitrateMode.AUTO, BenchBitrateMode.ENCODER_DEFAULT -> EncoderRateControl.AUTOMATIC
             BenchBitrateMode.VBR -> EncoderRateControl.VBR
             BenchBitrateMode.CBR_FD -> EncoderRateControl.CBR_FD
             // CQ has no EncoderRateControl; CBR is the neutral non-adjusting choice and the override sets CQ.
@@ -329,15 +357,15 @@ internal object EncoderBenchSpec {
             "fps" to request.fps.toString(),
             "bitrate_kbps" to request.bitrateKbps.toString(),
             "mode" to effectiveMode,
-            "rate_adjuster" to if (mode == BenchBitrateMode.AUTO && !caps.nativeLibaom) "app_default" else "off",
+            "rate_adjuster" to if (mode == BenchBitrateMode.AUTO && !caps.native) "app_default" else "off",
             "intra_refresh_frames" to when {
                 request.intraRefreshFrames == null -> "none"
                 caps.intraRefreshFeature == false -> "requested_feature_unsupported"
                 else -> "pending_readback"
             },
             "keyframe_s" to (request.keyFrameIntervalSeconds ?: APP_KEY_FRAME_INTERVAL_SECONDS).toString(),
-            "libaom_cpu_used" to if (caps.nativeLibaom) (request.libaomCpuUsed?.toString() ?: "app_governor") else "n/a",
-            "libaom_threads" to if (caps.nativeLibaom) (request.libaomThreads?.toString() ?: "app_default") else "n/a",
+            "libaom_cpu_used" to if (caps.native) (request.libaomCpuUsed?.toString() ?: "app_governor") else "n/a",
+            "libaom_threads" to if (caps.native) (request.libaomThreads?.toString() ?: "app_default") else "n/a",
         )
         return EncoderBenchPlan(refusals, requestedPairs(request), effective, override, rateControl)
     }

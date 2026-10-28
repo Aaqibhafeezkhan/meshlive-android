@@ -234,7 +234,7 @@ class BluetoothVideoRelay(
                 .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES),
             flags = DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS or
                 DiscoveryAnnouncement.FLAG_RELAY_CAPABLE or transport.discoveryFlag,
-            capabilitySummary = capabilities.decodeCodecMask,
+            capabilitySummary = VideoCodecMap.helloMaskToSummary(capabilities.decodeCodecMask),
             streamToken = 0,
             routeCost = 1,
             sequence = 0,

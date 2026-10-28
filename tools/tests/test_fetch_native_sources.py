@@ -84,13 +84,16 @@ class TreeManifestTest(unittest.TestCase):
 
 class PinsTest(unittest.TestCase):
     def test_pins_are_complete_and_recorded_for_releases(self):
-        aom, opus = fns.NATIVE_SOURCES["libaom"], fns.NATIVE_SOURCES["libopus"]
-        self.assertRegex(aom["commit"], r"^[0-9a-f]{40}$")
-        self.assertRegex(aom["tree_sha256"], r"^[0-9a-f]{64}$")
+        aom, vpx, opus = fns.NATIVE_SOURCES["libaom"], fns.NATIVE_SOURCES["libvpx"], fns.NATIVE_SOURCES["libopus"]
+        for git_source in (aom, vpx):
+            self.assertRegex(git_source["commit"], r"^[0-9a-f]{40}$")
+            self.assertRegex(git_source["tree_sha256"], r"^[0-9a-f]{64}$")
         self.assertRegex(opus["sha256"], r"^[0-9a-f]{64}$")
         lines = fns.native_provenance()
         self.assertIn(aom["commit"], lines[0])
-        self.assertIn(opus["sha256"], lines[1])
+        self.assertIn(vpx["commit"], lines[1])
+        self.assertIn(vpx["tree_sha256"], lines[1])
+        self.assertIn(opus["sha256"], lines[2])
         cmake = (Path(fns.ROOT) / "app/src/main/cpp/CMakeLists.txt").read_text(encoding="utf-8")
         self.assertIn(opus["sha256"], cmake)
         self.assertIn(opus["url"], cmake)

@@ -54,6 +54,11 @@ internal object DecoderLowLatencyLadder {
      * this is exactly one rung, KEY_LOW_LATENCY when [featureLowLatency] and [preferLowLatency] (the
      * behaviour before this ladder existed, including its single attempt).
      * [vendorParameters] is the component's getSupportedVendorParameters() (null: API < 31 or unread).
+     *
+     * [defaultVendorKey] is the device-policy low-latency key of this component (`qcom-decoder-vendor-low-latency`:
+     * [VENDOR_QTI] on Qualcomm decoders), used in place of KEY_LOW_LATENCY when the component does not declare
+     * FEATURE_LowLatency and [preferLowLatency] holds. It is set to 1 and, without the ladder, followed by the plain
+     * format, so a component that refuses the key still configures.
      */
     fun plan(
         componentName: String,
@@ -62,10 +67,19 @@ internal object DecoderLowLatencyLadder {
         ladder: Boolean,
         priority: Boolean,
         vendorParameters: Collection<String>?,
+        defaultVendorKey: String? = null,
     ): List<Rung> {
         val standard = linkedMapOf<String, Int>()
-        if (featureLowLatency && preferLowLatency) standard[KEY_LOW_LATENCY] = 1
-        if (!ladder && !priority) return listOf(Rung(label(standard.keys, false, false), standard))
+        if (featureLowLatency && preferLowLatency) {
+            standard[KEY_LOW_LATENCY] = 1
+        } else if (preferLowLatency && defaultVendorKey != null) {
+            standard[defaultVendorKey] = 1
+        }
+        if (!ladder && !priority) {
+            val first = Rung(label(standard.keys, false, false), standard)
+            val vendorOnly = standard.isNotEmpty() && KEY_LOW_LATENCY !in standard
+            return if (vendorOnly) listOf(first, Rung("plain", emptyMap())) else listOf(first)
+        }
 
         val vendor = linkedMapOf<String, Int>()
         if (ladder) {
@@ -90,10 +104,15 @@ internal object DecoderLowLatencyLadder {
     private fun label(keys: Set<String>, vendor: Boolean, priority: Boolean): String {
         val parts = ArrayList<String>()
         if (KEY_LOW_LATENCY in keys) parts += "low-latency"
-        if (vendor) parts += "vendor(${keys.filter { it != KEY_LOW_LATENCY && it != KEY_PRIORITY }.joinToString("+")})"
+        val vendorKeys = keys.filter { it != KEY_LOW_LATENCY && it != KEY_PRIORITY }
+        if (vendor || vendorKeys.isNotEmpty()) parts += "vendor(${vendorKeys.joinToString("+")})"
         if (priority) parts += "priority0"
         return parts.joinToString("+").ifEmpty { "plain" }
     }
+
+    /** A low-latency request (KEY_LOW_LATENCY, a known vendor key or MediaTek's format key) is in [keys]. */
+    fun requestsLowLatency(keys: Map<String, Int>): Boolean =
+        keys[KEY_LOW_LATENCY] == 1 || KNOWN_VENDOR_KEYS.any { keys[it] == 1 } || keys["vdec-lowlatency"] == 1
 
     /** Vendor parameter names worth logging as evidence of what a component offers. */
     private val INTERESTING = Regex("latency|lowlat|clearmotion|picture-order|reorder|norecord|no-record", RegexOption.IGNORE_CASE)

@@ -7,7 +7,7 @@ import java.nio.ByteOrder
 /**
  * Native libopus call codec (promoted to Settings > Features on 2026-10-11 as "Call audio with loss
  * recovery"; default [ConnectivityFeatureDefaults.NATIVE_OPUS] until the phone A/B T10; DEBUG
- * `test_call_native_opus` is the benchmark switch; docs/dev/switches.md register).
+ * `test_call_native_opus` is the benchmark switch; SWITCHES register).
  *
  * c2.android.opus hard-codes general-audio mode, no in-band FEC and no packet-loss concealment
  * (AOSP frameworks/av C2SoftOpusEnc.cpp / C2SoftOpusDec.cpp). WebRTC drives libopus with

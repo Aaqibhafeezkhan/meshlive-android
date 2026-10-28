@@ -1214,7 +1214,7 @@
       "area": "CODEC",
       "validation": "EXPERIMENTAL",
       "fallback": "",
-      "evidence": ["docs/dev/decisions/README.md row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300)", "benchmarks/runs/lane-b-burst-r1-529f36cc"],
+      "evidence": ["DECISIONS row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300)", "benchmarks/runs/lane-b-burst-r1-529f36cc"],
       "confidence": "LOW",
       "confidence_note": "",
       "reviewed": "2026-10-09",
@@ -1350,7 +1350,7 @@
       "area": "CODEC",
       "validation": "EXPERIMENTAL",
       "fallback": "Off (default): EncoderBitrateAdjuster (DynamicBitrateAdjuster port) as today.",
-      "evidence": ["docs/dev/decisions/README.md row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300: overshoot)", "benchmarks/runs/xpair-s24m31-431d40dc (M31 OMX.Exynos.VP9 720 kbps for a 401-515 kbps target)"],
+      "evidence": ["DECISIONS row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300: overshoot)", "benchmarks/runs/xpair-s24m31-431d40dc (M31 OMX.Exynos.VP9 720 kbps for a 401-515 kbps target)"],
       "confidence": "LOW",
       "confidence_note": "WebRTC scope is exact; it targets undershoot after FPS drops, while our measured M31 problem is overshoot at a fixed FPS (KEY_MAX_FPS_TO_ENCODER already caps the cadence), so the measured DynamicBitrateAdjuster port stays the default",
       "reviewed": "2026-10-10",
@@ -1498,6 +1498,65 @@
       "off_switch": "test_device_policy_off=decoder-bounded-release",
       "legacy_switches": [],
       "origin": "Family backlog D-05 (workaround list W-20, C-15); release()/stop() ran inline on the decoder worker"
+    },
+    {
+      "id": "qcom-decoder-vendor-low-latency",
+      "title": "Qualcomm decoders: vendor.qti-ext-dec-low-latency.enable=1 where KEY_LOW_LATENCY is not offered",
+      "status": "implemented",
+      "matcher": {
+        "sdk_min": 26,
+        "sdk_max": null,
+        "hardware": [],
+        "boards": [],
+        "board_prefixes": [],
+        "soc_families": [],
+        "soc_model_prefixes": [],
+        "manufacturers": [],
+        "skins": [],
+        "stack_lineages": [],
+        "controller": null,
+        "codec_component_prefixes": []
+      },
+      "matcher_text": "API >= 26; component prefix [OMX.qcom.video.decoder., c2.qti.]",
+      "component": {
+        "names": [],
+        "prefixes": ["OMX.qcom.video.decoder.", "c2.qti."]
+      },
+      "effects": ["decoder low latency via vendor.qti-ext-dec-low-latency.enable=1 (no FEATURE_LowLatency)"],
+      "behaviour": "When the receiver asks for a low-latency decoder (the default) and a Qualcomm decoder does not declare FEATURE_LowLatency, the configure format carries vendor.qti-ext-dec-low-latency.enable=1 instead of KEY_LOW_LATENCY; a configure that refuses it retries with the plain format. Logged as `decoder_low_latency: requested=... | effective=...` and judged by `decoder_hold` (input-to-output time).",
+      "sources": [
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://android.googlesource.com/platform/hardware/qcom/sm8150/media/+/refs/heads/main/mm-video-v4l2/vidc/vdec/src/omx_vdec_extensions.hpp",
+          "note": "sm8150 (msmnile) OMX decoder: ADD_EXTENSION(qti-ext-dec-low-latency, OMX_QTIIndexParamLowLatencyMode) with the Int32 parameter enable; set_vendor_extension_config copies it into bEnableLowLatencyMode and calls set_parameter(OMX_QTIIndexParamLowLatencyMode); one extension table serves every codec of omx_vdec"
+        },
+        {
+          "kind": "GOOGLE_OPEN_SOURCE",
+          "reference": "https://android.googlesource.com/platform/frameworks/av/+/refs/heads/android11-release/media/libstagefright/ACodec.cpp",
+          "note": "configureCodec(mime, msg) ends with setVendorParameters(msg): the configure format's vendor.<extension>.<param> keys reach an OMX component's Android vendor extensions (API 26+); KEY_LOW_LATENCY (low-latency) is a separate OMX config, honoured only by components that implement it"
+        },
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://cs.android.com/android/platform/superproject/+/master:hardware/qcom/sdm845/media/mm-video-v4l2/vidc/vdec/src/omx_vdec_extensions.hpp",
+          "note": "vendor.qti-ext-dec-low-latency.enable and vendor.qti-ext-dec-picture-order.enable decoder extensions"
+        },
+        {
+          "kind": "VENDOR_DOC",
+          "reference": "https://github.com/moonlight-stream/moonlight-android/blob/b48494cb96bff23d8886c4775cc4f39a1075495d/app/src/main/java/com/limelight/binding/video/MediaCodecHelper.java",
+          "note": "findKnownSafeDecoder (decoders that declare FEATURE_LowLatency first; C2 low_latency variants are listed after the standard ones), setDecoderLowLatencyOptions (options tried from the most to the least risky, first MediaFormat that configures wins) and knownVendorLowLatencyOptions"
+        }
+      ],
+      "source_status": "OFFICIAL",
+      "area": "CODEC",
+      "validation": "UPSTREAM_DOCUMENTED",
+      "fallback": "Off (`test_device_policy_off=qcom-decoder-vendor-low-latency`): the plain format, as before.",
+      "evidence": ["benchmarks/runs/codec-smoke-20261028/b-hc-smoke/hs2-stream-a15s-asus-h264 (before: ASUS OMX.qcom.video.decoder.avc, formatKeys=plain, decoder_hold p50 68-69 ms at 15 FPS, one frame held)", "Moonlight sets the key on every omx.qcom/c2.qti decoder from API 26 (MediaCodecHelper.setDecoderLowLatencyOptions)"],
+      "confidence": "MEDIUM",
+      "confidence_note": "the extension is in Qualcomm's AOSP decoder source and ACodec forwards vendor keys at configure; whether the ASUS firmware's decoder honours it is unmeasured until decoder_hold is re-read. Low-latency mode outputs in decode order, which is safe because MeshLive streams carry no B-frames",
+      "reviewed": "2026-10-28",
+      "off_switch": "test_device_policy_off=qcom-decoder-vendor-low-latency",
+      "legacy_switches": [],
+      "origin": "Block 1 codec smoke (2026-10-28): the ASUS AVC decoder ran without low latency and held one frame"
     },
     {
       "id": "decoder-stall-recovery-arm",
@@ -7756,7 +7815,7 @@
       "area": "CODEC",
       "validation": "EXPERIMENTAL",
       "fallback": "No vendor keys; the bitrate adjuster path alone, as before.",
-      "evidence": ["benchmarks/runs/lane-b-burst-r1-529f36cc", "docs/dev/decisions/README.md row 73f517c5 -> b5ebe110"],
+      "evidence": ["benchmarks/runs/lane-b-burst-r1-529f36cc", "DECISIONS row 73f517c5 -> b5ebe110"],
       "confidence": "LOW",
       "confidence_note": "HIGH that the keys exist in the Lineage-published vendor source; MEDIUM that retail firmware behaves alike; the effect on the M31 is unmeasured",
       "reviewed": "2026-10-14",

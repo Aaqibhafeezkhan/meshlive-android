@@ -24,11 +24,23 @@ data class NodeCapabilities(
         const val TRANSPORT_BLE_GATT = 1 shl 2
         const val CODEC_VP9 = 1
         const val CODEC_AV1 = 1 shl 1
+        /** H.264 (Design HC): set only while the `h264_codec` master is on. Summary bit 2 ([VideoCodecMap]). */
+        const val CODEC_H264 = 1 shl 2
+        /** HEVC (Design HC): set only while the `hevc_codec` master is on. Summary bit 7, not 3 ([VideoCodecMap]). */
+        const val CODEC_HEVC = 1 shl 3
+
+        /**
+         * Decode-mask bit 4, end-to-end call hellos only (Design HC): "my AV1 decoding is software". Like
+         * [DECODE_PREFERS_VP9] it is not a codec, link hellos never carry it, and codec tests ignore it. Sent only
+         * while a Design HC master is on.
+         */
+        const val DECODE_AV1_SOFTWARE = 1 shl 4
 
         /**
          * Decode-mask bit 7, end-to-end call hellos only: "decode VP9 when you can encode it; the
-         * other codecs listed are decodable fallbacks" (privateCallEndpointDecodeMask). It is not a
-         * codec, so codec tests (mask and codec bit) ignore it; link hellos never carry it.
+         * other codecs listed are decodable fallbacks" (privateCallEndpointDecodeMask). With Design HC
+         * on, a sender's hardware HEVC encoder the peer decodes still goes first (VideoCodecChoice.forCall).
+         * It is not a codec, so codec tests (mask and codec bit) ignore it; link hellos never carry it.
          */
         const val DECODE_PREFERS_VP9 = 1 shl 7
     }

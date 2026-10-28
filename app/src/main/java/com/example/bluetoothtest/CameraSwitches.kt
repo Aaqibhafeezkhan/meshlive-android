@@ -6,7 +6,7 @@ import android.content.Intent
  * Switches of the camera and encoder configuration batch (device-family backlog batch V). Every arm
  * here is Experimental and DEFAULT OFF; every setter ignores `true` outside DEBUG builds, like
  * [AudioLiveTunables], because a launch extra from another app must not change a release build.
- * The register of switches is docs/dev/switches.md ("Experimental, alternative and optional behaviour").
+ * The register of switches is SWITCHES ("Experimental, alternative and optional behaviour").
  *
  * Defaults that are ON (diagnostics, after-failure fallbacks) are not switches: they are turned off
  * per policy entry with `test_device_policy_off=<id>` (see [CameraPolicy.entries]).

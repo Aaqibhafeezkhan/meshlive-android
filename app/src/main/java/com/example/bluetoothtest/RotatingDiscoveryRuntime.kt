@@ -98,7 +98,7 @@ object RotatingDiscovery {
             }
             // Security review 2026-10-27, item 8: a contact blocked while rotating IDs were off (the vault did not exist)
             // loses the lease it holds now, as a block made while they were on does.
-            // Kept pending until both the vault and the block list can be read (reviewer review finding 5).
+            // Kept pending until both the vault and the block list can be read (review finding 5).
             runCatching {
                 activeVault?.requestBlockedReconcile {
                     if (BlockedPeople.isUnreadable(app)) null else BlockedPeople.list(app).map { it.fingerprint.nodeId }.toSet()

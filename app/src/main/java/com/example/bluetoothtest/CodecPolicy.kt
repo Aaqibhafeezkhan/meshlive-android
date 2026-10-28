@@ -121,7 +121,7 @@ internal object CodecPolicy {
         sources = listOf(WEBRTC_ADJUSTER_CHOICE, WEBRTC_FRAMERATE_ADJUSTER),
         sourceStatus = PARTIAL,
         evidence = listOf(
-            "docs/dev/decisions/README.md row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300: overshoot)",
+            "DECISIONS row 73f517c5 -> b5ebe110 (OMX.Exynos.VP9 291-481 kbps for 300: overshoot)",
             "benchmarks/runs/xpair-s24m31-431d40dc (M31 OMX.Exynos.VP9 720 kbps for a 401-515 kbps target)",
         ),
         confidence = LOW,
@@ -222,6 +222,17 @@ internal object CodecPolicy {
     fun releaseInsteadOfFlush(decoderName: String, traits: DeviceTraits? = null): Boolean =
         decoderName.contains(".decoder", ignoreCase = true) &&
             DeviceFamilyPolicy.componentEffects<ReleaseCodecInsteadOfFlush>(decoderName, traits).isNotEmpty()
+
+    /**
+     * The vendor low-latency format key for [decoderName] when it does not declare FEATURE_LowLatency
+     * (`qcom-decoder-vendor-low-latency`), else null. Decoder components only.
+     */
+    fun vendorLowLatencyKey(decoderName: String, traits: DeviceTraits? = null): String? =
+        if (!decoderName.contains("decoder", ignoreCase = true)) {
+            null
+        } else {
+            DeviceFamilyPolicy.componentEffects<VendorDecoderLowLatencyKey>(decoderName, traits).firstOrNull()?.key
+        }
 
     /** `decoder-no-output-watchdog` on (default): stalls are logged; recovery is [DecoderSwitches.stallRecovery]. */
     fun stallWatchdogEnabled(traits: DeviceTraits? = null): Boolean = effectsFor<DecoderStallWatchdog>(traits).isNotEmpty()

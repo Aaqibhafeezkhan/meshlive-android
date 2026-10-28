@@ -494,7 +494,7 @@ internal object CameraPolicy {
             "recommendation). Encoder-dropped frames (drop control default On) are not transport loss.",
         sources = listOf(EXYNOS_QP_RANGE, VENDOR_PARAMETERS_DOC, CDD_DYNAMIC_BITRATE),
         sourceStatus = PARTIAL,
-        evidence = listOf("benchmarks/runs/lane-b-burst-r1-529f36cc", "docs/dev/decisions/README.md row 73f517c5 -> b5ebe110"),
+        evidence = listOf("benchmarks/runs/lane-b-burst-r1-529f36cc", "DECISIONS row 73f517c5 -> b5ebe110"),
         confidence = LOW,
         confidenceNote = "HIGH that the keys exist in the Lineage-published vendor source; MEDIUM that retail firmware behaves " +
             "alike; the effect on the M31 is unmeasured",

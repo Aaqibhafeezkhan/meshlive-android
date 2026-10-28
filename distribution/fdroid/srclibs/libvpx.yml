@@ -1,0 +1,5 @@
+# Reference copy of fdroiddata's existing srclibs/libvpx.yml (same Repo; do not submit a new one).
+# MeshLive pins libvpx by commit in the Builds entry (srclibs: libvpx@<commit>): the commit of the v1.17.0 release tag.
+# tools/fetch_native_sources.py verifies the same commit plus a SHA-256 manifest of the tree.
+RepoType: git
+Repo: https://chromium.googlesource.com/webm/libvpx

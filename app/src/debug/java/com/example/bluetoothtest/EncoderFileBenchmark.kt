@@ -37,6 +37,8 @@ data class EncoderFileBenchmarkSpec(
     val keyFrameIntervalSeconds: Int,
     val nativeTuning: NativeAomTuning = NativeAomTuning.DEFAULT,
     val nativeThreads: Int? = null,
+    /** Design VX: the libvpx arm's tuning (`benchmark_codec=libvpx`). */
+    val vpxTuning: NativeVpxTuning = NativeVpxTuning.DEFAULT,
 )
 
 object EncoderFileBenchmark {
@@ -44,12 +46,18 @@ object EncoderFileBenchmark {
         if (spec.codec.equals("native_av1", ignoreCase = true) ||
             spec.codec.equals("libaom", ignoreCase = true)
         ) {
-            return runNativeAom(context, spec)
+            return runNative(context, spec, vpx = false)
+        }
+        // Design VX: the bundled libvpx VP9 encoder, same file/trace format as the libaom arm (IVF "VP90").
+        if (spec.codec.lowercase() in setOf("libvpx", "libvpx-vp9", "native_vp9")) {
+            return runNative(context, spec, vpx = true)
         }
         spec.outputDirectory.mkdirs()
         val safeCaseName = spec.caseName.replace(Regex("[^A-Za-z0-9_.-]"), "_")
         val resultFile = File(spec.outputDirectory, "$safeCaseName-result.json")
-        val outputFile = File(spec.outputDirectory, "$safeCaseName.ivf")
+        // Design HC quality per bit: H.264/HEVC are written as a raw Annex B elementary stream (config included).
+        val annexB = spec.codec.lowercase() in setOf("avc", "h264", "hevc", "h265")
+        val outputFile = File(spec.outputDirectory, "$safeCaseName.${encodedFileExtension(spec.codec)}")
         val frameTraceFile = File(spec.outputDirectory, "$safeCaseName-frames.csv")
         outputFile.delete()
         resultFile.delete()
@@ -72,6 +80,8 @@ object EncoderFileBenchmark {
             val mime = when (spec.codec.lowercase()) {
                 "av1" -> MediaFormat.MIMETYPE_VIDEO_AV1
                 "vp9" -> MediaFormat.MIMETYPE_VIDEO_VP9
+                "avc", "h264" -> MediaFormat.MIMETYPE_VIDEO_AVC
+                "hevc", "h265" -> MediaFormat.MIMETYPE_VIDEO_HEVC
                 else -> error("Unsupported benchmark codec ${spec.codec}")
             }
             val codecInfo = selectEncoder(mime, spec.codecName)
@@ -91,9 +101,11 @@ object EncoderFileBenchmark {
                 "cbr" -> MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
                 "vbr" -> MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
                 "cbr_fd", "cbr-fd" -> MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD
-                else -> error("Rate mode must be cbr, vbr, or cbr_fd")
+                // Design HC: no KEY_BITRATE_MODE, the product's path for an encoder that declares no mode.
+                "default" -> null
+                else -> error("Rate mode must be cbr, vbr, cbr_fd or default")
             }
-            require(encoderCapabilities.isBitrateModeSupported(bitrateMode)) {
+            require(bitrateMode == null || encoderCapabilities.isBitrateModeSupported(bitrateMode)) {
                 "${codecInfo.name} does not support ${spec.rateMode.uppercase()}"
             }
 
@@ -122,8 +134,18 @@ object EncoderFileBenchmark {
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, spec.keyFrameIntervalSeconds)
                 setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
                 setInteger(MediaFormat.KEY_PRIORITY, 0)
-                setInteger(MediaFormat.KEY_BITRATE_MODE, bitrateMode)
+                bitrateMode?.let { setInteger(MediaFormat.KEY_BITRATE_MODE, it) }
                 if (spec.complexity >= 0) setInteger(MediaFormat.KEY_COMPLEXITY, spec.complexity)
+                if (annexB) {
+                    // The product's HC profile choice (HEVC Main; H.264 High, Main, Constrained Baseline, Baseline).
+                    val protocolId = if (mime == MediaFormat.MIMETYPE_VIDEO_HEVC) StreamProtocol.CODEC_HEVC else StreamProtocol.CODEC_H264
+                    HcEncoderEligibility.profileFor(protocolId, capabilities.profileLevels.map { it.profile to it.level })?.let { (profile, level) ->
+                        setInteger(MediaFormat.KEY_PROFILE, profile)
+                        setInteger(MediaFormat.KEY_LEVEL, level)
+                        result.put("profile", profile)
+                        result.put("level", level)
+                    }
+                }
                 if (encodingStatisticsEnabled) {
                     setInteger(
                         MediaFormat.KEY_VIDEO_ENCODING_STATISTICS_LEVEL,
@@ -143,6 +165,7 @@ object EncoderFileBenchmark {
                     spec.width,
                     spec.height,
                     spec.fps,
+                    annexB = annexB,
                 )
                 val measurement = frameTraceFile.bufferedWriter().use { frameTrace ->
                     encode(codec, writer, frameTrace, spec, frameSize, encodingStatisticsEnabled)
@@ -193,7 +216,7 @@ object EncoderFileBenchmark {
         return resultFile
     }
 
-    private fun runNativeAom(context: Context, spec: EncoderFileBenchmarkSpec): File {
+    private fun runNative(context: Context, spec: EncoderFileBenchmarkSpec, vpx: Boolean): File {
         spec.outputDirectory.mkdirs()
         val safeCaseName = spec.caseName.replace(Regex("[^A-Za-z0-9_.-]"), "_")
         val resultFile = File(spec.outputDirectory, "$safeCaseName-result.json")
@@ -204,9 +227,15 @@ object EncoderFileBenchmark {
         frameTraceFile.delete()
         val result = JSONObject().apply {
             put("case", safeCaseName)
-            put("codec", "native_av1")
-            put("encoder_name", "libaom-native")
-            put("libaom_version", NativeAomBridge.nativeVersion())
+            if (vpx) {
+                put("codec", "native_vp9")
+                put("encoder_name", VideoCodec.LIBVPX_ENCODER_NAME)
+                put("libvpx_version", NativeVpxBridge.nativeVersion())
+            } else {
+                put("codec", "native_av1")
+                put("encoder_name", "libaom-native")
+                put("libaom_version", NativeAomBridge.nativeVersion())
+            }
             put("width", spec.width)
             put("height", spec.height)
             put("fps", spec.fps)
@@ -215,16 +244,23 @@ object EncoderFileBenchmark {
             put("cpu_used", spec.complexity)
             put("rate_mode", spec.rateMode)
             put("keyframe_interval_seconds", spec.keyFrameIntervalSeconds)
-            put("quality_mode", spec.nativeTuning.qualityMode)
-            put("lag_frames", spec.nativeTuning.lagFrames)
-            put("aq_mode", spec.nativeTuning.aqMode)
-            put("tune_ssim", spec.nativeTuning.tuneSsim)
-            put("noise_sensitivity", spec.nativeTuning.noiseSensitivity)
-            put("max_quantizer", spec.nativeTuning.maxQuantizer)
-            put("rate_buffer_ms", spec.nativeTuning.rateBufferMs)
-            put("enable_cdef", spec.nativeTuning.enableCdef)
-            put("max_reference_frames", spec.nativeTuning.maxReferenceFrames)
-            put("realtime_tool_profile", spec.nativeTuning.realtimeToolProfile)
+            if (vpx) {
+                put("error_resilient", spec.vpxTuning.errorResilient)
+                put("aq_mode", spec.vpxTuning.aqMode)
+                put("max_quantizer", spec.vpxTuning.maxQuantizer)
+                put("rate_buffer_ms", spec.vpxTuning.rateBufferMs)
+            } else {
+                put("quality_mode", spec.nativeTuning.qualityMode)
+                put("lag_frames", spec.nativeTuning.lagFrames)
+                put("aq_mode", spec.nativeTuning.aqMode)
+                put("tune_ssim", spec.nativeTuning.tuneSsim)
+                put("noise_sensitivity", spec.nativeTuning.noiseSensitivity)
+                put("max_quantizer", spec.nativeTuning.maxQuantizer)
+                put("rate_buffer_ms", spec.nativeTuning.rateBufferMs)
+                put("enable_cdef", spec.nativeTuning.enableCdef)
+                put("max_reference_frames", spec.nativeTuning.maxReferenceFrames)
+                put("realtime_tool_profile", spec.nativeTuning.realtimeToolProfile)
+            }
             put("threads", spec.nativeThreads ?: nativeBenchmarkThreads(spec.width, spec.height))
             put("thermal_status_before", thermalStatus(context))
             put("battery_temperature_c_before", batteryTemperatureC(context))
@@ -232,8 +268,9 @@ object EncoderFileBenchmark {
         try {
             require(spec.width > 0 && spec.height > 0 && spec.width % 2 == 0 && spec.height % 2 == 0)
             require(spec.fps > 0 && spec.frames > 0 && spec.bitrateKbps > 0)
-            require(spec.complexity in 4..10) {
-                "Native libaom experiment uses cpu-used 4..10; received ${spec.complexity}"
+            val cpuRange = if (vpx) NativeVpxBridge.MIN_REALTIME_CPU_USED..NativeVpxBridge.MAX_REALTIME_CPU_USED else 4..10
+            require(spec.complexity in cpuRange) {
+                "Native ${if (vpx) "libvpx" else "libaom"} experiment uses cpu-used $cpuRange; received ${spec.complexity}"
             }
             val rateMode = spec.rateMode.lowercase()
             require(rateMode in setOf("cbr", "vbr", "cbr_fd", "cbr-fd")) {
@@ -257,18 +294,28 @@ object EncoderFileBenchmark {
             var outputFrames = 0
             val startedNs = System.nanoTime()
             val startedCpuMs = android.os.Process.getElapsedCpuTime()
-            IvfWriter(outputFile, "AV01", spec.width, spec.height, spec.fps).use { writer ->
+            val threads = spec.nativeThreads ?: nativeBenchmarkThreads(spec.width, spec.height)
+            val dropFrames = rateMode == "cbr_fd" || rateMode == "cbr-fd"
+            val nativeEncoder: NativeVideoEncoder = if (vpx) {
+                NativeVpxEncoder(
+                    spec.width, spec.height, spec.fps, spec.bitrateKbps * 1_000, spec.complexity, threads,
+                    variableBitrate = rateMode == "vbr", dropFrames = dropFrames, tuning = spec.vpxTuning,
+                )
+            } else {
                 NativeAomEncoder(
                     spec.width,
                     spec.height,
                     spec.fps,
                     spec.bitrateKbps * 1_000,
                     spec.complexity,
-                    spec.nativeThreads ?: nativeBenchmarkThreads(spec.width, spec.height),
+                    threads,
                     variableBitrate = rateMode == "vbr",
-                    dropFrames = rateMode == "cbr_fd" || rateMode == "cbr-fd",
+                    dropFrames = dropFrames,
                     tuning = spec.nativeTuning,
-                ).use { encoder ->
+                )
+            }
+            IvfWriter(outputFile, if (vpx) "VP90" else "AV01", spec.width, spec.height, spec.fps).use { writer ->
+                nativeEncoder.use { encoder ->
                     frameTraceFile.bufferedWriter().use { trace ->
                         trace.appendLine(
                             "frame_id,pts_us,frame_type,qp,bytes,encode_ms,requested_bitrate," +
@@ -324,6 +371,7 @@ object EncoderFileBenchmark {
                                     directInput,
                                     ptsUs,
                                     frameIndex == 0 || frameIndex % keyInterval == 0,
+                                    -1,
                                 )
                                 val encodeMs = (System.nanoTime() - startedFrameNs) / 1_000_000.0
                                 recordPackets(packets, encodeMs)
@@ -483,6 +531,13 @@ object EncoderFileBenchmark {
                     if (outputIndex < 0) break
                     try {
                         val isConfig = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+                        if (info.size > 0 && isConfig) {
+                            codec.getOutputBuffer(outputIndex)?.let { buffer ->
+                                buffer.position(info.offset)
+                                buffer.limit(info.offset + info.size)
+                                writer.writeConfig(ByteArray(info.size).also { buffer.get(it) })
+                            }
+                        }
                         if (info.size > 0 && !isConfig) {
                             val outputBuffer = codec.getOutputBuffer(outputIndex)
                                 ?: error("${codec.name} returned an empty output buffer")
@@ -622,18 +677,36 @@ object EncoderFileBenchmark {
         return battery?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0)?.div(10.0) ?: 0.0
     }
 
+    /** The pulled file's extension: `ivf` for VP9/AV1, `h264` / `hevc` (raw Annex B) for Design HC codecs. */
+    fun encodedFileExtension(codec: String): String = when (codec.lowercase()) {
+        "avc", "h264" -> "h264"
+        "hevc", "h265" -> "hevc"
+        else -> "ivf"
+    }
+
+    /** IVF for VP9/AV1; with [annexB] a raw Annex B elementary stream (codec config, then every access unit). */
     private class IvfWriter(
         file: File,
         fourCc: String,
         width: Int,
         height: Int,
         fps: Int,
+        private val annexB: Boolean = false,
     ) : AutoCloseable {
         private val output = RandomAccessFile(file, "rw")
         private var frames = 0
 
+        /** Codec-config output (SPS/PPS, VPS): kept in the Annex B stream, never in IVF (as before). */
+        fun writeConfig(payload: ByteArray) {
+            if (annexB) output.write(payload)
+        }
+
         init {
             output.setLength(0)
+            if (!annexB) writeIvfHeader(fourCc, width, height, fps)
+        }
+
+        private fun writeIvfHeader(fourCc: String, width: Int, height: Int, fps: Int) {
             output.write("DKIF".toByteArray(Charsets.US_ASCII))
             writeShortLe(0)
             writeShortLe(32)
@@ -647,15 +720,19 @@ object EncoderFileBenchmark {
         }
 
         fun writeFrame(payload: ByteArray, timestamp: Long) {
-            writeIntLe(payload.size)
-            writeLongLe(timestamp)
+            if (!annexB) {
+                writeIntLe(payload.size)
+                writeLongLe(timestamp)
+            }
             output.write(payload)
             frames++
         }
 
         override fun close() {
-            output.seek(24)
-            writeIntLe(frames)
+            if (!annexB) {
+                output.seek(24)
+                writeIntLe(frames)
+            }
             output.close()
         }
 

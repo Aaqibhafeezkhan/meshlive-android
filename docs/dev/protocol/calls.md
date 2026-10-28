@@ -53,7 +53,7 @@ Existing Android peers, and peers with the experiment off, already accept Camera
 
 ### Call codec preference bit
 
-In an end-to-end call hello, decode-mask bit 7 (`0x80`) means "decode VP9 when you can encode it; the other listed codecs are decodable fallbacks". A legacy Qualcomm phone (API 32 or older) sets it, with its real decoders, instead of advertising VP9 only. A sender that has a VP9 encoder sends VP9; one that has none sends another listed codec. The bit is not a codec: codec tests ignore it, link hellos never carry it, and relays copy the end-to-end hello unchanged, so direct and relayed calls decide alike. The control arm `test_call_codec_fallback=false` advertises VP9 only, as before.
+In an end-to-end call hello, decode-mask bit 7 (`0x80`) means "decode VP9 when you can encode it; the other listed codecs are decodable fallbacks". A legacy Qualcomm phone (API 32 or older) sets it, with its real decoders, instead of advertising VP9 only. A sender that has a VP9 encoder sends VP9; one that has none sends another listed codec. With HEVC on (Design HC), a sender's hardware HEVC encoder still goes before VP9 when the peer lists HEVC decode. The bit is not a codec: codec tests ignore it, link hellos never carry it, and relays copy the end-to-end hello unchanged, so direct and relayed calls decide alike. The control arm `test_call_codec_fallback=false` advertises VP9 only, as before.
 
 ### Experimental call video fragments (off by default)
 

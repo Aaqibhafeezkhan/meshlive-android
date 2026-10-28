@@ -196,6 +196,7 @@ Camera2 preview surface ----> MediaCodec hardware encoder (VP9 or AV1), surface 
 Camera2 -> SurfaceTexture -> GL ----> MediaCodec hardware encoder, surface input   [experimental GPU scale ladder]
 Camera2 ImageReader (YUV) --> MediaCodec byte-buffer input   (software/compatibility encoders)
                           \-> libaom "optimized software AV1" (JNI, CBR / VBR / CBR with frame dropping)
+                          \-> libvpx "optimized software VP9" (JNI, same modes; Design VX)
 Microphone -----------------> Opus (MediaCodec, mono 48 kHz, 32 kbps)  [experimental: native libopus for calls]
         |
         v
@@ -210,7 +211,10 @@ Microphone -----------------> Opus (MediaCodec, mono 48 kHz, 32 kbps)  [experime
   and are never confused with each other.
 - **Encoders.** The app lists what the phone offers: hardware MediaCodec encoders first, then AV1 before VP9 when
   both exist, surface input before byte-buffer input, then the optimized software AV1 encoder (libaom, always built
-  in). The selection is shown to the user and never changed silently. Encoder-specific workarounds (for example
+  in), then the optimized software VP9 encoder (libvpx, always built in; Design VX). libvpx is a manual choice unless
+  the `prefer_libvpx` switch is on (on since 0.4.2, SWITCHES), which places it after the hardware AV1, HEVC and VP9
+  encoders and before hardware H.264 and libaom, for calls and streams alike. With battery saver on or a warm phone
+  at session start, `codec_power_aware` moves the hardware encoders ahead of a software first choice (`CodecPowerAware`). The selection is shown to the user and never changed silently. Encoder-specific workarounds (for example
   quantizer bounds that OMX encoders ignore, or an OMX VP9 encoder that overshoots its target rate) are policy
   entries or experimental arms listed below.
 - **Rate.** The user picks a requested rate (100-1500 kbps in 25 kbps steps; the picker maximum comes from this
@@ -670,7 +674,7 @@ For maintainers and packagers. Users: see [Install, update and verify](../user-g
   them. F-Droid normally signs its repository build unless reproducible developer-signed publication is
   configured. Same package, compatible signer/lineage, versionCode and configuration remain necessary.
   No flavour embeds a build time; `tools/check_reproducible_build.py` defaults to F-Droid.
-- **Deterministic version.** `versionName`/`versionCode` are literals (no date or git hash). The APK carries no Google dependency-info block (`dependenciesInfo` off). **Reproducible builds.** `python -B tools/check_reproducible_build.py build --tree-a DIR_A --tree-b DIR_B -- -PsplitAbis=true -PenableArmeabiV7a=true -PuniversalApk=false` builds the unsigned release (release key never read; build cache off; sequential; refuses to start when memory use is high) in two clean checkouts at different paths and compares every APK entry; `compare A.apk B.apk` compares two existing APKs ignoring the META-INF signature files, as F-Droid does. Result 2026-10-11 (AGP 8.13.2, Gradle 8.13, JDK 21, Windows): both ABIs bit-identical in two checkouts at different paths. The first run differed only in `libbluetooth_video_native.so`, because libopus `__FILE__`/assert strings embedded the checkout path; `app/src/main/cpp/CMakeLists.txt` now maps the libopus, libaom, app-source and build directories with `-ffile-prefix-map`. Not yet verified: a Linux build (the F-Droid buildserver, JDK 17, Linux NDK) against a Windows build, and the signed APK; so F-Droid still signs its own build and `Binaries` stays commented out in the recipe. A release signed with our key must be re-checked with `compare` against the F-Droid-built APK before enabling it.
+- **Deterministic version.** `versionName`/`versionCode` are literals (no date or git hash). The APK carries no Google dependency-info block (`dependenciesInfo` off). **Reproducible builds.** `python -B tools/check_reproducible_build.py build --tree-a DIR_A --tree-b DIR_B -- -PsplitAbis=true -PenableArmeabiV7a=true -PuniversalApk=false` builds the unsigned release (release key never read; build cache off; sequential; refuses to start when memory use is high) in two clean checkouts at different paths and compares every APK entry; `compare A.apk B.apk` compares two existing APKs ignoring the META-INF signature files, as F-Droid does. Result 2026-10-11 (AGP 8.13.2, Gradle 8.13, JDK 21, Windows): both ABIs bit-identical in two checkouts at different paths. The first run differed only in `libbluetooth_video_native.so`, because libopus `__FILE__`/assert strings embedded the checkout path; `app/src/main/cpp/CMakeLists.txt` now maps the libopus, libaom, app-source and build directories with `-ffile-prefix-map`. Result 2026-10-28 (AGP 9.4.1, Gradle 9.6.0, Windows): an unsigned rebuild of the public `v0.4.1-beta` tag in a fresh clone against the signed 0.4.1-beta APKs had identical native libraries, resources, zip order and zip metadata, and `apksigcopier compare` still failed for three reasons: the release was built from the private tree, whose Kotlin string constants the public export rewrites (`classes.dex`); `BuildConfig.VERSION_CODE` in `classes.dex` is the code of the variant's main output (the universal APK when it is built, otherwise armeabi-v7a), so the gradle properties must be equal; and AGP 9 wrote `META-INF/version-control-info.textproto` (the commit in a git clone, `NO_VALID_GIT_FOUND` in a worktree), now off with `vcsInfo.include = false` in the release build type. The F-Droid recipe therefore names separate fdroid-flavour assets (`MeshLive-<version>-fdroid-<abi>.apk`) in per-ABI `binary` lines with `AllowedAPKSigningKeys`; they must be built from the public tag with the recipe's gradle properties. Not yet verified: a Linux build (the F-Droid buildserver, Linux NDK) against a Windows build.
 - **Making a release.** `python tools/make_release.py` (clean tree, signing key present, fingerprint must match) writes `release/<versionName>-<versionCode>/`: the signed APKs, `SHA256SUMS`, `signing-cert.sha256`, `apksigner-certs.txt`, `SOURCE-MANIFEST.txt` and a `RELEASE-NOTES.md` template to finish by hand. Nothing is uploaded. The checklist is in [testing.md](testing.md) under "Release checklist".
 - **Application ID.** The app name is MeshLive and the application ID is `io.github.meshlive.app` (the draft
   F-Droid metadata is `distribution/fdroid/io.github.meshlive.app.yml`). The benchmark harness uses the same ID;
@@ -679,13 +683,13 @@ For maintainers and packagers. Users: see [Install, update and verify](../user-g
   new ID is a different app to Android: installs of the old ID are not updated, and the signing key stays the same.
   For a later name change edit `app_name` in `app/src/main/res/values/strings.xml`, `RELEASE_BASENAME` in
   `tools/make_release.py` and `fastlane/metadata/android/en-US/title.txt`.
-- **Native sources for a clean checkout.** libaom and libopus are not in Git: `python tools/fetch_native_sources.py`
-  downloads the pinned versions (see the README, "Build from source"). Needs NDK 28.2.13676358, CMake
+- **Native sources for a clean checkout.** libaom, libvpx and libopus are not in Git: `python tools/fetch_native_sources.py`
+  downloads the pinned versions (libvpx's generated build configuration is in Git, `tools/generate_libvpx_config.py`) (see the README, "Build from source"). Needs NDK 28.2.13676358, CMake
   3.22.1, JDK 21 and Perl.
 - **Dependency licences.** [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md), "Runtime dependency licences". All
-  Apache-2.0 except libaom (BSD-2-Clause plus the AOM patent licence) and libopus (BSD-3-Clause); nothing
-  proprietary.
-- **Open items before an F-Droid request.** public repository and tag; a final non-`com.example` application id; real screenshots; run the split-APK recipe through `fdroid build` on a buildserver image (`fdroid readmeta`/`lint` of the draft pass with fdroidserver 2.4.5; the srclib `distribution/fdroid/srclibs/libaom.yml` goes to fdroiddata too) and cut a release built with AGP 8.13.2 or newer (v0.1.0-beta used 8.13.0-rc01), then point the recipe's `commit` at that tag.
+  Apache-2.0 except libaom (BSD-2-Clause plus the AOM patent licence), libvpx (BSD-3-Clause plus the WebM patent
+  grant) and libopus (BSD-3-Clause); nothing proprietary.
+- **Open items before an F-Droid request.** Attach fdroid-flavour signed APKs built from the public tag to the release (or drop the recipe's `binary` and `AllowedAPKSigningKeys` lines so F-Droid signs its own build), and run the recipe through `fdroid build` on Linux (the fdroiddata merge request's CI does this). `fdroid readmeta`, `lint`, `rewritemeta` and the source scanner pass with fdroidserver 2.4.5; the srclib `distribution/fdroid/srclibs/libaom.yml` goes to fdroiddata too (fdroiddata already has `libvpx` and `opus` srclibs).
 
 ### Diagnostics block (contract for "Export diagnostics")
 

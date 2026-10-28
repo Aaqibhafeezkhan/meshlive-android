@@ -94,7 +94,7 @@ class AutomaticEncoderChoiceTest {
             bothDecoders or NodeCapabilities.DECODE_PREFERS_VP9,
         )
         assertEquals(hardwareVp9, sent)
-        assertEquals(EncoderChoiceReason.PEER_NO_AV1_DECODE, reason)
+        assertEquals(EncoderChoiceReason.PEER_PREFERS_VP9, reason)
     }
 
     @Test

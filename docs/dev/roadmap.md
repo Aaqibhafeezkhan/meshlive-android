@@ -2,7 +2,17 @@
 
 For contributors: what is unfinished. Current behaviour lives in the owning document (see the [README](../../README.md#documentation)); when an item is finished its description moves there and the item is removed here. Measured reasons for existing policies, the full design texts and the longer plan notes are in [decisions](decisions/README.md).
 
-Two labels are used:
+Every item has one of three status levels, used throughout this page:
+
+- **Built**: in a released version of the app (an item that is off by default says so).
+- **Designed**: written down and reviewed, not built yet.
+- **Idea**: a direction only, not designed and not built.
+
+**Today's limits.** In our measurements a Bluetooth link between two phones carries roughly 150-900 kbps. That is
+enough for voice and for small video at about 15 frames per second, but not for group video. Group calls are designed
+only, not built. Wi-Fi (Wi-Fi Aware / Wi-Fi Direct) is the next transport; it is designed, not built.
+
+Two more labels are used:
 
 - **Design review required**: the item changes the protocol, the security model or what a phone reveals over the air. It needs a written design in PROTOCOL.md and an independent review before code ships, and it ships behind a default-off flag (see the register in [switches.md](switches.md)).
 - **Experimental**: coded behind a default-off switch and not yet validated on phones.
@@ -15,18 +25,20 @@ Nothing here is a promise or a schedule. Contributions are welcome on any item; 
 | --- | --- | --- | --- |
 | 1 | Open defects in shipped behaviour | Open | No |
 | 2 | Policy work: fewer fixed limits | In progress | No |
-| 3 | Discovery privacy (rotating IDs) | Coded; on by default since 0.2.0-beta | Yes |
-| 4 | Intercom core and product direction | Partly coded, Experimental | Parts |
-| 5 | Design A: store-and-forward messages | v1 coded, JVM-tested only | Yes |
-| 6 | Design B: group calls | Design only | Yes |
-| 7 | Design C: relayed private calls | First slice coded, Experimental | Yes |
-| 8 | Design D: dual listening | Coded, Experimental | Yes |
-| 9 | Design E: uniform adverts | Design only | Yes |
-| 10 | Design F: BMH3 handshake and pseudonyms | Coded; on by default since 0.2.0-beta | Yes |
+| 3 | Discovery privacy (rotating IDs) | Built; on by default since 0.2.0-beta | Yes |
+| 4 | Intercom core and product direction | Partly built, off by default (Experimental) | Parts |
+| 5 | Design A: store-and-forward messages | Built (v1), off by default; JVM-tested only | Yes |
+| 6 | Design B: group calls | Designed, not built | Yes |
+| 7 | Design C: relayed private calls | Built (first slice), off by default: Settings > Experiments "Relayed calls (beta)" | Yes |
+| 8 | Design D: dual listening | Built, off by default (Experimental): Settings > Advanced "Listen on both links" | Yes |
+| 9 | Design E: uniform adverts | Designed, not built | Yes |
+| 10 | Design F: BMH3 handshake and pseudonyms | Built; on by default since 0.2.0-beta | Yes |
 | 11 | Bluetooth headsets | Deliberately excluded; open question | No |
 | 12 | Distribution and field reports | In progress | No |
-| 13 | iPhone interoperability | Compact discovery coded, Experimental | Yes |
-| 14 | Wi-Fi Direct / Aware bearer | Not started | Yes |
+| 13 | iPhone interoperability | Built: compact discovery ("Find iPhones") on by default since 0.3.0-beta | Yes |
+| 14 | Wi-Fi Direct / Aware bearer | Designed and reviewed (Design WF, 2026-10-27); implementation next | Yes |
+| - | Video codecs: HEVC and hardware H.264 (Design HC), built-in VP9 encoder (Design VX) | Built; on since 0.4.2-beta | Yes |
+| - | Hide phone name | Built; on by default since 0.4.1-beta | No |
 | 15 | Measurement adapters still missing | Open | No |
 | 16 | Platform and product work | Open | Parts |
 
@@ -69,7 +81,8 @@ The full design texts are in [decisions](decisions/README.md), "Design records".
 - **Design F: BMH3 handshake and pseudonyms (design review required).** Coded, on by default since 0.2.0-beta. Left: streams still answer BMH2 so a source stays visible; pseudonym phones cannot talk to older versions; message exchanges and relayed calls need verified contacts; binding the verification QR to a live handshake.
 - **Design AL: audio-only live stream, a nearby radio.** Implemented; on by default since 2026-10-17 (`test_audio_live=false` is the off arm; there is no Settings switch); decisions Q-AL1 to Q-AL8 answered 2026-10-12. Offer marker `0x40`, signed `BTL1` stream (the source signs every record), Opus 24 kbps in 200 ms records (about 35 kbps on the link, a Voice relay needs 83 kbps against 567 kbps for 240p video), source cap 4 listeners, one child per relay, age-bounded queues, background listening under a media-playback service. Left: phone tests T-AL1 to T-AL11 (weak pair, three-relay chain, fan-out ladder, background, older build), then the promotion decision. Later: hold-to-talk announcer mode, a verified-contacts-only audience, an application-scoped listener if activity kills show up, per-stream pseudonyms (Design F), adaptive rate and two-child relays.
 - **Design M: messaging v2 (reviewed twice; design review required for phases 2 and 3).** Phases 0, 1a, 1b, 1c and 1d are built behind `test_messaging_v2` (on whenever Messages is on since 2026-10-21; JVM tests only). Conversation threads, attachments of any format (inline up to 1 MB, receiver-pulled 1 MiB segments up to 64 MB, never carried by couriers, nothing decoded automatically), receipts, a thread link; then forward secrecy as a prekey bootstrap plus Double Ratchet sessions (phases 2 and 2b) before carriers (phase 3); groups later. Left: the phase 0 phone measurements (v1 goodput and background receive), then the 1c phone pass (ASUS screenshots against the UI spec, TalkBack), notification routing to a thread, and phone tests T-M1 to T-M18. Q-M1 to Q-M12 are answered (recommended options).
-- **Design HC: HEVC and hardware H.264 codecs; Design AD: software AV1 decoding on Apple (design review required).** Approved 2026-10-27; revision 3 after reviews 1 and 2, ready for implementation (dav1d also on Windows: Q-AD1 answered A). Left: open questions Q-HC1 (stream codec order), Q-HC2 (compact bit 56) and Q-HC3 (GPU HEVC decoding on Windows), the S22/Xiaomi codec census, then the five implementation lanes in Design HC (Android, Windows, Apple, Apple dav1d, Windows dav1d) behind default-off masters, the smoke test and one thermal comparison.
+- **Design HC: HEVC and hardware H.264 codecs; Design AD: software AV1 decoding on Apple (design review required).** Built on Android: HEVC and hardware H.264 are on since 0.4.2-beta. Design AD (Apple) and the Windows and Apple parts of Design HC are designed, not built. Earlier plan text: approved 2026-10-27; revision 3 after reviews 1 and 2 (dav1d also on Windows: Q-AD1 answered A). Left: open questions Q-HC1 (stream codec order), Q-HC2 (compact bit 56) and Q-HC3 (GPU HEVC decoding on Windows), the S22/Xiaomi codec census, then the five implementation lanes in Design HC (Android, Windows, Apple, Apple dav1d, Windows dav1d) behind default-off masters, the smoke test and one thermal comparison.
+- **Design VX: bundled libvpx VP9 encoder.** Built; on in Automatic since 0.4.2 with the power-aware start rule (2026-10-28, DECISIONS "Automatic codec order after the 2026-10-28 phone measurements"). Left: the 0.4.2 phone checks (A15s libvpx call and stream, A15s with battery saver -> hardware H.264, viewer decode on every phone) and an unplugged battery comparison of the power rule. Deferred: VP9 droppable frames for the temporal layering experiment.
 - **Messaging v2: switches that exist only in the design (moved from the switch register, 2026-10-27; no code reads them).** `test_mv2_bulk_listed` (Experimental arm: list large-file segments in `SUMMARY` and let the receiver's auto-download policy request them, kept as the comparator for the receiver-pull design), `test_mv2_chats_tab` (see "Arms that are not switchable" below), `test_mv2_show_previews` (default on: the preview line in the conversation rows; off shows only "New message"; the row preview is hard-coded on today and notifications follow their own rule), `test_mv2_prekeys` (phase 2, off until phase 2 passes: prekey bootstrap and bundle version 4 with one-time and rotating prekeys and a per-contact pinned minimum version; off keeps static-key slots, logs the messages as not forward secret, and a contact pinned at version 4 or higher refuses them), `test_mv2_ratchet` (phase 2b, off until it passes, then on: Double Ratchet sessions with encrypted headers, bundle version 5; off is a prekey seal per message, option A; both arms stay switchable, the choice is Q-M5), `test_mv2_message_tags` (phase 3, off, Experimental: per-message recipient tags with a 32-wide window instead of the daily pair tag) and `test_mv2_background_check` (phase 3, off, Experimental: a periodic duty-cycled check for waiting messages while the app is not in front, decided by test T-M8). Each goes into [switches.md](switches.md) with its default when it is built.
 
 ## Other open work
@@ -87,7 +100,7 @@ The full design texts are in [decisions](decisions/README.md), "Design records".
 - **Bluetooth headsets.** Never selected as call output (protective default, not a measured limit). Left: measure what a headset costs a live call per stack and transport, then maybe an Experimental labelled opt-in scoped by a device-family entry.
 - **Distribution and field reports.** Real phone screenshots in `fastlane/`, the F-Droid and IzzyOnDroid inclusion requests, and a fuller Export diagnostics block built from bounded in-memory records ([architecture.md](architecture.md#diagnostics-block-contract-for-export-diagnostics)). Google Play is not started.
 - **iPhone interoperability (design review required).** Compact discovery is coded behind `test_ios_compact_discovery`; the iOS client is in MeshLive/meshlive-ios. Left: every reference phone finding an iPhone's offers with the switch on, with `scan_stats` evidence of controller versus host filtering. Optional H.264 (`test_h264_codec`) is now part of Design HC (draft, below). Before the iOS port of in-call link renewal (Design SR): check that the iOS end-to-end hello never sets transport-mask bit 4 (`0x10`, the renewal capability), which is not verifiable from this repository.
-- **Wi-Fi Direct / Aware bearer (design review required).** Not started. Optional, explicit, never a silent fallback; Bluetooth stays for discovery.
+- **Wi-Fi Direct / Aware bearer (design review required).** Designed and reviewed (Design WF, 2026-10-27); implementation next. Bluetooth stays for discovery and low-power control; Wi-Fi carries video when both phones support it. Optional, explicit, never a silent fallback. The design text is published together with the first implementation.
 - **iOS/macOS parity of the 2026-10-21 UX work (user: "fix everywhere"):** your own generated name shown (Calls
   top line, Your name subtitle, incoming call/Meet), settings rows with the (i) inline after wrapped text and a divider
   between every row, value rows wrapping under the title, the plain-language copy audit (no political framing), Chats
@@ -101,7 +114,9 @@ The full design texts are in [decisions](decisions/README.md), "Design records".
   dead-call hang-up / busy rule checks; GR1 and the lost-chunk fail-fast are done. iOS/macOS (needs the Mac): the same
   list plus GR1 + fail-fast, MetricKit crash and exit diagnostics, CoreBluetooth state guidance, AVCapture first-frame
   check, stream join retry and source warm start when streams land.
-- **Reach and features beyond Bluetooth range (roadmap, user request 2026-10-20; research survey the same day; every
+- **Ideas — not built and not designed: reach and features beyond Bluetooth range.** Nothing in this list is a current
+  feature; each item is a direction only (the one exception: M1/M2, Wi-Fi Aware and Wi-Fi Direct, have since been
+  designed as Design WF, see "Wi-Fi Direct / Aware bearer" above). Roadmap, user request 2026-10-20; research survey the same day; every
   item default-off behind a SWITCHES entry, protocol/security items need a DECISIONS design record + PROTOCOL rules
   first).** Today live video reaches only phones inside the Bluetooth mesh; no app does live video beyond local range
   without the internet (long-range radios are kilobits).

@@ -69,11 +69,26 @@ internal object BenchmarkSetupRefusal {
         "detail" to TemporalLayeringReport.clean(detail),
     )
 
-    /** Whether `test_codec` names this encoder: the family names av1 and vp9, else an exact encoder name. */
-    fun codecMatches(requested: String, isAv1: Boolean, isVp9: Boolean, encoderName: String): Boolean =
+    /**
+     * Whether `test_codec` names this encoder: the family names av1 and vp9 (Design HC adds hevc and h264/avc, present
+     * only while their masters are on), else an exact encoder name.
+     */
+    fun codecMatches(
+        requested: String,
+        isAv1: Boolean,
+        isVp9: Boolean,
+        encoderName: String,
+        isHevc: Boolean = false,
+        isH264: Boolean = false,
+    ): Boolean =
         when (requested.lowercase()) {
             "av1" -> isAv1
-            "vp9" -> isVp9
+            // Design VX: the bundled libvpx encoder is named explicitly (`libvpx-vp9` or `libvpx`), so an existing
+            // `test_codec=vp9` case keeps meaning a MediaCodec VP9 encoder (refused where the phone has none).
+            "vp9" -> isVp9 && !encoderName.equals(VideoCodec.LIBVPX_ENCODER_NAME, ignoreCase = true)
+            "libvpx" -> encoderName.equals(VideoCodec.LIBVPX_ENCODER_NAME, ignoreCase = true)
+            "hevc", "h265" -> isHevc
+            "h264", "avc" -> isH264
             else -> encoderName.equals(requested, ignoreCase = true)
         }
 

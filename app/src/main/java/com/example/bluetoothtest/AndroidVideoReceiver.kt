@@ -184,7 +184,7 @@ class AndroidVideoReceiver(
                                 flags = DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS or
                                     DiscoveryAnnouncement.FLAG_CLASSIC_TRANSPORT or
                                     recoveryDiscoveryFlag(recoveryFromNodeIdPrefix),
-                                capabilitySummary = capabilities.decodeCodecMask,
+                                capabilitySummary = VideoCodecMap.helloMaskToSummary(capabilities.decodeCodecMask),
                                 streamToken = streamToken,
                                 routeCost = routeCost,
                                 sequence = 0,
@@ -428,7 +428,7 @@ class AndroidVideoReceiver(
             val base = DiscoveryAnnouncement(
                 nodeIdPrefix = entry.rdi,
                 flags = DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS or transportFlags,
-                capabilitySummary = capabilities.decodeCodecMask,
+                capabilitySummary = VideoCodecMap.helloMaskToSummary(capabilities.decodeCodecMask),
                 streamToken = streamToken,
                 routeCost = routeCost,
                 sequence = 0,
@@ -453,7 +453,7 @@ class AndroidVideoReceiver(
                 .copyOf(DiscoveryAnnouncement.NODE_PREFIX_BYTES),
             flags = DiscoveryAnnouncement.FLAG_ACCEPTING_CONNECTIONS or transportFlags or
                 recoveryDiscoveryFlag(recoveryFromNodeIdPrefix),
-            capabilitySummary = capabilities.decodeCodecMask,
+            capabilitySummary = VideoCodecMap.helloMaskToSummary(capabilities.decodeCodecMask),
             streamToken = streamToken,
             routeCost = routeCost,
             sequence = 0,
@@ -1246,7 +1246,7 @@ class AndroidVideoReceiver(
                 header.height,
                 header.fps,
             )
-            val codecName = if (header.codecId == StreamProtocol.CODEC_AV1) "AV1" else "VP9"
+            val codecName = VideoCodecMap.label(header.codecId)
             streamReader.meshStreamId?.let {
                 onStatus("Receiving serialized mesh stream $it with authenticated source and TTL.")
             }
@@ -1683,8 +1683,10 @@ class AndroidVideoReceiver(
                 val packet = readMediaPacket() ?: break
                 when {
                     packet.isAudio -> handleAudioPacket(packet)
-                    packet.flags and StreamProtocol.FLAG_CODEC_CONFIG != 0 ->
+                    packet.flags and StreamProtocol.FLAG_CODEC_CONFIG != 0 -> {
+                        VideoCodecMap.requireNoCodecConfig(header.codecId, packet.flags)
                         videoConfig += packet.payload
+                    }
                     packet.flags and StreamProtocol.FLAG_DISPLAY_ROTATION != 0 -> {
                         header = header.copy(rotationDegrees = StreamProtocol.decodeDisplayRotation(packet))
                         onVideoFormat(header)

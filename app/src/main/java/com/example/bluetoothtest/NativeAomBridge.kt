@@ -150,7 +150,7 @@ internal class NativeAomEncoder(
     variableBitrate: Boolean,
     dropFrames: Boolean,
     tuning: NativeAomTuning = NativeAomTuning.DEFAULT,
-) : AutoCloseable {
+) : NativeVideoEncoder {
     private var handle = NativeAomBridge.nativeCreate(
         width,
         height,
@@ -178,11 +178,11 @@ internal class NativeAomEncoder(
      * bitstream before it is marked). Layers other than -1 come only from the Experimental
      * temporal layering switch.
      */
-    fun encode(
+    override fun encode(
         i420: ByteBuffer,
         presentationTimeUs: Long,
         forceKeyFrame: Boolean,
-        layer: Int = -1,
+        layer: Int,
     ): Array<NativeAomPacket> = NativeAomBridge.nativeEncode(
         checkNotNull(handle.takeIf { it != 0L }) { "Native libaom encoder is closed" },
         i420,
@@ -191,11 +191,11 @@ internal class NativeAomEncoder(
         layer,
     )
 
-    fun flush(): Array<NativeAomPacket> = NativeAomBridge.nativeFlush(
+    override fun flush(): Array<NativeAomPacket> = NativeAomBridge.nativeFlush(
         checkNotNull(handle.takeIf { it != 0L }) { "Native libaom encoder is closed" },
     )
 
-    fun updateBitrate(bitrate: Int) {
+    override fun updateBitrate(bitrate: Int) {
         NativeAomBridge.nativeSetBitrate(
             checkNotNull(handle.takeIf { it != 0L }) { "Native libaom encoder is closed" },
             bitrate,
@@ -203,21 +203,21 @@ internal class NativeAomEncoder(
     }
 
     /** Experimental temporal layering: floors a re-created encoder's first keyframe. */
-    fun setKeyFrameQuantizerReference(quantizer: Int) {
+    override fun setKeyFrameQuantizerReference(quantizer: Int) {
         NativeAomBridge.nativeSetKeyFrameQuantizerReference(
             checkNotNull(handle.takeIf { it != 0L }) { "Native libaom encoder is closed" },
             quantizer,
         )
     }
 
-    fun updateMaxInterBitratePct(percent: Int) {
+    override fun updateMaxInterBitratePct(percent: Int) {
         NativeAomBridge.nativeSetMaxInterBitratePct(
             checkNotNull(handle.takeIf { it != 0L }) { "Native libaom encoder is closed" },
             percent,
         )
     }
 
-    fun updateCpuUsed(cpuUsed: Int) {
+    override fun updateCpuUsed(cpuUsed: Int) {
         NativeAomBridge.nativeSetCpuUsed(
             checkNotNull(handle.takeIf { it != 0L }) { "Native libaom encoder is closed" },
             cpuUsed,

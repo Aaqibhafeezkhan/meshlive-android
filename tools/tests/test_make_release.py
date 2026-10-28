@@ -72,8 +72,9 @@ class ManifestTest(unittest.TestCase):
         self.assertIn("files: 7", lines)
         # The native sources are not tracked; their pins (tools/fetch_native_sources.py) are part of the provenance.
         self.assertTrue(any(l.startswith("native-libaom: ") and "0006e96c" in l for l in lines))
+        self.assertTrue(any(l.startswith("native-libvpx: ") and "6df3ec34" in l for l in lines))
         self.assertTrue(any(l.startswith("native-libopus: ") and "sha256 65c1d2f7" in l for l in lines))
-        rows = [l for l in lines[9:]]
+        rows = [l for l in lines[10:]]
         self.assertEqual([r.split("  ", 1)[1] for r in rows],
                          [".gitignore", "a.txt", "app/build.gradle.kts", "dir/b b.bin", "empty",
                           CHANGELOGS + "/71.txt", CHANGELOGS + "/72.txt"])

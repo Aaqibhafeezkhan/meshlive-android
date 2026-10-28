@@ -222,10 +222,12 @@ A Windows PC cannot send the 22-byte manufacturer announcement in a connectable 
 3. The length must be the kind's: 9 for kind 0, 23 for kinds 1 and 2. Otherwise `Length`. (The kind 0 decoder of the first build checks the length first, so it rejects every 23-byte payload as `Length`; the shared vectors follow the new order.)
 4. Kind 0: the rules in the table. Kinds 1 and 2: the inner 22 bytes must decode as a version 5 announcement (versions 2 and 8 are refused), and the role must match the kind exactly; anything else is `Fields`:
    - **kind 1, request:** flags exactly `ACCEPTING | GATT`, or `ACCEPTING | GATT | ROUTE_RECOVERY` with a non-zero hint (and a zero hint without it); summary 0; route-token bit 31 set.
-   - **kind 2, offer:** flags exactly `STREAM_AVAILABLE | GATT`, optionally with `STREAM_PAUSED`; summary only codec bits 0..2 and `0x40` (audio only); route cost 0; no relay flag; route-token bit 31 set.
+   - **kind 2, offer:** flags exactly `STREAM_AVAILABLE | GATT`, optionally with `STREAM_PAUSED`; summary only codec bits 0..2 and `0x40` (audio only), plus `0x80` (HEVC) while the reader's HEVC master is on (Android 0.4.2 and later); route cost 0; no relay flag; route-token bit 31 set.
    - No Classic, call, accepting-on-offer or other flag in either kind.
 
 The result is the ordinary `DiscoveryAnnouncement` and goes through `acceptAnnouncement` and every existing admission rule. A PC announcement is an unauthenticated hint, at the same trust level as every advert. The link and endpoint handshakes bind the identity.
+
+**Calls to a PC.** A kind-0 offer is a rotating (version 5) call offer, so a caller with BMH3 on speaks BMH3 to it ("Negotiation and downgrade"). The PC answers only BMH3 and refuses a BMH2 hello (`Format`). A phone with BMH3 off therefore does not dial a PC call offer: it remembers the rotating IDs of kind-0 offers it saw in the last 30 minutes (at most 64) and ends such an attempt before sending a byte, with "This PC takes calls only with "Hide my ID from strangers" on". A phone's rotating offer is unaffected: a phone with BMH3 off still accepts BMH2.
 
 **Stream offers from a PC (draft).**
 - The PC is the parent and dials each viewer as GATT central. Viewers request with their ordinary version 5 GATT viewer request.

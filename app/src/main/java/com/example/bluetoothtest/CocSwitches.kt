@@ -6,7 +6,7 @@ import android.content.Intent
  * Launch switches of the CoC and Classic batch (family batch C). Every arm other than the defaults is
  * DEBUG-only (a launch extra from another app must not change a release build), and each launch starts
  * from the defaults, so a stored choice never leaks into a measured case. Register rows live in
- * docs/dev/switches.md ("Experimental, alternative and optional behaviour").
+ * SWITCHES ("Experimental, alternative and optional behaviour").
  *
  * Defaults (shipped behaviour):
  * - connect bound 12 s on every LE CoC client connect (`test_coc_connect_bound_ms`, 0 = unbounded as

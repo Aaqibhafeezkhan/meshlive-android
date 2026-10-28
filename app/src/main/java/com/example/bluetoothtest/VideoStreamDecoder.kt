@@ -36,6 +36,10 @@ internal fun decoderCodecSpecificData(
     codecSpecificData: List<ByteArray>,
 ): List<ByteArray> = if (codecId == StreamProtocol.CODEC_AV1) {
     codecSpecificData.takeLast(1)
+} else if (codecId == StreamProtocol.CODEC_H264 || codecId == StreamProtocol.CODEC_HEVC) {
+    // Design HC: the csd is the newest keyframe's parameter sets only (H.264 csd-0 SPS + csd-1 PPS, HEVC csd-0
+    // VPS+SPS+PPS), already one complete set; never merged with an older encoder's.
+    codecSpecificData.map(ByteArray::copyOf)
 } else {
     codecSpecificData.fold(mutableListOf<ByteArray>()) { selected, bytes ->
         if (selected.none { it.contentEquals(bytes) }) selected.add(bytes)
@@ -125,12 +129,30 @@ class VideoStreamDecoder(
     private val mime = when (header.codecId) {
         StreamProtocol.CODEC_VP9 -> MediaFormat.MIMETYPE_VIDEO_VP9
         StreamProtocol.CODEC_AV1 -> MediaFormat.MIMETYPE_VIDEO_AV1
+        StreamProtocol.CODEC_H264 -> MediaFormat.MIMETYPE_VIDEO_AVC
+        StreamProtocol.CODEC_HEVC -> MediaFormat.MIMETYPE_VIDEO_HEVC
         else -> error("Unsupported codec ID ${header.codecId}")
     }
-    private val selectedCodecSpecificData =
+    /**
+     * Design HC (codecs 4 and 5): the fail-closed structural gate every video packet passes before the decoder sees it
+     * (PROTOCOL "Access-unit validation"), holding the active parameter sets. Null for VP9 and AV1.
+     */
+    private val auGate: AccessUnitGate? = AnnexBCodec.of(header.codecId)?.let { codec ->
+        AccessUnitGate(codec, header.width, header.height) { System.nanoTime() / 1_000_000L }
+    }
+    private val hcLabel = VideoCodecMap.label(header.codecId)
+    private var hcHoldLogNs = 0L
+    private val selectedCodecSpecificData = if (auGate != null) {
+        // No codec-config packet exists for codecs 4 and 5: the csd comes from the first keyframe's in-band sets (or
+        // the previous decoder's newest sets when recovery starts this one).
+        hcFirstKeyFrameCsd(auGate.codec, header, firstPacket) ?: decoderCodecSpecificData(header.codecId, codecSpecificData)
+    } else {
         decoderCodecSpecificData(header.codecId, codecSpecificData).map(ByteArray::copyOf)
+    }
+    /** Codecs 4 and 5 always follow keyframe size and parameter-set changes (the decoder is rebuilt on either). */
+    private val followsFormat = sizeChangeRebuild || auGate != null
     private val initialSize: Pair<Int, Int> =
-        if (sizeChangeRebuild) {
+        if (followsFormat) {
             initialCodedSize(header, firstPacket, selectedCodecSpecificData)
         } else {
             header.width to header.height
@@ -343,7 +365,7 @@ class VideoStreamDecoder(
             val adaptive = runCatching {
                 capabilities!!.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_AdaptivePlayback)
             }.getOrDefault(false)
-            if (sizeChangeRebuild && adaptive && runCatching {
+            if (followsFormat && adaptive && runCatching {
                     capabilities!!.videoCapabilities.isSizeSupported(maximumWidth, maximumHeight)
                 }.getOrDefault(false)
             ) {
@@ -390,7 +412,7 @@ class VideoStreamDecoder(
                                 "limitMs=${DecoderWatchdogLimits.CONFIGURE_SLOW_MS} | rung=${rung.label} | mime=$mime",
                         )
                     }
-                    if (sizeChangeRebuild) {
+                    if (followsFormat) {
                         Log.i(
                             "BluetoothVideo",
                             (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
@@ -401,8 +423,19 @@ class VideoStreamDecoder(
                                 "csd=${format.containsKey("csd-0")} | configureStartMs=$configureMs | formatKeys=${rung.label}",
                         )
                     }
+                    val requestedRung = planned.first()
+                    if (DecoderLowLatencyLadder.requestsLowLatency(requestedRung.keys)) {
+                        // Requested is the first planned format; effective is the one this decoder configured with.
+                        // A key the component accepts is still only a request: decoder_hold measures the effect.
+                        Log.i(
+                            "BluetoothVideo",
+                            (if (BuildConfig.DEBUG) "BENCHMARK " else "") +
+                                "decoder_low_latency: decoder=$candidate | requested=${requestedRung.label} | " +
+                                "effective=${rung.label} | featureLowLatency=$featureLowLatency | sdk=${Build.VERSION.SDK_INT}",
+                        )
+                    }
                     stallDetector.reset(System.nanoTime())
-                    return OpenedDecoder(attempt, candidate, index, DecoderLowLatencyLadder.KEY_LOW_LATENCY in rung.keys, rung.label)
+                    return OpenedDecoder(attempt, candidate, index, DecoderLowLatencyLadder.requestsLowLatency(rung.keys), rung.label)
                 } catch (error: Exception) {
                     activeAttempt = -1
                     attempt?.let { releaseCodec("failed-attempt", it, stopFirst = false) }
@@ -432,6 +465,7 @@ class VideoStreamDecoder(
         }
         val rungs = DecoderLowLatencyLadder.plan(
             candidate, featureLowLatency, preferLowLatency, lowLatencyLadder, realtimePriority, vendorParameters,
+            defaultVendorKey = CodecPolicy.vendorLowLatencyKey(candidate, policyTraits),
         )
         if (lowLatencyLadder || realtimePriority) {
             Log.i(
@@ -469,14 +503,48 @@ class VideoStreamDecoder(
         }
     }
 
-    fun offer(packet: StreamProtocol.Packet): Boolean {
+    fun offer(received: StreamProtocol.Packet): Boolean {
         checkFailure()
         if (!running.get()) return false
         // New configuration is never queued as a codec-config buffer of its own: MediaCodec takes a
         // changed configuration only together with a keyframe, so it waits for the keyframe and
         // becomes the csd of the decoder that keyframe needs. Configuration the decoder already has
         // is queued as before.
-        val plan = if (sizeChangeRebuild) formatTracker.plan(packet) else null
+        val gate = auGate
+        val packet = if (gate != null && !received.isAudio) {
+            when (val verdict = gate.check(received.payload, received.flags)) {
+                is AuVerdict.Accept -> {
+                    if (verdict.unusual.isNotEmpty()) {
+                        verdict.unusual.forEach { (field, value) ->
+                            Log.i("BluetoothVideo", "BENCHMARK au_unusual: codec=$hcLabel | field=$field | value=$value")
+                        }
+                    }
+                    received.copy(payload = verdict.accessUnit)
+                }
+                is AuVerdict.Reject -> {
+                    Log.w(
+                        "BluetoothVideo",
+                        "BENCHMARK au_reject: codec=$hcLabel | rule=${verdict.rule} | type=${verdict.nalType} | " +
+                            "bytes=${verdict.bytes} | keyframe=${verdict.keyFrame} | reason=${verdict.reason}",
+                    )
+                    // Dropped as corrupt video: later frames wait for the next IDR, and the receiver's existing
+                    // needsKeyFrame path asks the sender for one.
+                    encodedFrames.markLoss()
+                    resetAtRecoveryKeyFrame.set(true)
+                    beginRecovery()
+                    return false
+                }
+                is AuVerdict.Close -> {
+                    fail(IllegalStateException("Unsupported $hcLabel stream: ${verdict.reason}"))
+                    checkFailure()
+                    return false
+                }
+            }
+        } else {
+            received
+        }
+        logDecoderHoldIfDue(final = false)
+        val plan = if (followsFormat) formatTracker.plan(packet) else null
         if (plan != null && !plan.queue) return true
         val isDiscontinuityKeyFrame =
             packet.flags and StreamProtocol.FLAG_DISCONTINUITY != 0 &&
@@ -1040,7 +1108,26 @@ class VideoStreamDecoder(
         }
     }
 
+    /** Design HC: `BENCHMARK decoder_hold` (input-to-output time per frame) every 10 s and at close, codecs 4 and 5 only. */
+    private fun logDecoderHoldIfDue(final: Boolean) {
+        if (auGate == null) return
+        val nowNs = System.nanoTime()
+        if (hcHoldLogNs == 0L) hcHoldLogNs = nowNs
+        if (!final && nowNs - hcHoldLogNs < DECODER_HOLD_LOG_INTERVAL_NS) return
+        hcHoldLogNs = nowNs
+        worker.post {
+            val p50 = decodeLatency.percentileMs(50) ?: return@post
+            val p95 = decodeLatency.percentileMs(95) ?: return@post
+            Log.i(
+                "BluetoothVideo",
+                "BENCHMARK decoder_hold: codec=$hcLabel | p50_ms=$p50 | p95_ms=$p95 | decoder=$decoderName | " +
+                    "lowLatency=$lowLatencyEnabled | formatKeys=$formatRung | final=$final",
+            )
+        }
+    }
+
     override fun close() {
+        if (running.get()) logDecoderHoldIfDue(final = true)
         if (!running.getAndSet(false)) return
         if (recovering.getAndSet(false)) onRecoveryStateChanged(false)
         encodedFrames.clear()
@@ -1067,6 +1154,17 @@ class VideoStreamDecoder(
         workerThread.quitSafely()
         debugStageTrace?.close()
     }
+}
+
+private const val DECODER_HOLD_LOG_INTERVAL_NS = 10_000_000_000L
+
+/**
+ * Design HC: the csd of a decoder that starts at [firstPacket], read from its in-band parameter sets after the whole
+ * keyframe passes the structural gate; null when it is not such a keyframe.
+ */
+internal fun hcFirstKeyFrameCsd(codec: AnnexBCodec, header: StreamProtocol.Header, firstPacket: StreamProtocol.Packet?): List<ByteArray>? {
+    if (firstPacket == null || firstPacket.isAudio || firstPacket.flags and StreamProtocol.FLAG_KEY_FRAME == 0) return null
+    return AccessUnitGate.keyFrameSets(codec, firstPacket.payload, header.width, header.height)?.csd()
 }
 
 internal fun videoPacketPlayoutTiming(
@@ -1119,6 +1217,13 @@ internal class DecoderLatencyWindow(private val capacity: Int = 128) {
         next = (next + 1) % capacity
         if (count < capacity) count++
         dirty = true
+    }
+
+    /** Nearest-rank [percent] of the window (any sample count), or null before the first sample (Design HC decoder_hold). */
+    fun percentileMs(percent: Int): Long? {
+        if (count == 0) return null
+        val sorted = samples.copyOf(count).also { it.sort() }
+        return sorted[((count * percent + 99) / 100 - 1).coerceIn(0, count - 1)]
     }
 
     /** p99 once [MIN_DECODE_LATENCY_SAMPLES] frames were measured, else null (fixed lead). */

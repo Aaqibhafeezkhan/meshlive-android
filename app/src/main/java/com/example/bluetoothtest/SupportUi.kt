@@ -74,7 +74,7 @@ internal fun batteryExemptionIssue(context: Context): ReliabilityCardIssue? {
 }
 
 /**
- * Adapter for "Export diagnostics". The field contract (docs/dev/architecture.md "Diagnostics block") is owned by the
+ * Adapter for "Export diagnostics". The field contract (ARCHITECTURE "Diagnostics block") is owned by the
  * release work; wire its builder in [CoreDiagnosticsUi]. The fallback lists only non-identifying
  * facts: no media, messages, contact names, node IDs or keys.
  */

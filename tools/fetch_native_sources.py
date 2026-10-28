@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fetch the pinned native sources (libaom, libopus) into the git-ignored reference-repos/ folder.
+"""Fetch the pinned native sources (libaom, libvpx, libopus) into the git-ignored reference-repos/ folder.
 
-The Android native library (app/src/main/cpp/CMakeLists.txt) statically links two third-party
+The Android native library (app/src/main/cpp/CMakeLists.txt) statically links three third-party
 sources that are not stored in this repository:
 
 * libaom (AV1 encoder): https://aomedia.googlesource.com/aom at a pinned commit. The commit is
@@ -9,6 +9,9 @@ sources that are not stored in this repository:
   SHA-256 of a deterministic tree manifest (mode, SHA-256 of every blob, path; see
   tree_manifest_sha256) must equal NATIVE_SOURCES["libaom"]["tree_sha256"]. The manifest hashes the
   committed blob bytes, so it is identical on every OS and checkout setting.
+* libvpx v1.17.0 (VP9 encoder only, DECISIONS "Design VX"): https://chromium.googlesource.com/webm/libvpx
+  at the commit the v1.17.0 tag points to, verified the same way as libaom. Its build configuration is
+  generated from this source by tools/generate_libvpx_config.py and checked in under app/src/main/cpp/libvpx_config/.
 * libopus 1.5.2 (experimental native call audio): the official release tarball, verified against the
   SHA-256 published in https://downloads.xiph.org/releases/opus/SHA256SUMS.txt before extraction.
 
@@ -18,7 +21,7 @@ Usage (from the repository root; needs git and network access once):
     python tools/fetch_native_sources.py --force      # replace existing folders after verification fails
 
 tools/make_release.py records native_provenance() in SOURCE-MANIFEST.txt, and the F-Droid recipe in
-distribution/fdroid/ pins the same two sources.
+distribution/fdroid/ pins the same sources.
 """
 from __future__ import annotations
 
@@ -44,6 +47,15 @@ NATIVE_SOURCES = {
         "tree_sha256": "941c31896fe12d3f8a6be1e60e3987a33f2d676475d08fc07235af80f52968a9",
         "dest": f"{REFERENCE}/libaom",
         "licence": "BSD-2-Clause plus the Alliance for Open Media Patent License 1.0",
+    },
+    "libvpx": {
+        "kind": "git",
+        "url": "https://chromium.googlesource.com/webm/libvpx",
+        # Tag v1.17.0 (2026-08-20, annotated tag object 82615ff0733cd4063838c352bc2e2ab225f37ade).
+        "commit": "6df3ec34557879fff673706f4a1d9fbd0f3a6f0e",
+        "tree_sha256": "92a551aba58c9a12929a5a2e86e90f2550503673126c706734c42fcc913b2984",
+        "dest": f"{REFERENCE}/libvpx",
+        "licence": "BSD-3-Clause plus the WebM project's additional VP8/VP9 patent rights grant (PATENTS)",
     },
     "libopus": {
         "kind": "tarball",
@@ -221,9 +233,10 @@ def ensure(name: str, root: Path = ROOT, force: bool = False, log=print) -> None
 
 def native_provenance() -> list[str]:
     """Lines for the release SOURCE-MANIFEST (tools/make_release.py)."""
-    aom, opus = NATIVE_SOURCES["libaom"], NATIVE_SOURCES["libopus"]
+    aom, vpx, opus = NATIVE_SOURCES["libaom"], NATIVE_SOURCES["libvpx"], NATIVE_SOURCES["libopus"]
     return [
         f"native-libaom: {aom['url']} commit {aom['commit']} tree-manifest-sha256 {aom['tree_sha256']}",
+        f"native-libvpx: {vpx['url']} commit {vpx['commit']} tree-manifest-sha256 {vpx['tree_sha256']}",
         f"native-libopus: {opus['url']} sha256 {opus['sha256']}",
     ]
 

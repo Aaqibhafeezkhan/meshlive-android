@@ -67,6 +67,10 @@ object StreamProtocol {
     const val FLAG_DISCARDABLE = 128
     const val CODEC_VP9 = 2
     const val CODEC_AV1 = 3
+    /** H.264 (AVC), Design HC: accepted by [readHeader] only while the `h264_codec` master is on. */
+    const val CODEC_H264 = 4
+    /** HEVC (H.265), Design HC: accepted by [readHeader] only while the `hevc_codec` master is on. */
+    const val CODEC_HEVC = 5
     const val AUDIO_CODEC_NONE = 0
     const val AUDIO_CODEC_OPUS = 1
     const val AUDIO_SAMPLE_RATE = 48_000
@@ -211,7 +215,7 @@ object StreamProtocol {
         require(width in 1..4096 && height in 1..4096 && fps in 1..120) {
             "Invalid video format ${width}x$height at $fps FPS"
         }
-        require(codecId == CODEC_VP9 || codecId == CODEC_AV1) {
+        require(VideoCodecSwitches.accepts(codecId)) {
             "Unsupported codec ID $codecId"
         }
         require(rotationQuarterTurns in 0..3) { "Invalid video rotation" }

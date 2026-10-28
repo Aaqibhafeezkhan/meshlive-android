@@ -61,4 +61,46 @@ class PcStreamsTest {
         assertTrue(StreamGattFallback.acceptsViewerRequest(mapped.transportOption(), BluetoothTransportOption.BLE_GATT, false))
         assertFalse(StreamGattFallback.acceptsViewerRequest(mapped.transportOption(), BluetoothTransportOption.BLE_L2CAP, false))
     }
+
+    /** The "video source" vector with its summary byte (outer byte 9) replaced. */
+    private fun sourceWithSummary(summary: Int): ByteArray =
+        hex(vectors().first { it["name"] == "video source" }["hex"] as String).also { it[9] = summary.toByte() }
+
+    @Test
+    fun hevcPcStreamOffersAreListedOnlyWhileTheHevcMasterIsOn() {
+        val hevcOffer = sourceWithSummary(0x80 or 0x01)
+        assertEquals(0x81, PcStreamAnnouncement.decode(hevcOffer, hevc = true).capabilitySummary)
+        val hidden = runCatching { PcStreamAnnouncement.decode(hevcOffer, hevc = false) }.exceptionOrNull()
+        assertEquals(PcAnnouncementError.Fields, (hidden as PcAnnouncementException).error)
+        // HEVC alone, and other unknown bits still fail closed.
+        assertEquals(0x80, PcStreamAnnouncement.decode(sourceWithSummary(0x80), hevc = true).capabilitySummary)
+        for (bad in listOf(0x88, 0x90, 0xa0)) {
+            assertTrue(runCatching { PcStreamAnnouncement.decode(sourceWithSummary(bad), hevc = true) }.isFailure)
+        }
+    }
+
+    @Test
+    fun aPhoneWithBmh3OffDoesNotDialAPcButStillDialsPhones() {
+        PcCallTargets.clear()
+        val v = vectors().first { it["name"] == "unchanged call offer" }
+        val pc = (ScanRecordForms.resolve(null, hex(v["hex"] as String), true, pcStreams = true) as ScanRecordForms.Outcome.Pc).announcement
+        assertTrue(pc.rotating)
+        PcCallTargets.record(pc.nodeIdPrefix, 1_000L)
+        val isPc = PcCallTargets.isPc(pc.nodeIdPrefix, 2_000L)
+        assertTrue(isPc)
+        // BMH3 off (benchmark launches): no BMH2 hello to the PC; the attempt ends with the plain message.
+        assertTrue(PcCallTargets.refusesBmh2Dial(bmh3 = false, offer = pc, isPc = isPc))
+        // User launches (BMH3 on by default) are unaffected: Bmh3Choice speaks BMH3 to the rotating offer.
+        assertFalse(PcCallTargets.refusesBmh2Dial(bmh3 = true, offer = pc, isPc = isPc))
+        assertTrue(Bmh3Choice.decide(true, false, pc, false).bmh3)
+        // A phone's rotating offer with BMH3 off still dials with BMH2 (that phone accepts it).
+        val phone = pc.copy(nodeIdPrefix = ByteArray(6) { 0x33 })
+        assertFalse(PcCallTargets.isPc(phone.nodeIdPrefix, 2_000L))
+        assertFalse(PcCallTargets.refusesBmh2Dial(bmh3 = false, offer = phone, isPc = false))
+        // The memory expires after 30 minutes and stays bounded.
+        assertFalse(PcCallTargets.isPc(pc.nodeIdPrefix, 1_000L + 30 * 60_000L + 1))
+        repeat(100) { PcCallTargets.record(ByteArray(6) { b -> (it + b).toByte() }, 3_000L) }
+        assertFalse(PcCallTargets.isPc(pc.nodeIdPrefix, 3_000L))
+        PcCallTargets.clear()
+    }
 }

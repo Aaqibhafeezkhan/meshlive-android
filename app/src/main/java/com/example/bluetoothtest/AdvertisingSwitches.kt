@@ -5,7 +5,7 @@ import android.content.Intent
 /**
  * Launch switches of the advertising batch (device-family backlog A-01..A-03). Every non-default value is
  * DEBUG-only: a launch extra from another app must not change a release build's behaviour. Defaults are the
- * shipped behaviour. The register of switches is docs/dev/switches.md ("Experimental, alternative and optional
+ * shipped behaviour. The register of switches is SWITCHES ("Experimental, alternative and optional
  * behaviour"); the matching rows are listed in the batch hand-back.
  *
  * Shipped ON (after-failure behaviour, kill switches for A/B control arms):

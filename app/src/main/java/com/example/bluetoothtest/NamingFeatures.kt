@@ -1,7 +1,7 @@
 package com.example.bluetoothtest
 
 /**
- * The switches of Naming v2 (Design G; docs/dev/switches.md "Naming and identity display"). Each ships behind its own switch;
+ * The switches of Naming v2 (Design G; SWITCHES "Naming and identity display"). Each ships behind its own switch;
  * a user who touched a switch keeps the explicit choice, an untouched switch follows the constant below, and a DEBUG
  * benchmark launch (any `test_` extra) reads only its extras, default off, so measured case IDs stay valid
  * ([FeatureCatalog.resolve]). Shipping a feature ON is the one-line change of its constant, made only after the phone

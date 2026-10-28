@@ -183,6 +183,20 @@ class EncoderBenchSpecTest {
     }
 
     @Test
+    fun anEncoderThatDeclaresNoModeCanRunOnItsDefaultLikeTheProduct() {
+        // The A15s MediaTek AVC encoder declares no bitrate mode: the explicit CBR default is refused, encoder_default runs.
+        val noModes = caps(name = "OMX.MTK.VIDEO.ENCODER.AVC", mime = EncoderBenchSpec.MIME_AVC, modes = emptySet())
+        assertTrue(EncoderBenchSpec.plan(request(), noModes).refusals.single().startsWith("mode_unsupported"))
+        val plan = EncoderBenchSpec.plan(request("test_bench_bitrate_mode" to "encoder_default"), noModes)
+        assertEquals(emptyList<String>(), plan.refusals)
+        assertEquals(null, plan.bitrateModeOverride)
+        assertEquals("encoder_default", plan.effective.toMap()["mode"])
+        // An encoder that declares modes cannot claim the no-mode path.
+        val hevc = caps(name = "c2.qti.hevc.encoder", mime = EncoderBenchSpec.MIME_HEVC, modes = setOf(1, 2))
+        assertTrue(EncoderBenchSpec.plan(request("test_bench_bitrate_mode" to "encoder_default"), hevc).refusals.single().contains("encoder_default"))
+    }
+
+    @Test
     fun hevcAndAvcHonourAnExplicitModeAndRefuseWhatTheyDoNotReport() {
         val hevc = caps(name = "c2.qti.hevc.encoder", mime = EncoderBenchSpec.MIME_HEVC, modes = setOf(1, 2))
         val vbr = EncoderBenchSpec.plan(request("test_bench_bitrate_mode" to "vbr"), hevc)

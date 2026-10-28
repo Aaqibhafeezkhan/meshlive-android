@@ -293,14 +293,23 @@ class AndroidPrivateVideoCall(
     private val endpointDecodeMask: Int
         get() = synchronized(decodeMaskByTransport) {
             decodeMaskByTransport.getOrPut(transport) {
-                privateCallEndpointDecodeMask(
-                    restrictedMask = capabilities.decodeCodecMask,
-                    platformMask = if (privateCallDecodeRestricted(stackFingerprint, transport)) {
-                        VideoCodec.availableDecoders().fold(0) { mask, decoder -> mask or codecCapabilityMask(decoder.protocolId) }
+                withAv1SoftwareDecodeBit(
+                    privateCallEndpointDecodeMask(
+                        restrictedMask = capabilities.decodeCodecMask,
+                        platformMask = if (privateCallDecodeRestricted(stackFingerprint, transport)) {
+                            VideoCodec.availableDecoders().fold(0) { mask, decoder -> mask or codecCapabilityMask(decoder.protocolId) }
+                        } else {
+                            capabilities.decodeCodecMask
+                        },
+                        fallback = DebugTunables.callCodecFallback,
+                    ),
+                    // Design HC end-to-end bit 4: only while a master is on (both off: today's bytes).
+                    av1DecoderHardware = if (VideoCodecSwitches.anyNew) {
+                        VideoCodec.availableDecoders().firstOrNull { it.protocolId == StreamProtocol.CODEC_AV1 }?.hardwareAccelerated
                     } else {
-                        capabilities.decodeCodecMask
+                        null
                     },
-                    fallback = DebugTunables.callCodecFallback,
+                    enabled = VideoCodecSwitches.anyNew && VideoCodecSwitches.av1SoftDecodeBit,
                 )
             }
         }
@@ -416,6 +425,8 @@ class AndroidPrivateVideoCall(
     @Volatile private var renewalSilenceRole = "offerer"
     @Volatile private var activeSettings = settings
     @Volatile private var activeCodec = codec
+    /** codec_power_aware: the power state read once, when this call first chooses its codec; never re-read mid-call. */
+    @Volatile private var codecPowerAtStart: CodecPowerState? = null
     @Volatile private var activePlaybackDelayProfile = playbackDelayProfile
     @Volatile private var relayHops = 0
     @Volatile private var peerMaxBitrateKbps: Int? = null
@@ -722,7 +733,7 @@ class AndroidPrivateVideoCall(
             BluetoothTransportOption.BLE_GATT -> DiscoveryAnnouncement.FLAG_GATT_TRANSPORT
             else -> 0
         },
-        capabilitySummary = capabilities.encodeCodecMask and capabilities.decodeCodecMask,
+        capabilitySummary = VideoCodecMap.helloMaskToSummary(capabilities.encodeCodecMask and capabilities.decodeCodecMask),
     )
 
     /**
@@ -774,7 +785,7 @@ class AndroidPrivateVideoCall(
                     BluetoothTransportOption.BLE_GATT -> DiscoveryAnnouncement.FLAG_GATT_TRANSPORT
                     BluetoothTransportOption.BLE_L2CAP -> 0
                 },
-            capabilitySummary = capabilities.encodeCodecMask and capabilities.decodeCodecMask,
+            capabilitySummary = VideoCodecMap.helloMaskToSummary(capabilities.encodeCodecMask and capabilities.decodeCodecMask),
             streamToken = 0,
             routeCost = 0,
             sequence = 0,
@@ -1210,7 +1221,9 @@ class AndroidPrivateVideoCall(
             nextCandidate = nextRelayCandidate(peer, error, candidates)
             if (nextCandidate == null) {
                 fail(
-                    if (peer.relayRoute?.seek != null && !relayReadyThisAttempt) {
+                    if (error is PcNeedsBmh3Exception) {
+                        PcCallTargets.BMH3_OFF_MESSAGE
+                    } else if (peer.relayRoute?.seek != null && !relayReadyThisAttempt) {
                         "Could not find this contact through phones nearby"
                     } else {
                         privateCallConnectionFailureMessage(transport, error)
@@ -2585,13 +2598,21 @@ class AndroidPrivateVideoCall(
             )
         }
         activePlaybackDelayProfile = currentCallPlaybackProfile()
-        activeCodec = requireNotNull(
-            privateCallCodecForPeer(
-                codec,
-                availableCodecs,
-                endpoint.peerCapabilities.decodeCodecMask,
-            ),
-        ) { "Peer cannot decode any locally available call codec" }
+        // One choice operation for this direction (Design HC F12); both masters off: privateCallCodecForPeer as before.
+        val codecPower = codecPowerAtStart ?: CodecPowerAware.read(appContext).also { codecPowerAtStart = it }
+        val codecSwitches = VideoCodecSwitches.current(power = codecPower)
+        val codecChoice = VideoCodecChoice.forCall(
+            requested = codec,
+            userChoice = AutomaticEncoderChoice.userChoice,
+            available = availableCodecs,
+            peerDecodeMask = endpoint.peerCapabilities.decodeCodecMask,
+            switches = codecSwitches,
+            familyVp9 = DeviceFamilyPolicy.resolve(stackFingerprint).callVp9Compatibility(transport),
+            session = CodecSession.of(activeSettings),
+            excluded = VideoCodecChoice::policyExcluded,
+            staticIneligibility = VideoCodec.hcStaticIneligibility,
+        )
+        activeCodec = requireNotNull(codecChoice.sent) { "Peer cannot decode any locally available call codec" }
         if (activeCodec != codec) {
             Log.i(
                 "BluetoothVideo",
@@ -2599,19 +2620,9 @@ class AndroidPrivateVideoCall(
             )
         }
         if (BuildConfig.DEBUG) {
-            val peerMask = endpoint.peerCapabilities.decodeCodecMask
-            val choiceReason = AutomaticEncoderChoice.reason(
-                sent = activeCodec,
-                requested = codec,
-                available = availableCodecs,
-                userChoice = AutomaticEncoderChoice.userChoice,
-                preferHwAv1 = DebugTunables.preferHardwareAv1,
-                peerDecodeMask = peerMask,
-                excluded = AutomaticEncoderChoice::policyExcluded,
-            )
             Log.i(
                 "BluetoothVideo",
-                AutomaticEncoderChoice.logLine("call", activeCodec, choiceReason, DebugTunables.preferHardwareAv1, peerMask),
+                VideoCodecChoice.logLine("call", codecChoice, codecSwitches, endpoint.peerCapabilities.decodeCodecMask),
             )
         }
         activeSettings = privateCallVideoSettingsForPeer(
@@ -4760,6 +4771,14 @@ class AndroidPrivateVideoCall(
 
     /** The BMH3 plan of one outgoing attempt toward [selected] ([Bmh3AttemptPlan]). */
     private fun attemptPlan(selected: DiscoveryAnnouncement?): Bmh3AttemptPlan {
+        // A PC answers only BMH3: with BMH3 off, no BMH2 hello is sent to it (PcCallTargets).
+        val toPc = selected != null && PcCallTargets.isPc(selected.nodeIdPrefix, SystemClock.elapsedRealtime())
+        if (PcCallTargets.refusesBmh2Dial(Bmh3Feature.enabled || qrScanPayload != null, selected, toPc)) {
+            Bmh3Android.log("bmh3: event=choice | version=none | reason=pc_needs_bmh3")
+            localFailureMessage = PcCallTargets.BMH3_OFF_MESSAGE
+            onStatus(PcCallTargets.BMH3_OFF_MESSAGE)
+            throw PcNeedsBmh3Exception()
+        }
         // Amendment CP (LE only): the link toward the first helper of a relayed route presents a declared throwaway of its own.
         val relayRoute = pendingRelayRoute?.takeIf {
             relayedCallsOn && DebugTunables.relayedPseudonymousEdges && transport != BluetoothTransportOption.CLASSIC_RFCOMM

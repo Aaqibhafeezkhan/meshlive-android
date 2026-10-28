@@ -26,7 +26,7 @@ object RelayedCallsFeature {
     const val EXTRA_REQUIRE = "test_relayed_calls_require"
 
     /**
-     * Experimental DEBUG topology mask, default off (docs/dev/switches.md register): `test_relayed_calls_no_direct=true` makes this
+     * Experimental DEBUG topology mask, default off (SWITCHES register): `test_relayed_calls_no_direct=true` makes this
      * phone's reach tables ignore every target's own offer (see [ReachTable]), as if no target were in its radio
      * range. A co-located lab needs it for any chain of two or more relays: the caller and every helper except
      * the last mark themselves blind, the last helper stays normal and dials the target.

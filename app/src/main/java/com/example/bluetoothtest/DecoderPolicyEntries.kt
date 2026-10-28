@@ -78,6 +78,21 @@ internal object DecoderPolicyEntries {
             "vidc/vdec/src/omx_vdec_extensions.hpp",
         "vendor.qti-ext-dec-low-latency.enable and vendor.qti-ext-dec-picture-order.enable decoder extensions",
     )
+    private val QCOM_SM8150_VDEC_KEYS = PolicySource(
+        GOOGLE_OPEN_SOURCE,
+        "https://android.googlesource.com/platform/hardware/qcom/sm8150/media/+/refs/heads/main/mm-video-v4l2/vidc/" +
+            "vdec/src/omx_vdec_extensions.hpp",
+        "sm8150 (msmnile) OMX decoder: ADD_EXTENSION(qti-ext-dec-low-latency, OMX_QTIIndexParamLowLatencyMode) with " +
+            "the Int32 parameter enable; set_vendor_extension_config copies it into bEnableLowLatencyMode and calls " +
+            "set_parameter(OMX_QTIIndexParamLowLatencyMode); one extension table serves every codec of omx_vdec",
+    )
+    private val ACODEC_VENDOR_PARAMETERS = PolicySource(
+        GOOGLE_OPEN_SOURCE,
+        "https://android.googlesource.com/platform/frameworks/av/+/refs/heads/android11-release/media/libstagefright/ACodec.cpp",
+        "configureCodec(mime, msg) ends with setVendorParameters(msg): the configure format's vendor.<extension>.<param> " +
+            "keys reach an OMX component's Android vendor extensions (API 26+); KEY_LOW_LATENCY (low-latency) is a " +
+            "separate OMX config, honoured only by components that implement it",
+    )
     private val VENDOR_PARAMETERS_DOC = PolicySource(
         API_REFERENCE,
         "https://developer.android.com/reference/android/media/MediaCodec#getSupportedVendorParameters()",
@@ -245,6 +260,35 @@ internal object DecoderPolicyEntries {
         fallback = "Off (default): the framework's candidate order and KEY_LOW_LATENCY gated on FEATURE_LowLatency.",
     )
 
+    /** Qualcomm decoders without FEATURE_LowLatency get Qualcomm's own low-latency extension (default on). */
+    val QCOM_DECODER_VENDOR_LOW_LATENCY = DevicePolicyEntry(
+        id = "qcom-decoder-vendor-low-latency",
+        area = PolicyArea.CODEC,
+        validation = PolicyValidation.UPSTREAM_DOCUMENTED,
+        title = "Qualcomm decoders: vendor.qti-ext-dec-low-latency.enable=1 where KEY_LOW_LATENCY is not offered",
+        matcher = DeviceMatcher(sdkMin = 26),
+        component = CodecComponentMatcher(prefixes = setOf("OMX.qcom.video.decoder.", "c2.qti.")),
+        effects = listOf(VendorDecoderLowLatencyKey(DecoderLowLatencyLadder.VENDOR_QTI)),
+        behaviour = "When the receiver asks for a low-latency decoder (the default) and a Qualcomm decoder does not " +
+            "declare FEATURE_LowLatency, the configure format carries vendor.qti-ext-dec-low-latency.enable=1 " +
+            "instead of KEY_LOW_LATENCY; a configure that refuses it retries with the plain format. Logged as " +
+            "`decoder_low_latency: requested=... | effective=...` and judged by `decoder_hold` (input-to-output time).",
+        sources = listOf(QCOM_SM8150_VDEC_KEYS, ACODEC_VENDOR_PARAMETERS, QCOM_VDEC_KEYS, MOONLIGHT_LATENCY),
+        sourceStatus = OFFICIAL,
+        evidence = listOf(
+            "benchmarks/runs/codec-smoke-20261028/b-hc-smoke/hs2-stream-a15s-asus-h264 (before: ASUS " +
+                "OMX.qcom.video.decoder.avc, formatKeys=plain, decoder_hold p50 68-69 ms at 15 FPS, one frame held)",
+            "Moonlight sets the key on every omx.qcom/c2.qti decoder from API 26 (MediaCodecHelper.setDecoderLowLatencyOptions)",
+        ),
+        confidence = MEDIUM,
+        confidenceNote = "the extension is in Qualcomm's AOSP decoder source and ACodec forwards vendor keys at " +
+            "configure; whether the ASUS firmware's decoder honours it is unmeasured until decoder_hold is re-read. " +
+            "Low-latency mode outputs in decode order, which is safe because MeshLive streams carry no B-frames",
+        reviewed = "2026-10-28",
+        origin = "Block 1 codec smoke (2026-10-28): the ASUS AVC decoder ran without low latency and held one frame",
+        fallback = "Off (`test_device_policy_off=qcom-decoder-vendor-low-latency`): the plain format, as before.",
+    )
+
     /** D-04: decoder KEY_PRIORITY=0 (Experimental). */
     val REALTIME_PRIORITY_ARM = DevicePolicyEntry(
         id = "decoder-realtime-priority-arm",
@@ -319,6 +363,7 @@ internal object DecoderPolicyEntries {
         C2_MTK_RELEASE_INSTEAD_OF_FLUSH,
         DECODER_NO_OUTPUT_WATCHDOG,
         DECODER_BOUNDED_RELEASE,
+        QCOM_DECODER_VENDOR_LOW_LATENCY,
         STALL_RECOVERY_ARM,
         LOW_LATENCY_LADDER_ARM,
         REALTIME_PRIORITY_ARM,
@@ -330,6 +375,11 @@ internal object DecoderPolicyEntries {
 /** Recovery of a matching decoder releases and re-creates it instead of calling flush(). */
 internal data object ReleaseCodecInsteadOfFlush : DevicePolicyEffect {
     override fun describe(): String = "decoder recovery: release and re-create instead of flush()"
+}
+
+/** A matching decoder asks for low latency with this vendor format key (=1) when it lacks FEATURE_LowLatency. */
+internal data class VendorDecoderLowLatencyKey(val key: String) : DevicePolicyEffect {
+    override fun describe(): String = "decoder low latency via $key=1 (no FEATURE_LowLatency)"
 }
 
 /** The decoder watchdog logs a decoder that produces no output or offers no input buffer. */
