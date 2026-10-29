@@ -12,6 +12,12 @@ if(NOT BTV_OPUS_HOST_TEST)
     # Debug APKs carry benchmark instrumentation, but codec code must still be
     # optimized or their FPS/thermal results are meaningless.
     add_compile_options(-O3)
+    # Reproducible builds: clang writes its own version text into .comment ("llvm.ident"). The Windows and the
+    # Linux NDK clang of the same NDK print different text (the Linux one adds "+pgo, +bolt, +lto, +mlgo"), so
+    # the library differed by host (measured 2026-10-29: F-Droid's Linux build of 0.4.2-beta vs our Windows
+    # one). -fno-ident drops it for every source compiled here (C, C++ and assembler, all subdirectories); the
+    # NDK's prebuilt runtime objects keep their own identical text, and lld adds the same "Linker: LLD" line.
+    add_compile_options(-fno-ident)
 endif()
 
 # Reproducible builds (tools/check_reproducible_build.py): assert/__FILE__ strings in libopus embedded the
@@ -29,7 +35,25 @@ endfunction()
 if(NOT BTV_OPUS_HOST_TEST)
     btv_map_source_prefix("${CMAKE_CURRENT_LIST_DIR}" app)
     btv_map_source_prefix("${CMAKE_BINARY_DIR}" build)
+    # The NDK toolchain folder (bin/.. of the compiler: sysroot and clang resource-dir headers). Its path, with
+    # the SDK location and host tag (windows-x86_64 vs linux-x86_64), was in the debug line tables. Those are
+    # stripped from the APK, but lld's build ID hashes the unstripped output, so the APK's build ID differed by
+    # host even when every other byte matched (measured 2026-10-29 against F-Droid's Linux build).
+    get_filename_component(btv_ndk_toolchain "${CMAKE_C_COMPILER}" DIRECTORY)
+    get_filename_component(btv_ndk_toolchain "${btv_ndk_toolchain}" DIRECTORY)
+    btv_map_source_prefix("${btv_ndk_toolchain}" ndk-toolchain)
 endif()
+
+# Reproducible builds: libaom (cmake/version.cmake) and libopus (cmake/OpusPackageVersion.cmake) run
+# `git describe` when Git is found and their source folder has git metadata, and compile the result into the
+# library. F-Droid's full srclib clone gave libaom "3.14.1-152-g0006e96cdb"; our shallow fetch has no tags and
+# gave "v3.14.1" (measured 2026-10-29). Hiding Git from both makes them take their documented no-Git path
+# (libaom: "Git missing, version will be read from CHANGELOG", the first "vX.Y.Z" line; libopus: the
+# package_version file), the same text a source export without .git produces on any host. The value must stay
+# non-empty (libaom's version.cmake rejects an empty GIT_EXECUTABLE) and must not exist (it checks EXISTS).
+# Normal variables, so they shadow any GIT_EXECUTABLE left in an older CMake cache.
+set(CMAKE_DISABLE_FIND_PACKAGE_Git TRUE)
+set(GIT_EXECUTABLE "${CMAKE_BINARY_DIR}/GIT_EXECUTABLE-NOTFOUND")
 
 # Experimental native call audio (DEBUG test_call_native_opus, default off): libopus 1.5.2, the
 # official release tarball https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
@@ -90,8 +114,30 @@ set(ENABLE_TOOLS 0 CACHE BOOL "" FORCE)
 set(CONFIG_WEBM_IO 0 CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS 0 CACHE BOOL "" FORCE)
 
+# Expected libaom version text: the first "vX.Y.Z" line of the pinned commit's CHANGELOG (no-Git path above).
+# In that path libaom keeps an existing config/aom_version.h, so one written earlier from `git describe` in a
+# reused build folder is removed first; the check after add_subdirectory() fails on any other text.
+set(BTV_AOM_VERSION_STRING "v3.14.1")
+set(BTV_AOM_VERSION_HEADER "${CMAKE_BINARY_DIR}/libaom/config/aom_version.h")
+function(btv_read_aom_version out_var)
+    set(text "")
+    if(EXISTS "${BTV_AOM_VERSION_HEADER}")
+        file(STRINGS "${BTV_AOM_VERSION_HEADER}" text REGEX "^#define VERSION_STRING_NOSP ")
+        string(REGEX REPLACE "^#define VERSION_STRING_NOSP \"(.*)\"$" "\\1" text "${text}")
+    endif()
+    set(${out_var} "${text}" PARENT_SCOPE)
+endfunction()
+btv_read_aom_version(BTV_AOM_VERSION_FOUND)
+if(EXISTS "${BTV_AOM_VERSION_HEADER}" AND NOT BTV_AOM_VERSION_FOUND STREQUAL BTV_AOM_VERSION_STRING)
+    file(REMOVE "${BTV_AOM_VERSION_HEADER}")
+endif()
+
 btv_map_source_prefix("${AOM_SOURCE_DIR}" libaom)
 add_subdirectory("${AOM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/libaom" EXCLUDE_FROM_ALL)
+btv_read_aom_version(BTV_AOM_VERSION_FOUND)
+if(NOT BTV_AOM_VERSION_FOUND STREQUAL BTV_AOM_VERSION_STRING)
+    message(FATAL_ERROR "libaom version text is '${BTV_AOM_VERSION_FOUND}', expected '${BTV_AOM_VERSION_STRING}' (the pinned CHANGELOG version): update BTV_AOM_VERSION_STRING with the libaom pin")
+endif()
 
 # Bundled libvpx VP9 encoder (DECISIONS "Design VX"): libvpx v1.17.0, the commit of tag v1.17.0
 # (6df3ec34557879fff673706f4a1d9fbd0f3a6f0e, tree manifest SHA-256 in tools/fetch_native_sources.py) at
